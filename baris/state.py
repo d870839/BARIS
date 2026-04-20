@@ -234,7 +234,9 @@ RELIABILITY_CAP             = 99   # you can never fully trust a rocket
 RELIABILITY_FLOOR           = 20   # once built, can't drop below this after a failure
 MIN_RELIABILITY_TO_LAUNCH   = 25   # below this, a rocket is considered "not ready"
 RELIABILITY_GAIN_ON_SUCCESS = 5
-RELIABILITY_LOSS_ON_FAIL    = 10
+RELIABILITY_LOSS_ON_FAIL    = 10   # manned failures only
+UNMANNED_FAILURE_RD_GAIN    = 2    # a crashed unmanned probe still teaches you something
+MANNED_FAILURE_BUDGET_CUT   = 30   # lost crew → public/political funding pullback
 # Reliability contributes ±10% to success around a neutral value of 50.
 # effective = base + crew_bonus + (reliability - 50) * RELIABILITY_SWING_PER_POINT
 RELIABILITY_SWING_PER_POINT = 0.002

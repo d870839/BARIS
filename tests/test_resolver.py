@@ -702,20 +702,82 @@ def test_successful_launch_bumps_reliability() -> None:
     assert me.rocket_reliability(Rocket.LIGHT) == 50 + RELIABILITY_GAIN_ON_SUCCESS
 
 
-def test_failed_launch_drops_reliability_but_not_below_floor() -> None:
+def test_failed_unmanned_launch_still_gains_reliability() -> None:
+    """A crashed probe still teaches the team — unmanned failures advance
+    R&D by a small amount rather than dropping reliability."""
+    from baris.state import UNMANNED_FAILURE_RD_GAIN
+
     state = _two_player_state()
     start_game(state, rng=random.Random(1))
     me = state.players[0]
-    # Rocket must be launch-ready (>= MIN) so the failure path fires; floor
-    # clamp protects launch-ready rockets from a death spiral.
-    me.reliability[Rocket.LIGHT.value] = MIN_RELIABILITY_TO_LAUNCH + 3  # 28
+    me.reliability[Rocket.LIGHT.value] = 50
 
     submit_turn(me, rd_rocket=None, rd_spend=0, launch=MissionId.SUBORBITAL)
     submit_turn(state.players[1], rd_rocket=None, rd_spend=0, launch=None)
     resolve_turn(state, rng=_FixedRng(0.99))  # forced failure
 
-    # 28 - 10 = 18, below floor → clamped to RELIABILITY_FLOOR (20)
-    assert me.rocket_reliability(Rocket.LIGHT) == RELIABILITY_FLOOR
+    assert me.rocket_reliability(Rocket.LIGHT) == 50 + UNMANNED_FAILURE_RD_GAIN
+
+
+def test_failed_manned_launch_drops_reliability_but_not_below_floor() -> None:
+    """Manned failures still damage the rocket and floor at RELIABILITY_FLOOR."""
+    state = _two_player_state()
+    start_game(state, rng=random.Random(1))
+    me = state.players[0]
+    me.mission_successes[MissionId.SUBORBITAL.value] = 1  # unlock Tier 2 (unused here)
+    me.reliability[Rocket.MEDIUM.value] = MIN_RELIABILITY_TO_LAUNCH + 3  # 28
+    for a in me.astronauts:
+        a.capsule = 40
+
+    submit_turn(me, rd_rocket=None, rd_spend=0, launch=MissionId.MANNED_ORBITAL)
+    submit_turn(state.players[1], rd_rocket=None, rd_spend=0, launch=None)
+    # High success roll → failure; high death roll → no deaths (isolates reliability clamp).
+    resolve_turn(state, rng=_FixedRng(0.99))
+
+    assert me.rocket_reliability(Rocket.MEDIUM) == RELIABILITY_FLOOR
+
+
+def test_failed_manned_launch_cuts_program_funding() -> None:
+    """Manned failure pulls back funding by MANNED_FAILURE_BUDGET_CUT MB
+    (on top of launch cost + season refill)."""
+    from baris.state import MANNED_FAILURE_BUDGET_CUT
+
+    state = _two_player_state()
+    start_game(state, rng=random.Random(1))
+    me = state.players[0]
+    me.reliability[Rocket.MEDIUM.value] = 50
+    me.budget = 200
+    mission = MISSIONS_BY_ID[MissionId.MANNED_ORBITAL]
+    for a in me.astronauts:
+        a.capsule = 40
+
+    submit_turn(me, rd_rocket=None, rd_spend=0, launch=MissionId.MANNED_ORBITAL)
+    submit_turn(state.players[1], rd_rocket=None, rd_spend=0, launch=None)
+    resolve_turn(state, rng=_FixedRng(0.99))  # forced failure, no deaths
+
+    from baris.state import SEASON_REFILL
+    expected = 200 - mission.launch_cost - MANNED_FAILURE_BUDGET_CUT + SEASON_REFILL
+    assert me.budget == expected
+
+
+def test_failed_manned_launch_budget_cut_floors_at_zero() -> None:
+    """If the budget can't absorb the full cut, it floors at zero instead of going negative."""
+    state = _two_player_state()
+    start_game(state, rng=random.Random(1))
+    me = state.players[0]
+    me.reliability[Rocket.MEDIUM.value] = 50
+    # Just enough for the launch; no cushion for the funding cut.
+    me.budget = MISSIONS_BY_ID[MissionId.MANNED_ORBITAL].launch_cost
+    for a in me.astronauts:
+        a.capsule = 40
+
+    submit_turn(me, rd_rocket=None, rd_spend=0, launch=MissionId.MANNED_ORBITAL)
+    submit_turn(state.players[1], rd_rocket=None, rd_spend=0, launch=None)
+    resolve_turn(state, rng=_FixedRng(0.99))
+
+    # Budget after launch cost (0) - clamped cut (0) + SEASON_REFILL.
+    from baris.state import SEASON_REFILL
+    assert me.budget == SEASON_REFILL
 
 
 def test_reliability_cap_prevents_unbounded_growth() -> None:

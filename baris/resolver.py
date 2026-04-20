@@ -28,6 +28,8 @@ from baris.state import (
     RELIABILITY_GAIN_ON_SUCCESS,
     RELIABILITY_LOSS_ON_FAIL,
     RELIABILITY_SWING_PER_POINT,
+    UNMANNED_FAILURE_RD_GAIN,
+    MANNED_FAILURE_BUDGET_CUT,
     Rocket,
     SEASON_REFILL,
     STARTING_ASTRONAUTS,
@@ -321,8 +323,7 @@ def _resolve_launch(player: Player, state: GameState, rng: random.Random) -> Non
         _bump_reliability(player, eff_rocket, RELIABILITY_GAIN_ON_SUCCESS)
         _handle_mission_success(player, mission, crew, state)
     else:
-        _bump_reliability(player, eff_rocket, -RELIABILITY_LOSS_ON_FAIL)
-        _handle_mission_failure(player, mission, crew, state, rng)
+        _handle_mission_failure(player, mission, crew, state, rng, eff_rocket)
 
 
 def _bump_reliability(player: Player, rocket: Rocket, delta: int) -> None:
@@ -405,26 +406,42 @@ def _handle_mission_failure(
     crew: list[Astronaut],
     state: GameState,
     rng: random.Random,
+    eff_rocket: Rocket,
 ) -> None:
     player.prestige = max(0, player.prestige - mission.prestige_fail)
+
+    if not mission.manned:
+        # Unmanned failures still teach you something — crashed probes feed
+        # back into R&D. Reliability creeps up; no budget hit.
+        _bump_reliability(player, eff_rocket, UNMANNED_FAILURE_RD_GAIN)
+        state.log.append(
+            f"{player.username} — {mission.name}: FAILURE "
+            f"(-{mission.prestige_fail} prestige, +{UNMANNED_FAILURE_RD_GAIN}% reliability "
+            f"from post-flight analysis)."
+        )
+        return
+
+    # Manned failure: real consequences.
+    _bump_reliability(player, eff_rocket, -RELIABILITY_LOSS_ON_FAIL)
+    budget_cut = min(player.budget, MANNED_FAILURE_BUDGET_CUT)
+    player.budget -= budget_cut
+
     deaths: list[str] = []
     for astro in crew:
         if rng.random() < DEATH_CHANCE_ON_FAIL:
             astro.status = AstronautStatus.KIA.value
             deaths.append(astro.name)
+    kia_note = ""
     if deaths:
         player.prestige = max(0, player.prestige - DEATH_PRESTIGE_PENALTY * len(deaths))
-        state.log.append(
-            f"{player.username} — {mission.name}: FAILURE "
-            f"(-{mission.prestige_fail} prestige, KIA: {', '.join(deaths)} "
-            f"-{DEATH_PRESTIGE_PENALTY * len(deaths)} prestige)."
+        kia_note = (
+            f", KIA: {', '.join(deaths)} -{DEATH_PRESTIGE_PENALTY * len(deaths)} prestige"
         )
-    else:
-        crew_note = f" [crew survived: {', '.join(a.name for a in crew)}]" if crew else ""
-        state.log.append(
-            f"{player.username} — {mission.name}: FAILURE "
-            f"(-{mission.prestige_fail} prestige){crew_note}."
-        )
+    state.log.append(
+        f"{player.username} — {mission.name}: FAILURE "
+        f"(-{mission.prestige_fail} prestige{kia_note}). "
+        f"Program funding cut by {budget_cut} MB."
+    )
 
 
 # ----------------------------------------------------------------------

@@ -51,17 +51,19 @@ async def test_two_clients_play_one_turn() -> None:
                     break
             assert state_after_start is not None, "game never transitioned to playing"
 
-            # both submit a turn: Alice spends on Light R&D, Bob on Medium
+            # both submit a turn: Alice spends on Light R&D, Bob on Medium.
+            # R&D is stochastic; spend enough MB that a total stall is
+            # astronomically unlikely (~10 batches each → 0.5^10 flake).
             await a.send(json.dumps({
                 "type": "end_turn",
                 "rd_rocket": "Light",
-                "rd_spend": 10,
+                "rd_spend": 30,
                 "launch": None,
             }))
             await b.send(json.dumps({
                 "type": "end_turn",
                 "rd_rocket": "Medium",
-                "rd_spend": 20,
+                "rd_spend": 30,
                 "launch": None,
             }))
 
