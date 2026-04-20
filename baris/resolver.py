@@ -439,3 +439,31 @@ def available_missions(player: Player) -> list[Mission]:
             continue
         result.append(m)
     return result
+
+
+def visible_to(player: Player, mission: Mission) -> bool:
+    """True if `mission` should be shown to `player` in the mission list now.
+
+    Hides missions categorically unavailable pending more R&D or program
+    progression (tier locked, rocket unresearched). Unlike available_missions(),
+    this does *not* filter on budget, crew, or architecture prereqs — those are
+    actionable this turn or next and worth seeing so the player can plan.
+    """
+    from baris.state import MISSIONS  # avoid circular at module-import time
+
+    if not player.is_tier_unlocked(mission.tier):
+        return False
+    # Manned lunar landing's effective rocket depends on the architecture the
+    # player will commit to, so keep it visible once Tier 3 unlocks even if
+    # neither candidate rocket is built yet. The status column explains the
+    # remaining gap.
+    if mission.id == MissionId.MANNED_LUNAR_LANDING:
+        return True
+    return player.rocket_built(mission.rocket)
+
+
+def visible_missions(player: Player) -> list[Mission]:
+    """Mission catalog filtered to what the player should currently see,
+    preserving the canonical MISSIONS order."""
+    from baris.state import MISSIONS
+    return [m for m in MISSIONS if visible_to(player, m)]

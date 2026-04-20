@@ -16,6 +16,8 @@ from baris.resolver import (
     resolve_turn,
     start_game,
     submit_turn,
+    visible_missions,
+    visible_to,
 )
 from baris.state import (
     ARCHITECTURE_COST_DELTA,
@@ -124,6 +126,49 @@ def test_historical_roster_contents() -> None:
     assert "Tereshkova" in ussr
     assert "Gagarin" in ussr
     assert len(ussr) == 7
+
+
+def test_fresh_player_sees_no_missions() -> None:
+    """Brand new player has no rockets researched and no tier 2/3, so every
+    mission is filtered out of the visible list."""
+    p = Player(player_id="a", username="A", side=Side.USA)
+    assert visible_missions(p) == []
+
+
+def test_visibility_follows_rocket_research() -> None:
+    p = Player(player_id="a", username="A", side=Side.USA)
+    p.rockets[Rocket.LIGHT.value] = RD_TARGETS[Rocket.LIGHT]
+    ids = {m.id for m in visible_missions(p)}
+    # Tier 1 missions that use Light become visible.
+    assert MissionId.SUBORBITAL in ids
+    assert MissionId.SATELLITE in ids
+    # Medium-rocket Tier 1 missions still hidden.
+    assert MissionId.ORBITAL not in ids
+    assert MissionId.MANNED_ORBITAL not in ids
+
+
+def test_tier_lock_hides_missions_even_with_rocket_built() -> None:
+    p = Player(player_id="a", username="A", side=Side.USA)
+    # Fully loaded rockets, but no Tier 1 success → Tier 2 locked.
+    for r in Rocket:
+        p.rockets[r.value] = RD_TARGETS[r]
+    ids = {m.id for m in visible_missions(p)}
+    assert MissionId.ORBITAL in ids  # Tier 1 — visible
+    assert MissionId.LUNAR_PASS not in ids  # Tier 2 — hidden
+    assert MissionId.LUNAR_LANDING not in ids  # Tier 3 — hidden
+
+
+def test_manned_lunar_landing_visible_at_tier3_even_without_heavy() -> None:
+    """Architecture choice decides the rocket need for MLL, so keep it
+    visible once Tier 3 unlocks."""
+    p = Player(player_id="a", username="A", side=Side.USA)
+    p.mission_successes[MissionId.SUBORBITAL.value] = 1
+    p.mission_successes[MissionId.MULTI_CREW_ORBITAL.value] = 1
+    # No rockets at all.
+    assert visible_to(p, MISSIONS_BY_ID[MissionId.MANNED_LUNAR_LANDING])
+    # A different Tier 3 mission without a Heavy: still hidden.
+    assert not visible_to(p, MISSIONS_BY_ID[MissionId.LUNAR_LANDING])
+    assert not visible_to(p, MISSIONS_BY_ID[MissionId.MANNED_LUNAR_ORBIT])
 
 
 def test_program_names_per_side() -> None:

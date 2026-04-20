@@ -388,11 +388,16 @@ class Client:
                 self.rd_spend = min(me.budget, self.rd_spend + 5)
 
         if self.active_tab == TAB_MISSIONS:
-            # Mission rows
+            # Mission rows — only those mapping to a currently-visible mission.
+            from baris.resolver import visible_missions
+            visible = visible_missions(me)
             for idx, btn in enumerate(self.mission_buttons):
-                btn.enabled = editable
-                if btn.handle_event(event) and editable and idx < len(MISSIONS):
-                    self.queued_mission = MISSIONS[idx].id
+                if idx < len(visible):
+                    btn.enabled = editable
+                    if btn.handle_event(event) and editable:
+                        self.queued_mission = visible[idx].id
+                else:
+                    btn.enabled = False
             # Architecture tiles
             can_pick_arch = me.is_tier_unlocked(ProgramTier.THREE) and me.architecture is None
             arch_btn_map = {
@@ -433,9 +438,11 @@ class Client:
             elif self.active_tab == TAB_RD and event.key == pygame.K_RIGHT:
                 self.rd_spend = min(me.budget, self.rd_spend + 5)
             elif self.active_tab == TAB_MISSIONS and event.key in MISSION_KEYS:
+                from baris.resolver import visible_missions
+                visible = visible_missions(me)
                 idx = MISSION_KEYS[event.key]
-                if idx < len(MISSIONS):
-                    self.queued_mission = MISSIONS[idx].id
+                if idx < len(visible):
+                    self.queued_mission = visible[idx].id
             elif event.key == pygame.K_RETURN:
                 self._submit_turn(me)
         return True
@@ -847,9 +854,17 @@ class Client:
             effective_launch_cost,
             effective_rocket,
             meets_architecture_prereqs,
+            visible_missions,
         )
+        visible = visible_missions(me)
+        if not visible:
+            draw_text(
+                self.screen,
+                "No missions available yet — start by researching a Light rocket (R&D tab).",
+                (30, CONTENT_TOP + 80), size=16, color=DIM,
+            )
         key_labels = [str(i + 1) for i in range(9)] + ["0", "-"]
-        for idx, m in enumerate(MISSIONS):
+        for idx, m in enumerate(visible):
             row_rect = self.mission_buttons[idx].rect
             # row background based on hover / selection
             if self.queued_mission == m.id:
