@@ -101,6 +101,17 @@ DEATH_PRESTIGE_PENALTY = 3
 # Crew skill bonus to success: full crew averaging 100 in primary skill → +15%.
 CREW_MAX_BONUS = 0.15
 
+# Rocket safety: per-player reliability rating per rocket class.
+# Affects mission success. Grows on success, drops on failure.
+SAFETY_FLOOR = 20          # failed rockets can't drop below this
+SAFETY_CAP = 95            # you can never fully trust a rocket
+SAFETY_ON_RD_COMPLETE = 40 # fresh rockets start unreliable
+SAFETY_GAIN_ON_SUCCESS = 5
+SAFETY_LOSS_ON_FAIL = 10
+# Safety contributes ±10% to success around the neutral value of 50.
+# effective = base + crew_bonus + (safety - 50) * SAFETY_SWING_PER_POINT
+SAFETY_SWING_PER_POINT = 0.002
+
 
 @dataclass
 class Astronaut:
@@ -135,6 +146,9 @@ class Player:
     rockets: dict[str, int] = field(
         default_factory=lambda: {r.value: 0 for r in Rocket}
     )
+    rocket_safety: dict[str, int] = field(
+        default_factory=lambda: {r.value: 0 for r in Rocket}
+    )
     astronauts: list[Astronaut] = field(default_factory=list)
     turn_submitted: bool = False
     pending_rd_rocket: str | None = None   # Rocket.value or None
@@ -146,6 +160,9 @@ class Player:
 
     def rocket_built(self, rocket: Rocket) -> bool:
         return self.rd_progress(rocket) >= RD_TARGETS[rocket]
+
+    def safety(self, rocket: Rocket) -> int:
+        return self.rocket_safety.get(rocket.value, 0)
 
     def active_astronauts(self) -> list[Astronaut]:
         return [a for a in self.astronauts if a.active]

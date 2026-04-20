@@ -23,6 +23,11 @@ from baris.state import (
     Player,
     RD_TARGETS,
     Rocket,
+    SAFETY_CAP,
+    SAFETY_FLOOR,
+    SAFETY_GAIN_ON_SUCCESS,
+    SAFETY_LOSS_ON_FAIL,
+    SAFETY_ON_RD_COMPLETE,
     Season,
     Side,
     Skill,
@@ -368,6 +373,105 @@ def test_available_missions_respects_crew_requirement() -> None:
     me.astronauts = [_make_astronaut("X", capsule=50)]
     avail = {m.id for m in available_missions(me)}
     assert MissionId.MANNED_ORBITAL in avail
+
+
+# ----------------------------------------------------------------------
+# Rocket reliability / safety
+# ----------------------------------------------------------------------
+
+
+def test_rd_completion_seeds_initial_safety() -> None:
+    state = _two_player_state()
+    start_game(state, rng=random.Random(1))
+    me = state.players[0]
+    me.budget = 200
+
+    submit_turn(me, rd_rocket=Rocket.LIGHT, rd_spend=RD_TARGETS[Rocket.LIGHT], launch=None)
+    submit_turn(state.players[1], rd_rocket=None, rd_spend=0, launch=None)
+    resolve_turn(state, rng=_FixedRng(0.0))
+
+    assert me.safety(Rocket.LIGHT) == SAFETY_ON_RD_COMPLETE
+    # Medium/Heavy untouched.
+    assert me.safety(Rocket.MEDIUM) == 0
+
+
+def test_successful_launch_bumps_safety() -> None:
+    state = _two_player_state()
+    start_game(state, rng=random.Random(1))
+    me = state.players[0]
+    me.rockets[Rocket.LIGHT.value] = RD_TARGETS[Rocket.LIGHT]
+    me.rocket_safety[Rocket.LIGHT.value] = 50
+
+    submit_turn(me, rd_rocket=None, rd_spend=0, launch=MissionId.SUBORBITAL)
+    submit_turn(state.players[1], rd_rocket=None, rd_spend=0, launch=None)
+    resolve_turn(state, rng=_FixedRng(0.0))
+
+    assert me.safety(Rocket.LIGHT) == 50 + SAFETY_GAIN_ON_SUCCESS
+
+
+def test_failed_launch_drops_safety_but_not_below_floor() -> None:
+    state = _two_player_state()
+    start_game(state, rng=random.Random(1))
+    me = state.players[0]
+    me.rockets[Rocket.LIGHT.value] = RD_TARGETS[Rocket.LIGHT]
+    me.rocket_safety[Rocket.LIGHT.value] = SAFETY_FLOOR + 3  # just above floor
+
+    submit_turn(me, rd_rocket=None, rd_spend=0, launch=MissionId.SUBORBITAL)
+    submit_turn(state.players[1], rd_rocket=None, rd_spend=0, launch=None)
+    resolve_turn(state, rng=_FixedRng(0.99))  # forced failure
+
+    # would be SAFETY_FLOOR+3 - 10 = below floor → clamped
+    assert me.safety(Rocket.LIGHT) == SAFETY_FLOOR
+
+
+def test_safety_cap_prevents_unbounded_growth() -> None:
+    me = Player(player_id="a", username="Alice", side=Side.USA)
+    me.rocket_safety[Rocket.LIGHT.value] = SAFETY_CAP - 1
+    from baris.resolver import _bump_safety
+    _bump_safety(me, Rocket.LIGHT, 50)
+    assert me.safety(Rocket.LIGHT) == SAFETY_CAP
+
+
+def test_high_safety_improves_effective_success() -> None:
+    """Set safety very high and verify a mission succeeds on a roll that
+    would fail at the base rate."""
+    state = _two_player_state()
+    start_game(state, rng=random.Random(1))
+    me = state.players[0]
+    me.rockets[Rocket.LIGHT.value] = RD_TARGETS[Rocket.LIGHT]
+    me.rocket_safety[Rocket.LIGHT.value] = SAFETY_CAP  # 95 → +0.09 success bonus
+
+    submit_turn(me, rd_rocket=None, rd_spend=0, launch=MissionId.SUBORBITAL)
+    submit_turn(state.players[1], rd_rocket=None, rd_spend=0, launch=None)
+    # base suborbital success 0.85; with safety +0.09 → 0.94. Roll 0.9 should succeed.
+    resolve_turn(state, rng=_FixedRng(0.90))
+
+    # base 3 + first bonus 2
+    assert me.prestige == 5
+
+
+def test_low_safety_worsens_effective_success() -> None:
+    state = _two_player_state()
+    start_game(state, rng=random.Random(1))
+    me = state.players[0]
+    me.rockets[Rocket.LIGHT.value] = RD_TARGETS[Rocket.LIGHT]
+    me.rocket_safety[Rocket.LIGHT.value] = SAFETY_FLOOR  # 20 → -0.06 success penalty
+    me.prestige = 5
+
+    submit_turn(me, rd_rocket=None, rd_spend=0, launch=MissionId.SUBORBITAL)
+    submit_turn(state.players[1], rd_rocket=None, rd_spend=0, launch=None)
+    # base 0.85 - 0.06 = 0.79. Roll 0.80 should fail.
+    resolve_turn(state, rng=_FixedRng(0.80))
+
+    # suborbital prestige_fail = 1
+    assert me.prestige == 4
+
+
+def test_state_roundtrip_preserves_rocket_safety() -> None:
+    state = _two_player_state()
+    state.players[0].rocket_safety[Rocket.HEAVY.value] = 67
+    restored = GameState.from_dict(state.to_dict())
+    assert restored.players[0].safety(Rocket.HEAVY) == 67
 
 
 def test_state_roundtrip_preserves_astronauts() -> None:

@@ -18,6 +18,12 @@ from baris.state import (
     Player,
     RD_TARGETS,
     Rocket,
+    SAFETY_CAP,
+    SAFETY_FLOOR,
+    SAFETY_GAIN_ON_SUCCESS,
+    SAFETY_LOSS_ON_FAIL,
+    SAFETY_ON_RD_COMPLETE,
+    SAFETY_SWING_PER_POINT,
     SEASON_REFILL,
     STARTING_ASTRONAUTS,
     Side,
@@ -128,8 +134,12 @@ def _apply_rd(player: Player, state: GameState) -> None:
         f"{player.username} invests {spend} MB into {rocket.value} R&D "
         f"({new_progress}/{target})."
     )
-    if new_progress >= target:
-        state.log.append(f"{player.username} completes {rocket.value}-class rocket!")
+    if new_progress >= target and player.rocket_safety.get(rocket.value, 0) == 0:
+        player.rocket_safety[rocket.value] = SAFETY_ON_RD_COMPLETE
+        state.log.append(
+            f"{player.username} completes {rocket.value}-class rocket! "
+            f"(initial safety: {SAFETY_ON_RD_COMPLETE}%)"
+        )
 
 
 # ----------------------------------------------------------------------
@@ -160,12 +170,21 @@ def _resolve_launch(player: Player, state: GameState, rng: random.Random) -> Non
             return
 
     player.budget -= mission.launch_cost
-    success_chance = mission.base_success + _crew_bonus(crew, mission)
+    safety_bonus = (player.safety(mission.rocket) - 50) * SAFETY_SWING_PER_POINT
+    success_chance = mission.base_success + _crew_bonus(crew, mission) + safety_bonus
     roll = rng.random()
     if roll < success_chance:
+        _bump_safety(player, mission.rocket, SAFETY_GAIN_ON_SUCCESS)
         _handle_mission_success(player, mission, crew, state)
     else:
+        _bump_safety(player, mission.rocket, -SAFETY_LOSS_ON_FAIL)
         _handle_mission_failure(player, mission, crew, state, rng)
+
+
+def _bump_safety(player: Player, rocket: Rocket, delta: int) -> None:
+    current = player.safety(rocket)
+    new_value = max(SAFETY_FLOOR, min(SAFETY_CAP, current + delta))
+    player.rocket_safety[rocket.value] = new_value
 
 
 def _select_crew(player: Player, mission: Mission) -> list[Astronaut] | None:

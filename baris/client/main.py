@@ -267,6 +267,17 @@ class Client:
         pygame.draw.rect(self.screen, DIM, (bar_x, y + 3, bar_w, 12), 1)
         pygame.draw.rect(self.screen, GREEN if pct >= 1.0 else HIGHLIGHT,
                          (bar_x + 1, y + 4, int((bar_w - 2) * pct), 10))
+        safety = player.safety(rocket)
+        if player.rocket_built(rocket):
+            safety_color = GREEN if safety >= 70 else HIGHLIGHT if safety >= 40 else RED
+            self._draw_text(
+                f"saf {safety:3}%",
+                (bar_x + bar_w + 10, y),
+                self.font_small,
+                safety_color,
+            )
+        else:
+            self._draw_text("saf --", (bar_x + bar_w + 10, y), self.font_small, DIM)
 
     def _draw_astronaut_row(self, astro: Astronaut, pos: tuple[int, int]) -> None:
         x, y = pos
@@ -343,13 +354,15 @@ class Client:
         )
         if self.queued_mission is not None:
             m = MISSIONS_BY_ID[self.queued_mission]
-            effective = m.base_success
+            from baris.resolver import _crew_bonus
+            from baris.state import SAFETY_SWING_PER_POINT
+            safety_bonus = (me.safety(m.rocket) - 50) * SAFETY_SWING_PER_POINT
+            effective = m.base_success + safety_bonus
             crew_note = ""
             if m.manned:
                 crew = self._preview_crew(me, m)
                 if crew:
-                    from baris.resolver import _crew_bonus
-                    effective = m.base_success + _crew_bonus(crew, m)
+                    effective += _crew_bonus(crew, m)
                     crew_note = f"  crew: {', '.join(a.name for a in crew)}"
                 else:
                     crew_note = "  crew: NONE (will abort)"
