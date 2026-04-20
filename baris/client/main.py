@@ -8,8 +8,12 @@ import pygame
 from baris import protocol
 from baris.client.net import NetClient
 from baris.state import (
+    ARCHITECTURE_COST_DELTA,
+    ARCHITECTURE_FULL_NAMES,
+    ARCHITECTURE_SUCCESS_DELTA,
     MISSIONS,
     MISSIONS_BY_ID,
+    Architecture,
     Astronaut,
     MissionId,
     Phase,
@@ -43,6 +47,12 @@ MISSION_KEYS = {
     pygame.K_4: 3, pygame.K_5: 4, pygame.K_6: 5,
     pygame.K_7: 6, pygame.K_8: 7, pygame.K_9: 8,
     pygame.K_0: 9, pygame.K_MINUS: 10,
+}
+ARCHITECTURE_KEYS = {
+    pygame.K_a: Architecture.DA,
+    pygame.K_s: Architecture.EOR,
+    pygame.K_d: Architecture.LSR,
+    pygame.K_f: Architecture.LOR,
 }
 
 
@@ -129,8 +139,21 @@ class Client:
 
         if self.state.phase == Phase.LOBBY:
             self._handle_lobby_key(event, me)
-        elif self.state.phase == Phase.PLAYING and not me.turn_submitted:
-            self._handle_turn_key(event, me)
+        elif self.state.phase == Phase.PLAYING:
+            # Architecture choice is a one-time, non-turn action — allow it
+            # even while waiting for the opponent to submit their turn.
+            if (
+                me.is_tier_unlocked(ProgramTier.THREE)
+                and me.architecture is None
+                and event.key in ARCHITECTURE_KEYS
+            ):
+                self.net.send(
+                    protocol.CHOOSE_ARCHITECTURE,
+                    architecture=ARCHITECTURE_KEYS[event.key].value,
+                )
+                return True
+            if not me.turn_submitted:
+                self._handle_turn_key(event, me)
         return True
 
     def _handle_lobby_key(self, event: pygame.event.Event, me: Player) -> None:
@@ -249,6 +272,23 @@ class Client:
         programs = ", ".join(program_name(t, player.side) for t in unlocked_order) or "-"
         self._draw_text(f"Programs:  {programs}", (x, y + 100), self.font_small, FG)
 
+        # Architecture display — only meaningful once Tier 3 unlocks.
+        if player.is_tier_unlocked(ProgramTier.THREE):
+            if player.architecture:
+                try:
+                    arch = Architecture(player.architecture)
+                    label = f"Lunar arch: {arch.value} ({ARCHITECTURE_FULL_NAMES[arch]})"
+                    self._draw_text(label, (x, y + 120), self.font_small, HIGHLIGHT)
+                except ValueError:
+                    pass
+            elif player.player_id == self.player_id:
+                self._draw_text(
+                    "Lunar arch: A=DA S=EOR D=LSR F=LOR",
+                    (x, y + 120), self.font_small, RED,
+                )
+            else:
+                self._draw_text("Lunar arch: (opponent choosing)", (x, y + 120), self.font_small, DIM)
+
         self._draw_text("R&D progress:", (x, y + 128), self.font_small, DIM)
         ry = y + 148
         for r in Rocket:
@@ -309,24 +349,39 @@ class Client:
         self._draw_text(header, (x, y + 36), self.font_small, DIM)
         ly = y + 56
         key_labels = [str(i + 1) for i in range(9)] + ["0", "-"]
+        from baris.resolver import (
+            effective_base_success,
+            effective_launch_cost,
+            effective_rocket,
+            meets_architecture_prereqs,
+        )
         for idx, m in enumerate(MISSIONS):
             first_claimed = self.state.first_completed.get(m.id.value)
             first_txt = f"+{m.first_bonus} ({first_claimed})" if first_claimed else f"+{m.first_bonus}"
+            # Architecture-aware stats (only differ for manned lunar landing).
+            eff_rocket = effective_rocket(me, m) if me else m.rocket
+            eff_cost = effective_launch_cost(me, m) if me else m.launch_cost
+            eff_succ = effective_base_success(me, m) if me else m.base_success
             status_parts: list[str] = []
             status_color = DIM
             if me:
                 tier_unlocked = me.is_tier_unlocked(m.tier)
-                built = me.rocket_built(m.rocket)
-                affordable = me.budget >= m.launch_cost
+                built = me.rocket_built(eff_rocket)
+                affordable = me.budget >= eff_cost
                 crew_ok = True
                 if m.manned:
                     active = me.active_astronauts()
                     crew_ok = len(active) >= m.crew_size
+                arch_ok = meets_architecture_prereqs(me, m)
                 if not tier_unlocked:
                     status_parts.append(f"{program_name(m.tier, me.side)} LOCKED")
                     status_color = DIM
+                elif m.id == MissionId.MANNED_LUNAR_LANDING and me.architecture is None:
+                    status_parts.append("choose arch")
+                elif not arch_ok:
+                    status_parts.append("arch prereq")
                 elif not built:
-                    status_parts.append(f"need {m.rocket.value}")
+                    status_parts.append(f"need {eff_rocket.value}")
                 elif not affordable:
                     status_parts.append("low funds")
                 elif not crew_ok:
@@ -340,12 +395,12 @@ class Client:
             status = " ".join(status_parts) or "-"
             mtype = "manned" if m.manned else "unmanned"
             my_side = me.side if me else None
-            rocket_display = rocket_display_name(m.rocket, my_side)
+            rocket_display = rocket_display_name(eff_rocket, my_side)
             prog_display = program_name(m.tier, my_side)
             key_label = key_labels[idx] if idx < len(key_labels) else "?"
             row = (
                 f"{key_label:<4}{prog_display:<10}{m.name:<22}{mtype:<7}{rocket_display:<10}"
-                f"{m.launch_cost:<6}{int(m.base_success * 100):<7}{m.prestige_success:<8}"
+                f"{eff_cost:<6}{int(eff_succ * 100):<7}{m.prestige_success:<8}"
                 f"{first_txt:<8}"
             )
             row_color = FG if me and me.is_tier_unlocked(m.tier) else DIM
@@ -372,10 +427,17 @@ class Client:
         )
         if self.queued_mission is not None:
             m = MISSIONS_BY_ID[self.queued_mission]
-            from baris.resolver import _crew_bonus
+            from baris.resolver import (
+                _crew_bonus,
+                effective_base_success,
+                effective_launch_cost,
+                effective_rocket,
+            )
             from baris.state import SAFETY_SWING_PER_POINT
-            safety_bonus = (me.safety(m.rocket) - 50) * SAFETY_SWING_PER_POINT
-            effective = m.base_success + safety_bonus
+            eff_rocket = effective_rocket(me, m)
+            eff_cost = effective_launch_cost(me, m)
+            safety_bonus = (me.safety(eff_rocket) - 50) * SAFETY_SWING_PER_POINT
+            effective = effective_base_success(me, m) + safety_bonus
             crew_note = ""
             if m.manned:
                 crew = self._preview_crew(me, m)
@@ -385,7 +447,7 @@ class Client:
                 else:
                     crew_note = "  crew: NONE (will abort)"
             self._draw_text(
-                f"Launching: {m.name}  cost {m.launch_cost} MB, {int(effective * 100)}%",
+                f"Launching: {m.name}  cost {eff_cost} MB, {int(effective * 100)}%",
                 (x, y + 104), self.font, GREEN,
             )
             if crew_note:

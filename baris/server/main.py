@@ -9,8 +9,15 @@ from typing import Any
 import websockets
 
 from baris import protocol
-from baris.resolver import all_turns_in, can_start, resolve_turn, start_game, submit_turn
-from baris.state import GameState, MissionId, Phase, Player, Rocket, Side
+from baris.resolver import (
+    all_turns_in,
+    can_start,
+    choose_architecture,
+    resolve_turn,
+    start_game,
+    submit_turn,
+)
+from baris.state import Architecture, GameState, MissionId, Phase, Player, Rocket, Side
 
 log = logging.getLogger("baris.server")
 
@@ -127,6 +134,17 @@ async def handle_end_turn(player: Player, msg: dict[str, Any]) -> None:
         resolve_turn(room.state)
 
 
+async def handle_choose_architecture(player: Player, msg: dict[str, Any]) -> None:
+    if room.state.phase != Phase.PLAYING:
+        return
+    raw = msg.get("architecture")
+    try:
+        arch = Architecture(raw)
+    except ValueError:
+        return
+    choose_architecture(player, arch)
+
+
 async def client_handler(ws: Any) -> None:
     player: Player | None = None
     try:
@@ -156,6 +174,8 @@ async def client_handler(ws: Any) -> None:
                 await handle_ready(player, False)
             elif mtype == protocol.END_TURN:
                 await handle_end_turn(player, msg)
+            elif mtype == protocol.CHOOSE_ARCHITECTURE:
+                await handle_choose_architecture(player, msg)
             else:
                 await ws.send(protocol.encode(protocol.ERROR, message=f"Unknown type {mtype}"))
                 continue

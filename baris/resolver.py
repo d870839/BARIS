@@ -4,6 +4,9 @@ import random
 import uuid
 
 from baris.state import (
+    ARCHITECTURE_COST_DELTA,
+    ARCHITECTURE_SUCCESS_DELTA,
+    Architecture,
     Astronaut,
     AstronautStatus,
     CREW_MAX_BONUS,
@@ -31,6 +34,61 @@ from baris.state import (
     Skill,
     next_season,
 )
+
+
+def _player_architecture(player: Player) -> Architecture | None:
+    if player.architecture is None:
+        return None
+    try:
+        return Architecture(player.architecture)
+    except ValueError:
+        return None
+
+
+def effective_rocket(player: Player, mission: Mission) -> Rocket:
+    """Some architectures override the rocket requirement for the manned lunar landing."""
+    if mission.id == MissionId.MANNED_LUNAR_LANDING:
+        if _player_architecture(player) == Architecture.EOR:
+            return Rocket.MEDIUM
+    return mission.rocket
+
+
+def effective_launch_cost(player: Player, mission: Mission) -> int:
+    if mission.id == MissionId.MANNED_LUNAR_LANDING:
+        arch = _player_architecture(player)
+        if arch is not None:
+            return mission.launch_cost + ARCHITECTURE_COST_DELTA[arch]
+    return mission.launch_cost
+
+
+def effective_base_success(player: Player, mission: Mission) -> float:
+    if mission.id == MissionId.MANNED_LUNAR_LANDING:
+        arch = _player_architecture(player)
+        if arch is not None:
+            return mission.base_success + ARCHITECTURE_SUCCESS_DELTA[arch]
+    return mission.base_success
+
+
+def meets_architecture_prereqs(player: Player, mission: Mission) -> bool:
+    """Architecture-specific extra prereqs."""
+    if mission.id != MissionId.MANNED_LUNAR_LANDING:
+        return True
+    arch = _player_architecture(player)
+    if arch is None:
+        return False  # must pick an architecture first
+    if arch == Architecture.LSR:
+        return player.mission_successes.get(MissionId.LUNAR_LANDING.value, 0) > 0
+    return True
+
+
+def choose_architecture(player: Player, choice: Architecture) -> bool:
+    """One-way architecture commitment. Returns True if applied."""
+    if not player.is_tier_unlocked(ProgramTier.THREE):
+        return False
+    if player.architecture is not None:
+        return False
+    player.architecture = choice.value
+    return True
 
 
 def can_start(state: GameState) -> bool:
@@ -83,10 +141,13 @@ def submit_turn(
     player.pending_launch = None
     if launch is not None:
         mission = MISSIONS_BY_ID[launch]
-        can_afford = player.budget >= mission.launch_cost + player.pending_rd_spend
+        eff_rocket = effective_rocket(player, mission)
+        eff_cost = effective_launch_cost(player, mission)
+        can_afford = player.budget >= eff_cost + player.pending_rd_spend
         crew_ok = not mission.manned or _select_crew(player, mission) is not None
         tier_ok = player.is_tier_unlocked(mission.tier)
-        if player.rocket_built(mission.rocket) and can_afford and crew_ok and tier_ok:
+        arch_ok = meets_architecture_prereqs(player, mission)
+        if player.rocket_built(eff_rocket) and can_afford and crew_ok and tier_ok and arch_ok:
             player.pending_launch = launch.value
     player.turn_submitted = True
 
@@ -160,7 +221,9 @@ def _resolve_launch(player: Player, state: GameState, rng: random.Random) -> Non
         mission = MISSIONS_BY_ID[MissionId(player.pending_launch)]
     except (ValueError, KeyError):
         return
-    if not player.rocket_built(mission.rocket) or player.budget < mission.launch_cost:
+    eff_rocket = effective_rocket(player, mission)
+    eff_cost = effective_launch_cost(player, mission)
+    if not player.rocket_built(eff_rocket) or player.budget < eff_cost:
         state.log.append(
             f"{player.username} aborts {mission.name} — prereqs no longer met."
         )
@@ -168,6 +231,11 @@ def _resolve_launch(player: Player, state: GameState, rng: random.Random) -> Non
     if not player.is_tier_unlocked(mission.tier):
         state.log.append(
             f"{player.username} aborts {mission.name} — program not unlocked."
+        )
+        return
+    if not meets_architecture_prereqs(player, mission):
+        state.log.append(
+            f"{player.username} aborts {mission.name} — architecture prereqs not met."
         )
         return
 
@@ -180,15 +248,19 @@ def _resolve_launch(player: Player, state: GameState, rng: random.Random) -> Non
             )
             return
 
-    player.budget -= mission.launch_cost
-    safety_bonus = (player.safety(mission.rocket) - 50) * SAFETY_SWING_PER_POINT
-    success_chance = mission.base_success + _crew_bonus(crew, mission) + safety_bonus
+    player.budget -= eff_cost
+    safety_bonus = (player.safety(eff_rocket) - 50) * SAFETY_SWING_PER_POINT
+    success_chance = (
+        effective_base_success(player, mission)
+        + _crew_bonus(crew, mission)
+        + safety_bonus
+    )
     roll = rng.random()
     if roll < success_chance:
-        _bump_safety(player, mission.rocket, SAFETY_GAIN_ON_SUCCESS)
+        _bump_safety(player, eff_rocket, SAFETY_GAIN_ON_SUCCESS)
         _handle_mission_success(player, mission, crew, state)
     else:
-        _bump_safety(player, mission.rocket, -SAFETY_LOSS_ON_FAIL)
+        _bump_safety(player, eff_rocket, -SAFETY_LOSS_ON_FAIL)
         _handle_mission_failure(player, mission, crew, state, rng)
 
 

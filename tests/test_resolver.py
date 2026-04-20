@@ -8,11 +8,19 @@ from baris.resolver import (
     all_turns_in,
     available_missions,
     can_start,
+    choose_architecture,
+    effective_base_success,
+    effective_launch_cost,
+    effective_rocket,
+    meets_architecture_prereqs,
     resolve_turn,
     start_game,
     submit_turn,
 )
 from baris.state import (
+    ARCHITECTURE_COST_DELTA,
+    ARCHITECTURE_SUCCESS_DELTA,
+    Architecture,
     Astronaut,
     AstronautStatus,
     CREW_MAX_BONUS,
@@ -196,6 +204,112 @@ def test_available_missions_respects_tier_lock() -> None:
     assert MissionId.MANNED_LUNAR_LANDING not in avail
 
 
+def _tier3_unlocked_player(side: Side = Side.USA) -> Player:
+    p = Player(player_id="a", username="A", side=side)
+    p.budget = 500
+    p.mission_successes[MissionId.SUBORBITAL.value] = 1
+    p.mission_successes[MissionId.MULTI_CREW_ORBITAL.value] = 1
+    p.rockets[Rocket.MEDIUM.value] = RD_TARGETS[Rocket.MEDIUM]
+    p.rockets[Rocket.HEAVY.value] = RD_TARGETS[Rocket.HEAVY]
+    return p
+
+
+def test_choose_architecture_rejected_before_tier_three() -> None:
+    p = Player(player_id="a", username="A", side=Side.USA)
+    assert not choose_architecture(p, Architecture.LOR)
+    assert p.architecture is None
+
+
+def test_choose_architecture_accepted_once_tier_three_unlocked() -> None:
+    p = _tier3_unlocked_player()
+    assert choose_architecture(p, Architecture.DA)
+    assert p.architecture == Architecture.DA.value
+
+
+def test_choose_architecture_is_one_way() -> None:
+    p = _tier3_unlocked_player()
+    assert choose_architecture(p, Architecture.LOR)
+    assert not choose_architecture(p, Architecture.DA)  # second choice rejected
+    assert p.architecture == Architecture.LOR.value
+
+
+def test_eor_uses_medium_rocket_instead_of_heavy() -> None:
+    p = _tier3_unlocked_player()
+    choose_architecture(p, Architecture.EOR)
+    m = MISSIONS_BY_ID[MissionId.MANNED_LUNAR_LANDING]
+    assert effective_rocket(p, m) == Rocket.MEDIUM
+
+
+def test_lor_keeps_heavy_rocket_requirement() -> None:
+    p = _tier3_unlocked_player()
+    choose_architecture(p, Architecture.LOR)
+    m = MISSIONS_BY_ID[MissionId.MANNED_LUNAR_LANDING]
+    assert effective_rocket(p, m) == Rocket.HEAVY
+
+
+def test_architecture_modifies_cost_and_success() -> None:
+    m = MISSIONS_BY_ID[MissionId.MANNED_LUNAR_LANDING]
+    for arch in Architecture:
+        p = _tier3_unlocked_player()
+        choose_architecture(p, arch)
+        assert effective_launch_cost(p, m) == m.launch_cost + ARCHITECTURE_COST_DELTA[arch]
+        assert abs(effective_base_success(p, m) - (m.base_success + ARCHITECTURE_SUCCESS_DELTA[arch])) < 1e-9
+
+
+def test_manned_landing_rejected_without_architecture() -> None:
+    state = _two_player_state()
+    start_game(state, rng=random.Random(1))
+    me = state.players[0]
+    me.mission_successes[MissionId.SUBORBITAL.value] = 1
+    me.mission_successes[MissionId.MULTI_CREW_ORBITAL.value] = 1
+    me.rockets[Rocket.HEAVY.value] = RD_TARGETS[Rocket.HEAVY]
+    me.budget = 200
+    assert me.architecture is None
+
+    submit_turn(me, rd_rocket=None, rd_spend=0, launch=MissionId.MANNED_LUNAR_LANDING)
+    assert me.pending_launch is None
+
+
+def test_lsr_requires_prior_unmanned_landing() -> None:
+    state = _two_player_state()
+    start_game(state, rng=random.Random(1))
+    me = state.players[0]
+    me.mission_successes[MissionId.SUBORBITAL.value] = 1
+    me.mission_successes[MissionId.MULTI_CREW_ORBITAL.value] = 1
+    me.rockets[Rocket.HEAVY.value] = RD_TARGETS[Rocket.HEAVY]
+    me.budget = 200
+    choose_architecture(me, Architecture.LSR)
+
+    # Without prior unmanned lunar landing: prereq fails.
+    m = MISSIONS_BY_ID[MissionId.MANNED_LUNAR_LANDING]
+    assert not meets_architecture_prereqs(me, m)
+
+    me.mission_successes[MissionId.LUNAR_LANDING.value] = 1
+    assert meets_architecture_prereqs(me, m)
+
+
+def test_eor_lets_player_attempt_landing_with_only_medium() -> None:
+    state = _two_player_state()
+    start_game(state, rng=random.Random(1))
+    me = state.players[0]
+    me.mission_successes[MissionId.SUBORBITAL.value] = 1
+    me.mission_successes[MissionId.MULTI_CREW_ORBITAL.value] = 1
+    me.rockets[Rocket.MEDIUM.value] = RD_TARGETS[Rocket.MEDIUM]  # Heavy NOT built
+    me.budget = 500
+    for a in me.astronauts:
+        a.command = 100
+    choose_architecture(me, Architecture.EOR)
+
+    submit_turn(me, rd_rocket=None, rd_spend=0, launch=MissionId.MANNED_LUNAR_LANDING)
+    assert me.pending_launch == MissionId.MANNED_LUNAR_LANDING.value
+
+    submit_turn(state.players[1], rd_rocket=None, rd_spend=0, launch=None)
+    resolve_turn(state, rng=_FixedRng(0.0))
+
+    assert state.phase == Phase.ENDED
+    assert state.winner == Side.USA
+
+
 def test_rocket_display_name_is_per_side() -> None:
     assert rocket_display_name(Rocket.LIGHT,  Side.USA)  == "Redstone"
     assert rocket_display_name(Rocket.MEDIUM, Side.USA)  == "Titan II"
@@ -336,6 +450,7 @@ def test_manned_landing_success_ends_game() -> None:
     me.budget = 100
     me.mission_successes[MissionId.SUBORBITAL.value] = 1
     me.mission_successes[MissionId.MULTI_CREW_ORBITAL.value] = 1
+    choose_architecture(me, Architecture.LOR)
     for a in me.astronauts:
         a.command = 100
 

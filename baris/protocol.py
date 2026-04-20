@@ -9,6 +9,7 @@ CHOOSE_SIDE = "choose_side"
 READY = "ready"
 UNREADY = "unready"
 END_TURN = "end_turn"
+CHOOSE_ARCHITECTURE = "choose_architecture"
 
 # Server -> Client message types
 JOINED = "joined"

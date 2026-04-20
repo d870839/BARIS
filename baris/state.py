@@ -61,6 +61,48 @@ class ProgramTier(str, Enum):
     THREE = "3" # Apollo / Soyuz
 
 
+class Architecture(str, Enum):
+    """Lunar mission architecture — historical design decision that NASA
+    actually debated before Apollo. Each option is genuinely different:
+
+    - LOR: single Heavy launch, lander meets command module in lunar orbit.
+      Historical winner. Baseline stats.
+    - DA (Direct Ascent): single huge rocket lands the whole return vehicle.
+      +success, +cost. Would have needed Saturn C-8/Nova in reality.
+    - EOR (Earth Orbit Rendezvous): many smaller launches, assemble in Earth
+      orbit. Uses Medium rocket instead of Heavy, big cost, lower success.
+    - LSR (Lunar Surface Rendezvous): pre-land unmanned return vehicle, then
+      send crew. Requires prior unmanned lunar landing success. +success, +cost.
+    """
+    LOR = "LOR"
+    DA  = "DA"
+    EOR = "EOR"
+    LSR = "LSR"
+
+
+ARCHITECTURE_FULL_NAMES: dict[Architecture, str] = {
+    Architecture.LOR: "Lunar Orbit Rendezvous",
+    Architecture.DA:  "Direct Ascent",
+    Architecture.EOR: "Earth Orbit Rendezvous",
+    Architecture.LSR: "Lunar Surface Rendezvous",
+}
+
+# Per-architecture modifiers applied to the manned lunar landing mission only.
+# Keys omitted default to 0 / no change.
+ARCHITECTURE_SUCCESS_DELTA: dict[Architecture, float] = {
+    Architecture.LOR:  0.00,
+    Architecture.DA:  +0.10,
+    Architecture.EOR: -0.10,
+    Architecture.LSR: +0.08,
+}
+ARCHITECTURE_COST_DELTA: dict[Architecture, int] = {
+    Architecture.LOR:  0,
+    Architecture.DA:  25,
+    Architecture.EOR: 40,
+    Architecture.LSR: 15,
+}
+
+
 @dataclass(frozen=True)
 class Mission:
     id: MissionId
@@ -233,6 +275,7 @@ class Player:
     )
     astronauts: list[Astronaut] = field(default_factory=list)
     mission_successes: dict[str, int] = field(default_factory=dict)
+    architecture: str | None = None  # Architecture.value once chosen, else None
     turn_submitted: bool = False
     pending_rd_rocket: str | None = None   # Rocket.value or None
     pending_rd_spend: int = 0
