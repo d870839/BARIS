@@ -31,6 +31,8 @@ from baris.state import (
     MIN_RELIABILITY_TO_LAUNCH,
     MISSIONS_BY_ID,
     MissionId,
+    Module,
+    ObjectiveId,
     Phase,
     Player,
     ProgramTier,
@@ -42,6 +44,7 @@ from baris.state import (
     Side,
     Skill,
     STARTING_ASTRONAUTS,
+    objectives_for,
     program_name,
     rocket_display_name,
 )
@@ -398,7 +401,7 @@ def test_rd_heavy_is_slower_than_light_on_average() -> None:
         total = 0
         for seed in range(trials):
             p = Player(player_id="a", username="A", side=Side.USA, budget=60)
-            p.pending_rd_rocket = rocket.value
+            p.pending_rd_target = rocket.value
             p.pending_rd_spend = 60
             state = GameState(players=[p])
             _apply_rd(p, state, random.Random(seed))
@@ -413,7 +416,7 @@ def test_rd_heavy_is_slower_than_light_on_average() -> None:
 
 def test_rd_spend_refunds_partial_batch_remainder() -> None:
     p = Player(player_id="a", username="A", side=Side.USA, budget=20)
-    p.pending_rd_rocket = Rocket.LIGHT.value
+    p.pending_rd_target = Rocket.LIGHT.value
     p.pending_rd_spend = 20  # 6 batches of 3 MB = 18 MB; 2 MB should be refunded
     state = GameState(players=[p])
     from baris.resolver import _apply_rd
@@ -819,6 +822,184 @@ def test_low_reliability_worsens_effective_success() -> None:
 
     # suborbital prestige_fail = 1
     assert me.prestige == 4
+
+
+# ----------------------------------------------------------------------
+# Docking module R&D and mission objectives
+# ----------------------------------------------------------------------
+
+
+def test_docking_module_researched_same_way_as_rockets() -> None:
+    """Spending on the docking module should drive up its reliability with
+    the same stochastic roll mechanism used for rockets."""
+    from baris.resolver import _apply_rd
+
+    # Average across many trials to avoid flakes.
+    total = 0
+    trials = 200
+    for seed in range(trials):
+        p = Player(player_id="a", username="A", side=Side.USA, budget=60)
+        p.pending_rd_target = Module.DOCKING.value
+        p.pending_rd_spend = 60
+        state = GameState(players=[p])
+        _apply_rd(p, state, random.Random(seed))
+        total += p.module_reliability(Module.DOCKING)
+    avg = total / trials
+    assert avg > 8  # Docking speed = 0.7, plenty of movement in 60 MB / 20 batches
+
+
+def test_objectives_catalog_matches_missions() -> None:
+    # MANNED_ORBITAL has both EVA and LONG_DURATION; MULTI_CREW has DOCKING + EVA;
+    # MANNED_LUNAR_LANDING has MOONWALK + SAMPLE_RETURN.
+    mo = {o.id for o in objectives_for(MissionId.MANNED_ORBITAL)}
+    mco = {o.id for o in objectives_for(MissionId.MULTI_CREW_ORBITAL)}
+    mll = {o.id for o in objectives_for(MissionId.MANNED_LUNAR_LANDING)}
+    assert mo == {ObjectiveId.EVA, ObjectiveId.LONG_DURATION}
+    assert mco == {ObjectiveId.DOCKING, ObjectiveId.EVA}
+    assert mll == {ObjectiveId.MOONWALK, ObjectiveId.SAMPLE_RETURN}
+
+
+def test_docking_objective_dropped_without_module() -> None:
+    """Queuing the docking objective without the module built should be
+    filtered out in submit_turn."""
+    state = _two_player_state()
+    start_game(state, rng=random.Random(1))
+    me = state.players[0]
+    me.mission_successes[MissionId.SUBORBITAL.value] = 1  # unlock Tier 2
+    me.reliability[Rocket.MEDIUM.value] = 70
+    me.budget = 200
+    for a in me.astronauts:
+        a.command = 80
+
+    submit_turn(
+        me, rd_spend=0, launch=MissionId.MULTI_CREW_ORBITAL,
+        objectives=[ObjectiveId.DOCKING],
+    )
+    assert me.pending_launch == MissionId.MULTI_CREW_ORBITAL.value
+    # docking dropped because module isn't built
+    assert me.pending_objectives == []
+
+
+def test_docking_objective_accepted_when_module_built() -> None:
+    state = _two_player_state()
+    start_game(state, rng=random.Random(1))
+    me = state.players[0]
+    me.mission_successes[MissionId.SUBORBITAL.value] = 1
+    me.reliability[Rocket.MEDIUM.value] = 70
+    me.reliability[Module.DOCKING.value] = 70
+    me.budget = 200
+    for a in me.astronauts:
+        a.command = 80
+
+    submit_turn(
+        me, rd_spend=0, launch=MissionId.MULTI_CREW_ORBITAL,
+        objectives=[ObjectiveId.DOCKING],
+    )
+    assert me.pending_objectives == [ObjectiveId.DOCKING.value]
+
+
+def test_objective_success_awards_bonus_prestige() -> None:
+    state = _two_player_state()
+    start_game(state, rng=random.Random(1))
+    me = state.players[0]
+    me.reliability[Rocket.MEDIUM.value] = 70
+    me.budget = 100
+    for a in me.astronauts:
+        a.capsule = 80  # primary skill for manned_orbital
+        a.eva = 90      # drives EVA objective success
+
+    submit_turn(
+        me, rd_spend=0, launch=MissionId.MANNED_ORBITAL,
+        objectives=[ObjectiveId.EVA],
+    )
+    submit_turn(state.players[1], rd_spend=0, launch=None)
+    # Force both main mission and EVA roll to succeed (0.0 << any threshold).
+    resolve_turn(state, rng=_FixedRng(0.0))
+
+    # manned_orbital: 12 base + 6 first bonus + 4 EVA bonus = 22
+    assert me.prestige == 22
+
+
+def test_failed_eva_can_kill_astronaut() -> None:
+    """Force the main mission to succeed and the EVA objective to fail,
+    then the death roll to land below the 15% threshold."""
+
+    class _SeqRng:
+        def __init__(self, values):
+            self.values = list(values)
+            self._r = random.Random(1)
+
+        def random(self) -> float:
+            return self.values.pop(0)
+
+        def randint(self, a, b):
+            return self._r.randint(a, b)
+
+        def choice(self, seq):
+            return self._r.choice(seq)
+
+    state = _two_player_state()
+    start_game(state, rng=random.Random(1))
+    me = state.players[0]
+    me.reliability[Rocket.MEDIUM.value] = 70
+    me.budget = 100
+    for a in me.astronauts:
+        a.capsule = 80
+        a.eva = 40  # low-ish so the EVA attempt can fail
+
+    submit_turn(
+        me, rd_spend=0, launch=MissionId.MANNED_ORBITAL,
+        objectives=[ObjectiveId.EVA],
+    )
+    submit_turn(state.players[1], rd_spend=0, launch=None)
+    # Sequence: main success (0.0), EVA objective fail (0.99), death roll low (0.05).
+    resolve_turn(state, rng=_SeqRng([0.0, 0.99, 0.05]))
+
+    # one crew member died
+    assert len(me.active_astronauts()) == STARTING_ASTRONAUTS - 1
+
+
+def test_failed_docking_can_destroy_ship() -> None:
+    """Force docking objective to fail, then the ship-loss roll to succeed —
+    the entire crew should die and the rocket reliability should drop 15."""
+
+    class _SeqRng:
+        def __init__(self, values):
+            self.values = list(values)
+            self._r = random.Random(2)
+
+        def random(self) -> float:
+            return self.values.pop(0)
+
+        def randint(self, a, b):
+            return self._r.randint(a, b)
+
+        def choice(self, seq):
+            return self._r.choice(seq)
+
+    state = _two_player_state()
+    start_game(state, rng=random.Random(1))
+    me = state.players[0]
+    me.mission_successes[MissionId.SUBORBITAL.value] = 1
+    me.reliability[Rocket.MEDIUM.value] = 70
+    me.reliability[Module.DOCKING.value] = 70
+    me.budget = 200
+    for a in me.astronauts:
+        a.command = 30  # make docking objective likely to fail
+
+    submit_turn(
+        me, rd_spend=0, launch=MissionId.MULTI_CREW_ORBITAL,
+        objectives=[ObjectiveId.DOCKING],
+    )
+    submit_turn(state.players[1], rd_spend=0, launch=None)
+    # Sequence: main success (0.0), docking fail (0.99), ship-loss roll low (0.01).
+    resolve_turn(state, rng=_SeqRng([0.0, 0.99, 0.01]))
+
+    # crew of 2 both dead from ship loss
+    assert len(me.active_astronauts()) == STARTING_ASTRONAUTS - 2
+    # rocket reliability should have taken the extra -15 hit (on top of the
+    # +5 from the main success bump). 70 + 5 - 15 = 60.
+    assert me.rocket_reliability(Rocket.MEDIUM) == 60
 
 
 def test_state_roundtrip_preserves_reliability() -> None:

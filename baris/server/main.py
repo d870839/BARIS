@@ -17,7 +17,17 @@ from baris.resolver import (
     start_game,
     submit_turn,
 )
-from baris.state import Architecture, GameState, MissionId, Phase, Player, Rocket, Side
+from baris.state import (
+    Architecture,
+    GameState,
+    MissionId,
+    Module,
+    ObjectiveId,
+    Phase,
+    Player,
+    Rocket,
+    Side,
+)
 
 log = logging.getLogger("baris.server")
 
@@ -123,6 +133,13 @@ async def handle_end_turn(player: Player, msg: dict[str, Any]) -> None:
             rd_rocket = Rocket(raw_rocket)
         except ValueError:
             rd_rocket = None
+    rd_module: Module | None = None
+    raw_module = msg.get("rd_module")
+    if raw_module:
+        try:
+            rd_module = Module(raw_module)
+        except ValueError:
+            rd_module = None
     launch: MissionId | None = None
     raw_launch = msg.get("launch")
     if raw_launch:
@@ -130,7 +147,20 @@ async def handle_end_turn(player: Player, msg: dict[str, Any]) -> None:
             launch = MissionId(raw_launch)
         except ValueError:
             launch = None
-    submit_turn(player, rd_rocket, rd_spend, launch)
+    objectives: list[ObjectiveId] = []
+    for raw_obj in msg.get("objectives") or ():
+        try:
+            objectives.append(ObjectiveId(raw_obj))
+        except ValueError:
+            continue
+    submit_turn(
+        player,
+        rd_rocket=rd_rocket,
+        rd_module=rd_module,
+        rd_spend=rd_spend,
+        launch=launch,
+        objectives=objectives,
+    )
     if all_turns_in(room.state):
         resolve_turn(room.state)
 

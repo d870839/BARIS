@@ -14,15 +14,20 @@ from baris.state import (
     DEATH_PRESTIGE_PENALTY,
     GameState,
     MIN_RELIABILITY_TO_LAUNCH,
+    MISSION_OBJECTIVES,
     MISSIONS_BY_ID,
     Mission,
     MissionId,
+    MissionObjective,
+    Module,
+    ObjectiveId,
     Phase,
     PRESTIGE_TO_WIN,
     Player,
     ProgramTier,
     RD_BATCH_COST,
     RD_SPEED,
+    objectives_for,
     RELIABILITY_CAP,
     RELIABILITY_FLOOR,
     RELIABILITY_GAIN_ON_SUCCESS,
@@ -131,6 +136,8 @@ def _apply_debug_preseed(player: Player) -> None:
     player.budget = 500
     for r in Rocket:
         player.reliability[r.value] = 70
+    for m in Module:
+        player.reliability[m.value] = 70
     player.mission_successes[MissionId.SUBORBITAL.value] = 1
     player.mission_successes[MissionId.MULTI_CREW_ORBITAL.value] = 1
     for a in player.astronauts:
@@ -161,13 +168,23 @@ def _generate_starting_roster(player: Player, rng: random.Random) -> list[Astron
 
 def submit_turn(
     player: Player,
-    rd_rocket: Rocket | None,
-    rd_spend: int,
-    launch: MissionId | None,
+    rd_rocket: Rocket | None = None,
+    rd_module: Module | None = None,
+    rd_spend: int = 0,
+    launch: MissionId | None = None,
+    objectives: list[ObjectiveId] | None = None,
 ) -> None:
-    player.pending_rd_rocket = rd_rocket.value if rd_rocket else None
+    # pick at most one R&D target; rocket wins if both provided.
+    if rd_rocket is not None:
+        player.pending_rd_target = rd_rocket.value
+    elif rd_module is not None:
+        player.pending_rd_target = rd_module.value
+    else:
+        player.pending_rd_target = None
     player.pending_rd_spend = max(0, min(rd_spend, player.budget))
+
     player.pending_launch = None
+    player.pending_objectives = []
     if launch is not None:
         mission = MISSIONS_BY_ID[launch]
         eff_rocket = effective_rocket(player, mission)
@@ -178,6 +195,16 @@ def submit_turn(
         arch_ok = meets_architecture_prereqs(player, mission)
         if player.rocket_built(eff_rocket) and can_afford and crew_ok and tier_ok and arch_ok:
             player.pending_launch = launch.value
+            # filter objectives to the mission's catalog; drop any with unmet
+            # hardware prereqs.
+            allowed = {o.id: o for o in objectives_for(mission.id)}
+            for obj_id in objectives or ():
+                obj = allowed.get(obj_id)
+                if obj is None:
+                    continue
+                if obj.requires_module and not player.module_built(obj.requires_module):
+                    continue
+                player.pending_objectives.append(obj.id.value)
     player.turn_submitted = True
 
 
@@ -194,9 +221,10 @@ def resolve_turn(state: GameState, rng: random.Random | None = None) -> None:
         _apply_rd(player, state, rng)
         _resolve_launch(player, state, rng)
         _apply_passive_training(player, rng)
-        player.pending_rd_rocket = None
+        player.pending_rd_target = None
         player.pending_rd_spend = 0
         player.pending_launch = None
+        player.pending_objectives = []
         player.turn_submitted = False
         player.budget += SEASON_REFILL
 
@@ -213,13 +241,12 @@ def resolve_turn(state: GameState, rng: random.Random | None = None) -> None:
 
 
 def _apply_rd(player: Player, state: GameState, rng: random.Random) -> None:
-    if player.pending_rd_spend <= 0 or not player.pending_rd_rocket:
+    target = player.pending_rd_target
+    if player.pending_rd_spend <= 0 or not target:
         return
-    try:
-        rocket = Rocket(player.pending_rd_rocket)
-    except ValueError:
+    if target not in RD_SPEED:
         return
-    current = player.rocket_reliability(rocket)
+    current = player.hardware_reliability(target)
     if current >= RELIABILITY_CAP:
         return  # already perfect; refuse to burn budget
     spend = player.pending_rd_spend
@@ -232,27 +259,27 @@ def _apply_rd(player: Player, state: GameState, rng: random.Random) -> None:
     for _ in range(batches):
         if current + gain >= RELIABILITY_CAP:
             break
-        gain += _roll_rd_batch(rocket, current + gain, rng)
+        gain += _roll_rd_batch(target, current + gain, rng)
     new_reliability = min(RELIABILITY_CAP, current + gain)
-    player.reliability[rocket.value] = new_reliability
+    player.reliability[target] = new_reliability
 
     state.log.append(
-        f"{player.username} invests {actually_spent} MB into {rocket.value} R&D "
+        f"{player.username} invests {actually_spent} MB into {target} R&D "
         f"→ reliability {current}% → {new_reliability}%."
     )
     if crossed_threshold and new_reliability >= MIN_RELIABILITY_TO_LAUNCH:
         state.log.append(
-            f"{player.username}'s {rocket.value}-class rocket is now launch-ready."
+            f"{player.username}'s {target} is now ready for use."
         )
 
 
-def _roll_rd_batch(rocket: Rocket, current: int, rng: random.Random) -> int:
+def _roll_rd_batch(target: str, current: int, rng: random.Random) -> int:
     """One R&D batch roll: returns a non-negative integer gain in reliability.
     Outcome distribution shaped to mimic BARIS-style variance — most batches
-    produce small or no movement; occasional breakthroughs jump the rocket
+    produce small or no movement; occasional breakthroughs jump the target
     forward. Diminishing returns scale gains as reliability approaches the cap.
     """
-    speed = RD_SPEED.get(rocket, 1.0)
+    speed = RD_SPEED.get(target, 1.0)
     factor = speed * max(0.25, 1 - current / 100)
     r = rng.random()
     if r < 0.50:
@@ -322,8 +349,89 @@ def _resolve_launch(player: Player, state: GameState, rng: random.Random) -> Non
     if roll < success_chance:
         _bump_reliability(player, eff_rocket, RELIABILITY_GAIN_ON_SUCCESS)
         _handle_mission_success(player, mission, crew, state)
+        # Objectives only resolve if the primary mission succeeded — a main
+        # mission failure means you never got the chance to try them.
+        _resolve_objectives(player, mission, crew, state, rng, eff_rocket)
     else:
         _handle_mission_failure(player, mission, crew, state, rng, eff_rocket)
+
+
+def _resolve_objectives(
+    player: Player,
+    mission: Mission,
+    crew: list[Astronaut],
+    state: GameState,
+    rng: random.Random,
+    eff_rocket: Rocket,
+) -> None:
+    """Attempt each opt-in objective the player queued. Each objective rolls
+    independently using a crew member's relevant skill. Successes grant extra
+    prestige and a skill bump; failures can kill the astronaut performing it
+    (EVA) or destroy the ship entirely (docking), depending on the objective."""
+    if not mission.manned or not player.pending_objectives:
+        return
+    catalog = {o.id: o for o in objectives_for(mission.id)}
+    for raw in player.pending_objectives:
+        try:
+            obj_id = ObjectiveId(raw)
+        except ValueError:
+            continue
+        obj = catalog.get(obj_id)
+        if obj is None:
+            continue
+        # Docking requires the module to still be available at launch time.
+        if obj.requires_module and not player.module_built(obj.requires_module):
+            state.log.append(
+                f"  - {obj.name}: skipped (missing {obj.requires_module.value})."
+            )
+            continue
+
+        # Crew member performing the objective — the one with the highest
+        # relevant skill still alive after the main mission.
+        performers = [a for a in crew if a.active]
+        if not performers:
+            return  # whole crew already gone, can't do anything
+        performers.sort(key=lambda a: a.skill(obj.required_skill), reverse=True)
+        performer = performers[0]
+
+        # Effective success: base + performer's skill contribution (same
+        # CREW_MAX_BONUS scaling as the main mission's primary_skill).
+        skill_factor = performer.skill(obj.required_skill) / 100.0
+        effective = obj.base_success + skill_factor * CREW_MAX_BONUS
+        if rng.random() < effective:
+            player.prestige += obj.prestige_bonus
+            performer.bump_skill(obj.required_skill, 5)
+            state.log.append(
+                f"  - {obj.name}: {performer.name} succeeded (+{obj.prestige_bonus} prestige)."
+            )
+            continue
+
+        # Failure — decide the consequence.
+        if obj.fail_ship_loss_chance > 0 and rng.random() < obj.fail_ship_loss_chance:
+            # Catastrophic ship loss. All remaining active crew die; the
+            # rocket reliability takes a heavy hit on top of the standard
+            # mission-success bump that already happened.
+            dead: list[str] = []
+            for astro in crew:
+                if astro.active:
+                    astro.status = AstronautStatus.KIA.value
+                    dead.append(astro.name)
+            _bump_reliability(player, eff_rocket, -15)
+            player.prestige = max(0, player.prestige - 10)
+            state.log.append(
+                f"  - {obj.name}: CATASTROPHIC FAILURE. Ship lost. "
+                f"KIA: {', '.join(dead) or 'crew'}. -15 reliability, -10 prestige."
+            )
+            return  # no further objectives — everyone's dead
+        if obj.fail_crew_death_chance > 0 and rng.random() < obj.fail_crew_death_chance:
+            performer.status = AstronautStatus.KIA.value
+            player.prestige = max(0, player.prestige - DEATH_PRESTIGE_PENALTY)
+            state.log.append(
+                f"  - {obj.name}: {performer.name} did not return. "
+                f"-{DEATH_PRESTIGE_PENALTY} prestige."
+            )
+            continue
+        state.log.append(f"  - {obj.name}: failed (no casualties).")
 
 
 def _bump_reliability(player: Player, rocket: Rocket, delta: int) -> None:

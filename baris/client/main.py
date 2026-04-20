@@ -36,6 +36,8 @@ from baris.state import (
     Astronaut,
     GameState,
     MissionId,
+    Module,
+    ObjectiveId,
     Phase,
     Player,
     ProgramTier,
@@ -43,6 +45,7 @@ from baris.state import (
     Rocket,
     Side,
     Skill,
+    objectives_for,
     program_name,
     rocket_display_name,
 )
@@ -53,6 +56,14 @@ WINDOW_SIZE = (1200, 940)
 FPS = 60
 
 ROCKET_KEYS = {pygame.K_q: Rocket.LIGHT, pygame.K_w: Rocket.MEDIUM, pygame.K_e: Rocket.HEAVY}
+MODULE_KEYS = {pygame.K_r: Module.DOCKING}
+OBJECTIVE_KEYS = {  # held-down toggle keys while on the Missions tab
+    pygame.K_v: ObjectiveId.EVA,
+    pygame.K_b: ObjectiveId.DOCKING,
+    pygame.K_n: ObjectiveId.LONG_DURATION,
+    pygame.K_m: ObjectiveId.MOONWALK,
+    pygame.K_COMMA: ObjectiveId.SAMPLE_RETURN,
+}
 MISSION_KEYS = {
     pygame.K_1: 0, pygame.K_2: 1, pygame.K_3: 2,
     pygame.K_4: 3, pygame.K_5: 4, pygame.K_6: 5,
@@ -117,9 +128,13 @@ class Client:
         self.status = ""
         self.joined_sent = False
 
-        self.rd_rocket: Rocket = Rocket.LIGHT
+        # R&D target: either a Rocket OR a Module. Stored as enum value string
+        # so submission is uniform.
+        self.rd_target_rocket: Rocket | None = Rocket.LIGHT
+        self.rd_target_module: Module | None = None
         self.rd_spend: int = 10
         self.queued_mission: MissionId | None = None
+        self.queued_objectives: set[ObjectiveId] = set()
 
         self.scene: str = MENU
         self.active_tab: str = TAB_OVERVIEW
@@ -199,11 +214,12 @@ class Client:
 
         # R&D tab controls (only rendered on that tab)
         rd_y = 520
-        btns["rocket_light"]  = Button(pygame.Rect(30,  rd_y, 120, 36), "Light",  key_hint="Q")
-        btns["rocket_medium"] = Button(pygame.Rect(160, rd_y, 120, 36), "Medium", key_hint="W")
-        btns["rocket_heavy"]  = Button(pygame.Rect(290, rd_y, 120, 36), "Heavy",  key_hint="E")
-        btns["spend_minus"]   = Button(pygame.Rect(440, rd_y, 36,  36), "-",      key_hint="Left")
-        btns["spend_plus"]    = Button(pygame.Rect(486, rd_y, 36,  36), "+",      key_hint="Right")
+        btns["rocket_light"]  = Button(pygame.Rect(30,  rd_y, 120, 36), "Light",   key_hint="Q")
+        btns["rocket_medium"] = Button(pygame.Rect(160, rd_y, 120, 36), "Medium",  key_hint="W")
+        btns["rocket_heavy"]  = Button(pygame.Rect(290, rd_y, 120, 36), "Heavy",   key_hint="E")
+        btns["module_docking"]= Button(pygame.Rect(420, rd_y, 140, 36), "Docking", key_hint="R")
+        btns["spend_minus"]   = Button(pygame.Rect(590, rd_y, 36,  36), "-",       key_hint="Left")
+        btns["spend_plus"]    = Button(pygame.Rect(636, rd_y, 36,  36), "+",       key_hint="Right")
 
         # Missions tab: architecture tiles (shown only when Tier 3 unlocked)
         arch_y = 750
@@ -378,9 +394,16 @@ class Client:
             for key, rocket in rocket_btns.items():
                 btn = self.game_buttons[key]
                 btn.enabled = editable
-                btn.selected = (self.rd_rocket == rocket)
+                btn.selected = (self.rd_target_rocket == rocket)
                 if btn.handle_event(event):
-                    self.rd_rocket = rocket
+                    self.rd_target_rocket = rocket
+                    self.rd_target_module = None
+            mod_btn = self.game_buttons["module_docking"]
+            mod_btn.enabled = editable
+            mod_btn.selected = (self.rd_target_module == Module.DOCKING)
+            if mod_btn.handle_event(event):
+                self.rd_target_module = Module.DOCKING
+                self.rd_target_rocket = None
             self.game_buttons["spend_minus"].enabled = editable
             self.game_buttons["spend_plus"].enabled = editable
             if self.game_buttons["spend_minus"].handle_event(event) and editable:
@@ -433,7 +456,11 @@ class Client:
             if not editable:
                 return True
             if self.active_tab == TAB_RD and event.key in ROCKET_KEYS:
-                self.rd_rocket = ROCKET_KEYS[event.key]
+                self.rd_target_rocket = ROCKET_KEYS[event.key]
+                self.rd_target_module = None
+            elif self.active_tab == TAB_RD and event.key in MODULE_KEYS:
+                self.rd_target_module = MODULE_KEYS[event.key]
+                self.rd_target_rocket = None
             elif self.active_tab == TAB_RD and event.key == pygame.K_LEFT:
                 self.rd_spend = max(0, self.rd_spend - 5)
             elif self.active_tab == TAB_RD and event.key == pygame.K_RIGHT:
@@ -444,18 +471,33 @@ class Client:
                 idx = MISSION_KEYS[event.key]
                 if idx < len(visible):
                     self.queued_mission = visible[idx].id
+                    self.queued_objectives.clear()
+            elif self.active_tab == TAB_MISSIONS and event.key in OBJECTIVE_KEYS and self.queued_mission:
+                obj_id = OBJECTIVE_KEYS[event.key]
+                # only toggle if this objective belongs to the queued mission
+                available_obj_ids = {o.id for o in objectives_for(self.queued_mission)}
+                if obj_id in available_obj_ids:
+                    if obj_id in self.queued_objectives:
+                        self.queued_objectives.discard(obj_id)
+                    else:
+                        self.queued_objectives.add(obj_id)
             elif event.key == pygame.K_RETURN:
                 self._submit_turn(me)
         return True
 
     def _submit_turn(self, me: Player) -> None:
-        self.net.send(
-            protocol.END_TURN,
-            rd_rocket=self.rd_rocket.value,
-            rd_spend=min(self.rd_spend, me.budget),
-            launch=self.queued_mission.value if self.queued_mission else None,
-        )
+        payload: dict[str, object] = {
+            "rd_spend": min(self.rd_spend, me.budget),
+            "launch": self.queued_mission.value if self.queued_mission else None,
+            "objectives": [o.value for o in self.queued_objectives],
+        }
+        if self.rd_target_module is not None:
+            payload["rd_module"] = self.rd_target_module.value
+        elif self.rd_target_rocket is not None:
+            payload["rd_rocket"] = self.rd_target_rocket.value
+        self.net.send(protocol.END_TURN, **payload)
         self.queued_mission = None
+        self.queued_objectives.clear()
 
     def _handle_end_event(self, event: pygame.event.Event) -> bool:
         if self.end_buttons[0].handle_event(event):
@@ -591,10 +633,13 @@ class Client:
         if me is None:
             return
         # Left: turn intent summary
-        rd_line = (
-            f"R&D:    {rocket_display_name(self.rd_rocket, me.side)}  "
-            f"spend {min(self.rd_spend, me.budget)} MB"
-        )
+        if self.rd_target_module is not None:
+            rd_label = self.rd_target_module.value
+        elif self.rd_target_rocket is not None:
+            rd_label = rocket_display_name(self.rd_target_rocket, me.side)
+        else:
+            rd_label = "(none)"
+        rd_line = f"R&D:    {rd_label}  spend {min(self.rd_spend, me.budget)} MB"
         draw_text(self.screen, rd_line, (20, 872), size=16, color=FG)
         if self.queued_mission is not None:
             m = MISSIONS_BY_ID[self.queued_mission]
@@ -733,10 +778,12 @@ class Client:
         for r in Rocket:
             self._draw_rd_bar(r, me, (x, y), compact=False)
             y += 50
+        # docking module gets its own bar below the rockets
+        self._draw_module_bar(Module.DOCKING, me, (x, y))
         # spend controls label (buttons themselves are drawn on top later)
-        draw_text(self.screen, "Target rocket:", (30, 496), size=14, color=DIM)
+        draw_text(self.screen, "Target:", (30, 496), size=14, color=DIM)
         draw_text(self.screen, f"Spend per turn: {min(self.rd_spend, me.budget)} MB",
-                  (560, 528), size=16, color=FG)
+                  (710, 528), size=16, color=FG)
         # Opponent progress snapshot
         if opp is not None:
             pygame.draw.rect(self.screen, PANEL, (600, CONTENT_TOP + 90, 580, 220),
@@ -791,6 +838,35 @@ class Client:
         else:
             tail = "launch-ready"
             tail_color = HIGHLIGHT
+        draw_text(self.screen, tail, (bar_x + bar_w + 12, y), size=size - 2, color=tail_color)
+
+    def _draw_module_bar(self, module: Module, player: Player,
+                         pos: tuple[int, int]) -> None:
+        """Module reliability bar — same layout as _draw_rd_bar but keyed by Module."""
+        x, y = pos
+        rel = player.module_reliability(module)
+        bar_w = 320
+        size = 16
+        label = f"{module.value:<16} {rel:3}%"
+        draw_text(self.screen, label, (x, y), size=size, color=FG)
+        bar_x = x + 220
+        bar_y = y + 3
+        bar_h = 16
+        pygame.draw.rect(self.screen, DIM, (bar_x, bar_y, bar_w, bar_h), 1)
+        threshold_x = bar_x + int((bar_w - 2) * (MIN_RELIABILITY_TO_LAUNCH / RELIABILITY_CAP))
+        pygame.draw.line(self.screen, MUTED,
+                         (threshold_x, bar_y), (threshold_x, bar_y + bar_h))
+        built = player.module_built(module)
+        if not built:
+            fill_color = RED
+        elif rel >= 75:
+            fill_color = GREEN
+        else:
+            fill_color = HIGHLIGHT
+        fill_w = int((bar_w - 2) * (rel / RELIABILITY_CAP))
+        pygame.draw.rect(self.screen, fill_color, (bar_x + 1, bar_y + 1, fill_w, bar_h - 2))
+        tail = "not ready" if not built else ("reliable" if rel >= 75 else "usable")
+        tail_color = RED if not built else (GREEN if rel >= 75 else HIGHLIGHT)
         draw_text(self.screen, tail, (bar_x + bar_w + 12, y), size=size - 2, color=tail_color)
 
     # --- Astronauts tab -------------------------------------------------
@@ -960,6 +1036,12 @@ class Client:
                 (36, panel_y + 26), size=14, color=FG,
             )
 
+        # Objectives strip — only when the queued mission has any.
+        if self.queued_mission is not None:
+            objs = objectives_for(self.queued_mission)
+            if objs:
+                self._render_objective_toggles(me, objs, (20, panel_y + 68))
+
     # --- Log tab --------------------------------------------------------
     def _render_tab_log(self) -> None:
         assert self.state is not None
@@ -974,6 +1056,45 @@ class Client:
         for line in self.state.log[-30:]:
             draw_text(self.screen, line, (36, y), size=15, color=FG)
             y += 22
+
+    def _render_objective_toggles(self, me: Player, objs: tuple, pos: tuple[int, int]) -> None:
+        x, y = pos
+        # Shared hotkey map for the hint labels; flipped order matches OBJECTIVE_KEYS.
+        hint_by_obj = {
+            ObjectiveId.EVA: "V",
+            ObjectiveId.DOCKING: "B",
+            ObjectiveId.LONG_DURATION: "N",
+            ObjectiveId.MOONWALK: "M",
+            ObjectiveId.SAMPLE_RETURN: ",",
+        }
+        draw_text(self.screen, "OPTIONAL OBJECTIVES (toggle before submit)",
+                  (x + 16, y), size=14, color=HIGHLIGHT, bold=True)
+        cy = y + 24
+        for obj in objs:
+            queued = obj.id in self.queued_objectives
+            prereq_missing = (
+                obj.requires_module is not None
+                and not me.module_built(obj.requires_module)
+            )
+            risk = ""
+            if obj.fail_ship_loss_chance > 0:
+                risk = f" [risk: {int(obj.fail_ship_loss_chance * 100)}% SHIP LOSS on fail]"
+            elif obj.fail_crew_death_chance > 0:
+                risk = f" [risk: {int(obj.fail_crew_death_chance * 100)}% crew death on fail]"
+            marker = "[X]" if queued else "[ ]"
+            if prereq_missing:
+                marker = "[!]"
+            color = HIGHLIGHT if queued else (RED if prereq_missing else FG)
+            hint = hint_by_obj.get(obj.id, "?")
+            line = (
+                f"{marker} ({hint}) {obj.name}  "
+                f"skill {obj.required_skill.value}, +{obj.prestige_bonus} prestige"
+                f"{risk}"
+            )
+            if prereq_missing and obj.requires_module is not None:
+                line += f"  — requires {obj.requires_module.value}"
+            draw_text(self.screen, line, (x + 16, cy), size=14, color=color)
+            cy += 20
 
     def _preview_crew(self, player: Player, mission) -> list[Astronaut]:
         active = player.active_astronauts()

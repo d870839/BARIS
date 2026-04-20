@@ -29,6 +29,12 @@ class Rocket(str, Enum):
     HEAVY = "Heavy"
 
 
+class Module(str, Enum):
+    """Non-rocket hardware with its own R&D track. Researched the same way
+    rockets are (stochastic batched rolls against a single reliability score)."""
+    DOCKING = "Docking Module"
+
+
 class Skill(str, Enum):
     CAPSULE = "capsule"
     EVA = "eva"
@@ -53,6 +59,14 @@ class MissionId(str, Enum):
     ORBITAL_EVA = "orbital_eva"
     MANNED_LUNAR_ORBIT = "manned_lunar_orbit"
     MANNED_LUNAR_LANDING = "manned_lunar_landing"
+
+
+class ObjectiveId(str, Enum):
+    EVA            = "eva"
+    DOCKING        = "docking"
+    LONG_DURATION  = "long_duration"
+    MOONWALK       = "moonwalk"
+    SAMPLE_RETURN  = "sample_return"
 
 
 class ProgramTier(str, Enum):
@@ -150,13 +164,82 @@ MISSIONS: tuple[Mission, ...] = (
 
 MISSIONS_BY_ID: dict[MissionId, Mission] = {m.id: m for m in MISSIONS}
 
-# Per-rocket R&D speed multiplier. Heavy rockets are genuinely hard to develop.
-RD_SPEED: dict[Rocket, float] = {
-    Rocket.LIGHT:  1.0,
-    Rocket.MEDIUM: 0.5,
-    Rocket.HEAVY:  0.3,
+
+@dataclass(frozen=True)
+class MissionObjective:
+    """An opt-in sub-objective the player can attempt during a manned mission.
+    Each objective rolls independently from the main mission success roll."""
+    id: ObjectiveId
+    name: str
+    required_skill: Skill
+    base_success: float
+    prestige_bonus: int
+    # Failure consequences. Exactly one of these should be non-zero for risky
+    # objectives; benign objectives (sample return, long duration) leave both 0.
+    fail_crew_death_chance: float = 0.0   # single crew member dies on fail
+    fail_ship_loss_chance: float = 0.0    # whole ship + crew lost; rocket reliability tanks
+    requires_module: Module | None = None
+
+
+# Objectives attached per manned mission. Not every manned mission has
+# objectives — ORBITAL_EVA has EVA baked in as the whole point, so skip it.
+MISSION_OBJECTIVES: dict[MissionId, tuple[MissionObjective, ...]] = {
+    MissionId.MANNED_ORBITAL: (
+        MissionObjective(
+            ObjectiveId.EVA, "Orbital EVA", Skill.EVA,
+            base_success=0.60, prestige_bonus=4,
+            fail_crew_death_chance=0.15,
+        ),
+        MissionObjective(
+            ObjectiveId.LONG_DURATION, "Long-duration orbit", Skill.ENDURANCE,
+            base_success=0.70, prestige_bonus=2,
+        ),
+    ),
+    MissionId.MULTI_CREW_ORBITAL: (
+        MissionObjective(
+            ObjectiveId.DOCKING, "Orbital docking", Skill.COMMAND,
+            base_success=0.55, prestige_bonus=6,
+            fail_ship_loss_chance=0.25,
+            requires_module=Module.DOCKING,
+        ),
+        MissionObjective(
+            ObjectiveId.EVA, "Spacewalk", Skill.EVA,
+            base_success=0.60, prestige_bonus=4,
+            fail_crew_death_chance=0.15,
+        ),
+    ),
+    MissionId.MANNED_LUNAR_LANDING: (
+        MissionObjective(
+            ObjectiveId.MOONWALK, "Lunar EVA (moonwalk)", Skill.EVA,
+            base_success=0.55, prestige_bonus=6,
+            fail_crew_death_chance=0.15,
+        ),
+        MissionObjective(
+            ObjectiveId.SAMPLE_RETURN, "Lunar sample return", Skill.ENDURANCE,
+            base_success=0.70, prestige_bonus=4,
+        ),
+    ),
+}
+
+
+def objectives_for(mission_id: MissionId) -> tuple[MissionObjective, ...]:
+    return MISSION_OBJECTIVES.get(mission_id, ())
+
+# Per-hardware R&D speed. Keyed by the enum .value so a single dict covers
+# both rockets and modules. Heavy rockets are genuinely hard to develop;
+# the docking module sits between Light and Medium in difficulty.
+RD_SPEED: dict[str, float] = {
+    Rocket.LIGHT.value:   1.0,
+    Rocket.MEDIUM.value:  0.5,
+    Rocket.HEAVY.value:   0.3,
+    Module.DOCKING.value: 0.7,
 }
 RD_BATCH_COST = 3  # MB per roll
+
+
+def hardware_names() -> tuple[str, ...]:
+    """All researchable hardware in display order."""
+    return tuple(r.value for r in Rocket) + tuple(m.value for m in Module)
 
 STARTING_BUDGET = 30
 SEASON_REFILL = 15
@@ -273,21 +356,34 @@ class Player:
     prestige: int = 0
     ready: bool = False
     reliability: dict[str, int] = field(
-        default_factory=lambda: {r.value: 0 for r in Rocket}
+        default_factory=lambda: {
+            **{r.value: 0 for r in Rocket},
+            **{m.value: 0 for m in Module},
+        }
     )
     astronauts: list[Astronaut] = field(default_factory=list)
     mission_successes: dict[str, int] = field(default_factory=dict)
     architecture: str | None = None  # Architecture.value once chosen, else None
     turn_submitted: bool = False
-    pending_rd_rocket: str | None = None   # Rocket.value or None
+    pending_rd_target: str | None = None   # Rocket.value, Module.value, or None
     pending_rd_spend: int = 0
     pending_launch: str | None = None      # MissionId.value or None
+    pending_objectives: list[str] = field(default_factory=list)  # ObjectiveId.value list
 
     def rocket_reliability(self, rocket: Rocket) -> int:
         return self.reliability.get(rocket.value, 0)
 
     def rocket_built(self, rocket: Rocket) -> bool:
         return self.rocket_reliability(rocket) >= MIN_RELIABILITY_TO_LAUNCH
+
+    def module_reliability(self, module: Module) -> int:
+        return self.reliability.get(module.value, 0)
+
+    def module_built(self, module: Module) -> bool:
+        return self.module_reliability(module) >= MIN_RELIABILITY_TO_LAUNCH
+
+    def hardware_reliability(self, name: str) -> int:
+        return self.reliability.get(name, 0)
 
     # back-compat aliases kept short so the UI and resolver don't have to pick.
     def rd_progress(self, rocket: Rocket) -> int:
