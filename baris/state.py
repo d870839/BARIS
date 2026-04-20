@@ -58,7 +58,7 @@ class GameState:
 
     @classmethod
     def from_dict(cls, d: dict[str, Any]) -> GameState:
-        players = [Player(**p) for p in d.get("players", [])]
+        players = [_player_from_dict(p) for p in d.get("players", [])]
         return cls(
             phase=Phase(d["phase"]),
             season=Season(d["season"]),
@@ -73,6 +73,13 @@ class GameState:
 
     def other_player(self, player_id: str) -> Player | None:
         return next((p for p in self.players if p.player_id != player_id), None)
+
+
+def _player_from_dict(d: dict[str, Any]) -> Player:
+    data = dict(d)
+    side = data.get("side")
+    data["side"] = Side(side) if side else None
+    return Player(**data)
 
 
 SEASON_ORDER = [Season.SPRING, Season.SUMMER, Season.FALL, Season.WINTER]

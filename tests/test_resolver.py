@@ -112,3 +112,13 @@ def test_state_roundtrip_dict() -> None:
     assert restored.players[1].side == Side.USSR
     assert restored.log == ["hello"]
     assert restored.phase == Phase.LOBBY
+
+
+def test_player_side_is_enum_after_roundtrip() -> None:
+    """Regression: before the fix, Player.side came back as a raw str, so
+    code doing `player.side.value` crashed with AttributeError."""
+    state = _two_player_state()
+    restored = GameState.from_dict(state.to_dict())
+    for p in restored.players:
+        assert isinstance(p.side, Side), f"expected Side enum, got {type(p.side)}"
+        p.side.value  # must not raise
