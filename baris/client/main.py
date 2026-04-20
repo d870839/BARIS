@@ -29,6 +29,7 @@ from baris.state import (
     ARCHITECTURE_COST_DELTA,
     ARCHITECTURE_FULL_NAMES,
     ARCHITECTURE_SUCCESS_DELTA,
+    MIN_RELIABILITY_TO_LAUNCH,
     MISSIONS,
     MISSIONS_BY_ID,
     Architecture,
@@ -38,7 +39,7 @@ from baris.state import (
     Phase,
     Player,
     ProgramTier,
-    RD_TARGETS,
+    RELIABILITY_CAP,
     Rocket,
     Side,
     Skill,
@@ -603,11 +604,11 @@ class Client:
                 effective_launch_cost,
                 effective_rocket,
             )
-            from baris.state import SAFETY_SWING_PER_POINT
+            from baris.state import RELIABILITY_SWING_PER_POINT
             eff_rocket = effective_rocket(me, m)
             eff_cost = effective_launch_cost(me, m)
-            safety_bonus = (me.safety(eff_rocket) - 50) * SAFETY_SWING_PER_POINT
-            effective = effective_base_success(me, m) + safety_bonus
+            reliability_bonus = (me.rocket_reliability(eff_rocket) - 50) * RELIABILITY_SWING_PER_POINT
+            effective = effective_base_success(me, m) + reliability_bonus
             if m.manned:
                 crew = self._preview_crew(me, m)
                 if crew:
@@ -755,30 +756,42 @@ class Client:
     def _draw_rd_bar(self, rocket: Rocket, player: Player, pos: tuple[int, int],
                      compact: bool = False) -> None:
         x, y = pos
-        target = RD_TARGETS[rocket]
-        progress = player.rd_progress(rocket)
-        pct = progress / target
+        rel = player.rocket_reliability(rocket)
         bar_w = 320 if not compact else 220
         size = 16 if not compact else 14
         display = rocket_display_name(rocket, player.side)
-        label = f"{display:<10} {progress:3}/{target:3}"
+        label = f"{display:<10} {rel:3}%"
         draw_text(self.screen, label, (x, y), size=size, color=FG)
         bar_x = x + 220 if not compact else x + 200
-        bar_y = y + 3 if not compact else y + 3
+        bar_y = y + 3
         bar_h = 16 if not compact else 12
+        # empty bar frame
         pygame.draw.rect(self.screen, DIM, (bar_x, bar_y, bar_w, bar_h), 1)
-        pygame.draw.rect(
-            self.screen, GREEN if pct >= 1.0 else HIGHLIGHT,
-            (bar_x + 1, bar_y + 1, int((bar_w - 2) * pct), bar_h - 2),
-        )
-        safety = player.safety(rocket)
-        if player.rocket_built(rocket):
-            safety_color = GREEN if safety >= 70 else HIGHLIGHT if safety >= 40 else RED
-            draw_text(self.screen, f"saf {safety:3}%",
-                      (bar_x + bar_w + 12, y), size=size - 2, color=safety_color)
+        # threshold marker (where it becomes launch-ready)
+        threshold_x = bar_x + int((bar_w - 2) * (MIN_RELIABILITY_TO_LAUNCH / RELIABILITY_CAP))
+        pygame.draw.line(self.screen, MUTED,
+                         (threshold_x, bar_y), (threshold_x, bar_y + bar_h))
+        # fill bar — color reflects launchable / reliable
+        built = player.rocket_built(rocket)
+        if not built:
+            fill_color = RED
+        elif rel >= 75:
+            fill_color = GREEN
         else:
-            draw_text(self.screen, "saf --",
-                      (bar_x + bar_w + 12, y), size=size - 2, color=DIM)
+            fill_color = HIGHLIGHT
+        fill_w = int((bar_w - 2) * (rel / RELIABILITY_CAP))
+        pygame.draw.rect(self.screen, fill_color, (bar_x + 1, bar_y + 1, fill_w, bar_h - 2))
+        # trailing label: readiness state
+        if not built:
+            tail = "not ready"
+            tail_color = RED
+        elif rel >= 75:
+            tail = "reliable"
+            tail_color = GREEN
+        else:
+            tail = "launch-ready"
+            tail_color = HIGHLIGHT
+        draw_text(self.screen, tail, (bar_x + bar_w + 12, y), size=size - 2, color=tail_color)
 
     # --- Astronauts tab -------------------------------------------------
     def _render_tab_astronauts(self, me: Player | None, opp: Player | None) -> None:

@@ -71,7 +71,11 @@ async def test_two_clients_play_one_turn() -> None:
                 msg = json.loads(raw)
                 if msg["type"] == "state" and msg["state"]["season"] == "Summer":
                     players = {p["username"]: p for p in msg["state"]["players"]}
-                    assert players["Alice"]["rockets"]["Light"] == 10
-                    assert players["Bob"]["rockets"]["Medium"] == 20
+                    # R&D is stochastic now: assert each player advanced only
+                    # their chosen rocket, not both.
+                    assert players["Alice"]["reliability"]["Light"] > 0
+                    assert players["Alice"]["reliability"]["Medium"] == 0
+                    assert players["Bob"]["reliability"]["Medium"] > 0
+                    assert players["Bob"]["reliability"]["Light"] == 0
                     return
             pytest.fail("season never advanced to Summer")

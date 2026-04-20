@@ -150,11 +150,13 @@ MISSIONS: tuple[Mission, ...] = (
 
 MISSIONS_BY_ID: dict[MissionId, Mission] = {m.id: m for m in MISSIONS}
 
-RD_TARGETS: dict[Rocket, int] = {
-    Rocket.LIGHT: 60,
-    Rocket.MEDIUM: 120,
-    Rocket.HEAVY: 200,
+# Per-rocket R&D speed multiplier. Heavy rockets are genuinely hard to develop.
+RD_SPEED: dict[Rocket, float] = {
+    Rocket.LIGHT:  1.0,
+    Rocket.MEDIUM: 0.5,
+    Rocket.HEAVY:  0.3,
 }
+RD_BATCH_COST = 3  # MB per roll
 
 STARTING_BUDGET = 30
 SEASON_REFILL = 15
@@ -225,16 +227,17 @@ def program_name(tier: ProgramTier, side: Side | None) -> str:
 # Crew skill bonus to success: full crew averaging 100 in primary skill → +15%.
 CREW_MAX_BONUS = 0.15
 
-# Rocket safety: per-player reliability rating per rocket class.
-# Affects mission success. Grows on success, drops on failure.
-SAFETY_FLOOR = 20          # failed rockets can't drop below this
-SAFETY_CAP = 95            # you can never fully trust a rocket
-SAFETY_ON_RD_COMPLETE = 40 # fresh rockets start unreliable
-SAFETY_GAIN_ON_SUCCESS = 5
-SAFETY_LOSS_ON_FAIL = 10
-# Safety contributes ±10% to success around the neutral value of 50.
-# effective = base + crew_bonus + (safety - 50) * SAFETY_SWING_PER_POINT
-SAFETY_SWING_PER_POINT = 0.002
+# Rocket reliability: merged R&D-progress and flight-safety rating (0-99%).
+# Built by R&D rolls (stochastic), then nudged up by successful flights and
+# down by failures. Directly affects mission success rate.
+RELIABILITY_CAP             = 99   # you can never fully trust a rocket
+RELIABILITY_FLOOR           = 20   # once built, can't drop below this after a failure
+MIN_RELIABILITY_TO_LAUNCH   = 25   # below this, a rocket is considered "not ready"
+RELIABILITY_GAIN_ON_SUCCESS = 5
+RELIABILITY_LOSS_ON_FAIL    = 10
+# Reliability contributes ±10% to success around a neutral value of 50.
+# effective = base + crew_bonus + (reliability - 50) * RELIABILITY_SWING_PER_POINT
+RELIABILITY_SWING_PER_POINT = 0.002
 
 
 @dataclass
@@ -267,10 +270,7 @@ class Player:
     budget: int = STARTING_BUDGET
     prestige: int = 0
     ready: bool = False
-    rockets: dict[str, int] = field(
-        default_factory=lambda: {r.value: 0 for r in Rocket}
-    )
-    rocket_safety: dict[str, int] = field(
+    reliability: dict[str, int] = field(
         default_factory=lambda: {r.value: 0 for r in Rocket}
     )
     astronauts: list[Astronaut] = field(default_factory=list)
@@ -281,14 +281,18 @@ class Player:
     pending_rd_spend: int = 0
     pending_launch: str | None = None      # MissionId.value or None
 
-    def rd_progress(self, rocket: Rocket) -> int:
-        return self.rockets.get(rocket.value, 0)
+    def rocket_reliability(self, rocket: Rocket) -> int:
+        return self.reliability.get(rocket.value, 0)
 
     def rocket_built(self, rocket: Rocket) -> bool:
-        return self.rd_progress(rocket) >= RD_TARGETS[rocket]
+        return self.rocket_reliability(rocket) >= MIN_RELIABILITY_TO_LAUNCH
+
+    # back-compat aliases kept short so the UI and resolver don't have to pick.
+    def rd_progress(self, rocket: Rocket) -> int:
+        return self.rocket_reliability(rocket)
 
     def safety(self, rocket: Rocket) -> int:
-        return self.rocket_safety.get(rocket.value, 0)
+        return self.rocket_reliability(rocket)
 
     def active_astronauts(self) -> list[Astronaut]:
         return [a for a in self.astronauts if a.active]

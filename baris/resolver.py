@@ -13,6 +13,7 @@ from baris.state import (
     DEATH_CHANCE_ON_FAIL,
     DEATH_PRESTIGE_PENALTY,
     GameState,
+    MIN_RELIABILITY_TO_LAUNCH,
     MISSIONS_BY_ID,
     Mission,
     MissionId,
@@ -20,14 +21,14 @@ from baris.state import (
     PRESTIGE_TO_WIN,
     Player,
     ProgramTier,
-    RD_TARGETS,
+    RD_BATCH_COST,
+    RD_SPEED,
+    RELIABILITY_CAP,
+    RELIABILITY_FLOOR,
+    RELIABILITY_GAIN_ON_SUCCESS,
+    RELIABILITY_LOSS_ON_FAIL,
+    RELIABILITY_SWING_PER_POINT,
     Rocket,
-    SAFETY_CAP,
-    SAFETY_FLOOR,
-    SAFETY_GAIN_ON_SUCCESS,
-    SAFETY_LOSS_ON_FAIL,
-    SAFETY_ON_RD_COMPLETE,
-    SAFETY_SWING_PER_POINT,
     SEASON_REFILL,
     STARTING_ASTRONAUTS,
     Side,
@@ -122,15 +123,12 @@ def start_game(
 
 
 def _apply_debug_preseed(player: Player) -> None:
-    """Give the player a fat starting kit so testing skips the grind:
-    big budget, all rockets fully R&Ded, Apollo/Soyuz unlocked, roster
-    boosted, and every rocket's safety nudged up."""
+    """Give the player a fat starting kit so testing skips the grind: big
+    budget, all rockets launch-ready at 70% reliability, Apollo/Soyuz
+    unlocked, and the roster's skills floored at 70."""
     player.budget = 500
     for r in Rocket:
-        player.rockets[r.value] = RD_TARGETS[r]
-        player.rocket_safety[r.value] = 70
-    # seed two successes so Tier 3 is unlocked (but LSR still requires a real
-    # unmanned landing, which the player can trigger at will)
+        player.reliability[r.value] = 70
     player.mission_successes[MissionId.SUBORBITAL.value] = 1
     player.mission_successes[MissionId.MULTI_CREW_ORBITAL.value] = 1
     for a in player.astronauts:
@@ -191,7 +189,7 @@ def resolve_turn(state: GameState, rng: random.Random | None = None) -> None:
     state.log.clear()
 
     for player in state.players:
-        _apply_rd(player, state)
+        _apply_rd(player, state, rng)
         _resolve_launch(player, state, rng)
         _apply_passive_training(player, rng)
         player.pending_rd_rocket = None
@@ -212,30 +210,64 @@ def resolve_turn(state: GameState, rng: random.Random | None = None) -> None:
 # ----------------------------------------------------------------------
 
 
-def _apply_rd(player: Player, state: GameState) -> None:
+def _apply_rd(player: Player, state: GameState, rng: random.Random) -> None:
     if player.pending_rd_spend <= 0 or not player.pending_rd_rocket:
         return
     try:
         rocket = Rocket(player.pending_rd_rocket)
     except ValueError:
         return
-    if player.rocket_built(rocket):
-        return  # already done, refund nothing, drop spend
+    current = player.rocket_reliability(rocket)
+    if current >= RELIABILITY_CAP:
+        return  # already perfect; refuse to burn budget
     spend = player.pending_rd_spend
-    player.budget -= spend
-    target = RD_TARGETS[rocket]
-    new_progress = min(target, player.rd_progress(rocket) + spend)
-    player.rockets[rocket.value] = new_progress
+    batches = spend // RD_BATCH_COST
+    actually_spent = batches * RD_BATCH_COST  # refund unused remainder
+    player.budget -= actually_spent
+
+    crossed_threshold = current < MIN_RELIABILITY_TO_LAUNCH
+    gain = 0
+    for _ in range(batches):
+        if current + gain >= RELIABILITY_CAP:
+            break
+        gain += _roll_rd_batch(rocket, current + gain, rng)
+    new_reliability = min(RELIABILITY_CAP, current + gain)
+    player.reliability[rocket.value] = new_reliability
+
     state.log.append(
-        f"{player.username} invests {spend} MB into {rocket.value} R&D "
-        f"({new_progress}/{target})."
+        f"{player.username} invests {actually_spent} MB into {rocket.value} R&D "
+        f"→ reliability {current}% → {new_reliability}%."
     )
-    if new_progress >= target and player.rocket_safety.get(rocket.value, 0) == 0:
-        player.rocket_safety[rocket.value] = SAFETY_ON_RD_COMPLETE
+    if crossed_threshold and new_reliability >= MIN_RELIABILITY_TO_LAUNCH:
         state.log.append(
-            f"{player.username} completes {rocket.value}-class rocket! "
-            f"(initial safety: {SAFETY_ON_RD_COMPLETE}%)"
+            f"{player.username}'s {rocket.value}-class rocket is now launch-ready."
         )
+
+
+def _roll_rd_batch(rocket: Rocket, current: int, rng: random.Random) -> int:
+    """One R&D batch roll: returns a non-negative integer gain in reliability.
+    Outcome distribution shaped to mimic BARIS-style variance — most batches
+    produce small or no movement; occasional breakthroughs jump the rocket
+    forward. Diminishing returns scale gains as reliability approaches the cap.
+    """
+    speed = RD_SPEED.get(rocket, 1.0)
+    factor = speed * max(0.25, 1 - current / 100)
+    r = rng.random()
+    if r < 0.50:
+        raw = 0  # stall
+    elif r < 0.80:
+        raw = 1
+    elif r < 0.95:
+        raw = 2
+    else:
+        raw = 4  # breakthrough
+    if raw == 0:
+        return 0
+    scaled = raw * factor
+    # Even heavily scaled rolls still produce at least 1 point when the
+    # underlying raw roll was non-zero, so the player never feels completely
+    # stuck on a bad streak combined with a bad rocket.
+    return max(1, int(round(scaled)))
 
 
 # ----------------------------------------------------------------------
@@ -278,25 +310,30 @@ def _resolve_launch(player: Player, state: GameState, rng: random.Random) -> Non
             return
 
     player.budget -= eff_cost
-    safety_bonus = (player.safety(eff_rocket) - 50) * SAFETY_SWING_PER_POINT
+    reliability_bonus = (player.rocket_reliability(eff_rocket) - 50) * RELIABILITY_SWING_PER_POINT
     success_chance = (
         effective_base_success(player, mission)
         + _crew_bonus(crew, mission)
-        + safety_bonus
+        + reliability_bonus
     )
     roll = rng.random()
     if roll < success_chance:
-        _bump_safety(player, eff_rocket, SAFETY_GAIN_ON_SUCCESS)
+        _bump_reliability(player, eff_rocket, RELIABILITY_GAIN_ON_SUCCESS)
         _handle_mission_success(player, mission, crew, state)
     else:
-        _bump_safety(player, eff_rocket, -SAFETY_LOSS_ON_FAIL)
+        _bump_reliability(player, eff_rocket, -RELIABILITY_LOSS_ON_FAIL)
         _handle_mission_failure(player, mission, crew, state, rng)
 
 
-def _bump_safety(player: Player, rocket: Rocket, delta: int) -> None:
-    current = player.safety(rocket)
-    new_value = max(SAFETY_FLOOR, min(SAFETY_CAP, current + delta))
-    player.rocket_safety[rocket.value] = new_value
+def _bump_reliability(player: Player, rocket: Rocket, delta: int) -> None:
+    """Adjust reliability after a flight. Failures can't drop a launch-ready
+    rocket below RELIABILITY_FLOOR (so one bad flight doesn't unlaunch you)."""
+    current = player.rocket_reliability(rocket)
+    new_value = current + delta
+    if current >= MIN_RELIABILITY_TO_LAUNCH:
+        new_value = max(RELIABILITY_FLOOR, new_value)
+    new_value = min(RELIABILITY_CAP, max(0, new_value))
+    player.reliability[rocket.value] = new_value
 
 
 def _next_tier(tier: ProgramTier) -> ProgramTier:

@@ -28,18 +28,16 @@ from baris.state import (
     CREW_MAX_BONUS,
     GameState,
     HISTORICAL_ROSTERS,
+    MIN_RELIABILITY_TO_LAUNCH,
     MISSIONS_BY_ID,
     MissionId,
     Phase,
     Player,
     ProgramTier,
-    RD_TARGETS,
+    RELIABILITY_CAP,
+    RELIABILITY_FLOOR,
+    RELIABILITY_GAIN_ON_SUCCESS,
     Rocket,
-    SAFETY_CAP,
-    SAFETY_FLOOR,
-    SAFETY_GAIN_ON_SUCCESS,
-    SAFETY_LOSS_ON_FAIL,
-    SAFETY_ON_RD_COMPLETE,
     Season,
     Side,
     Skill,
@@ -137,7 +135,7 @@ def test_fresh_player_sees_no_missions() -> None:
 
 def test_visibility_follows_rocket_research() -> None:
     p = Player(player_id="a", username="A", side=Side.USA)
-    p.rockets[Rocket.LIGHT.value] = RD_TARGETS[Rocket.LIGHT]
+    p.reliability[Rocket.LIGHT.value] = 70
     ids = {m.id for m in visible_missions(p)}
     # Tier 1 missions that use Light become visible.
     assert MissionId.SUBORBITAL in ids
@@ -151,7 +149,7 @@ def test_tier_lock_hides_missions_even_with_rocket_built() -> None:
     p = Player(player_id="a", username="A", side=Side.USA)
     # Fully loaded rockets, but no Tier 1 success → Tier 2 locked.
     for r in Rocket:
-        p.rockets[r.value] = RD_TARGETS[r]
+        p.reliability[r.value] = 70
     ids = {m.id for m in visible_missions(p)}
     assert MissionId.ORBITAL in ids  # Tier 1 — visible
     assert MissionId.LUNAR_PASS not in ids  # Tier 2 — hidden
@@ -192,7 +190,7 @@ def test_tier_two_unlocks_after_tier_one_success() -> None:
     state = _two_player_state()
     start_game(state, rng=random.Random(1))
     me = state.players[0]
-    me.rockets[Rocket.LIGHT.value] = RD_TARGETS[Rocket.LIGHT]
+    me.reliability[Rocket.LIGHT.value] = 70
 
     assert not me.is_tier_unlocked(ProgramTier.TWO)
     submit_turn(me, rd_rocket=None, rd_spend=0, launch=MissionId.SUBORBITAL)
@@ -209,7 +207,7 @@ def test_tier_three_locked_without_tier_two_success() -> None:
     me = state.players[0]
     # Fake a Tier 1 success so Tier 2 is unlocked, but no Tier 2 success → Tier 3 still locked.
     me.mission_successes[MissionId.SUBORBITAL.value] = 1
-    me.rockets[Rocket.HEAVY.value] = RD_TARGETS[Rocket.HEAVY]
+    me.reliability[Rocket.HEAVY.value] = 70
     me.budget = 100
 
     assert me.is_tier_unlocked(ProgramTier.TWO)
@@ -225,7 +223,7 @@ def test_tier_three_unlocks_after_tier_two_success() -> None:
     start_game(state, rng=random.Random(1))
     me = state.players[0]
     me.mission_successes[MissionId.SUBORBITAL.value] = 1  # Tier 1 success, so Tier 2 unlocked
-    me.rockets[Rocket.MEDIUM.value] = RD_TARGETS[Rocket.MEDIUM]
+    me.reliability[Rocket.MEDIUM.value] = 70
     me.budget = 100
     for a in me.astronauts:
         a.endurance = 80
@@ -242,7 +240,7 @@ def test_tier_three_unlocks_after_tier_two_success() -> None:
 def test_available_missions_respects_tier_lock() -> None:
     me = Player(player_id="a", username="Alice", side=Side.USA)
     me.budget = 200
-    me.rockets[Rocket.HEAVY.value] = RD_TARGETS[Rocket.HEAVY]
+    me.reliability[Rocket.HEAVY.value] = 70
     # Even with a Heavy rocket built, Tier 3 missions should be locked until a Tier 2 success.
     avail = {m.id for m in available_missions(me)}
     assert MissionId.LUNAR_LANDING not in avail
@@ -254,8 +252,8 @@ def _tier3_unlocked_player(side: Side = Side.USA) -> Player:
     p.budget = 500
     p.mission_successes[MissionId.SUBORBITAL.value] = 1
     p.mission_successes[MissionId.MULTI_CREW_ORBITAL.value] = 1
-    p.rockets[Rocket.MEDIUM.value] = RD_TARGETS[Rocket.MEDIUM]
-    p.rockets[Rocket.HEAVY.value] = RD_TARGETS[Rocket.HEAVY]
+    p.reliability[Rocket.MEDIUM.value] = 70
+    p.reliability[Rocket.HEAVY.value] = 70
     return p
 
 
@@ -307,7 +305,7 @@ def test_manned_landing_rejected_without_architecture() -> None:
     me = state.players[0]
     me.mission_successes[MissionId.SUBORBITAL.value] = 1
     me.mission_successes[MissionId.MULTI_CREW_ORBITAL.value] = 1
-    me.rockets[Rocket.HEAVY.value] = RD_TARGETS[Rocket.HEAVY]
+    me.reliability[Rocket.HEAVY.value] = 70
     me.budget = 200
     assert me.architecture is None
 
@@ -321,7 +319,7 @@ def test_lsr_requires_prior_unmanned_landing() -> None:
     me = state.players[0]
     me.mission_successes[MissionId.SUBORBITAL.value] = 1
     me.mission_successes[MissionId.MULTI_CREW_ORBITAL.value] = 1
-    me.rockets[Rocket.HEAVY.value] = RD_TARGETS[Rocket.HEAVY]
+    me.reliability[Rocket.HEAVY.value] = 70
     me.budget = 200
     choose_architecture(me, Architecture.LSR)
 
@@ -339,7 +337,7 @@ def test_eor_lets_player_attempt_landing_with_only_medium() -> None:
     me = state.players[0]
     me.mission_successes[MissionId.SUBORBITAL.value] = 1
     me.mission_successes[MissionId.MULTI_CREW_ORBITAL.value] = 1
-    me.rockets[Rocket.MEDIUM.value] = RD_TARGETS[Rocket.MEDIUM]  # Heavy NOT built
+    me.reliability[Rocket.MEDIUM.value] = 70  # Heavy NOT built
     me.budget = 500
     for a in me.astronauts:
         a.command = 100
@@ -371,19 +369,56 @@ def test_rocket_display_name_is_per_side() -> None:
 # ----------------------------------------------------------------------
 
 
-def test_rd_accumulates_on_chosen_rocket() -> None:
+def test_rd_advances_only_the_chosen_rocket() -> None:
+    """R&D is stochastic, so we can't assert an exact value — but we CAN
+    assert that reliability moves up (or stays) only on the targeted rocket
+    and stays at 0 on untouched rockets."""
     state = _two_player_state()
     start_game(state, rng=random.Random(1))
-    submit_turn(state.players[0], rd_rocket=Rocket.LIGHT, rd_spend=20, launch=None)
-    submit_turn(state.players[1], rd_rocket=Rocket.MEDIUM, rd_spend=20, launch=None)
+    submit_turn(state.players[0], rd_rocket=Rocket.LIGHT, rd_spend=30, launch=None)
+    submit_turn(state.players[1], rd_rocket=Rocket.MEDIUM, rd_spend=30, launch=None)
     assert all_turns_in(state)
 
-    resolve_turn(state)
+    resolve_turn(state, rng=random.Random(123))
 
-    assert state.players[0].rd_progress(Rocket.LIGHT) == 20
-    assert state.players[0].rd_progress(Rocket.MEDIUM) == 0
-    assert state.players[1].rd_progress(Rocket.MEDIUM) == 20
+    assert state.players[0].rocket_reliability(Rocket.LIGHT) > 0
+    assert state.players[0].rocket_reliability(Rocket.MEDIUM) == 0
+    assert state.players[1].rocket_reliability(Rocket.MEDIUM) > 0
+    assert state.players[1].rocket_reliability(Rocket.LIGHT) == 0
     assert state.season == Season.SUMMER
+
+
+def test_rd_heavy_is_slower_than_light_on_average() -> None:
+    """Run many independent trials with the same spend to compare average
+    reliability gains. Heavy should lag Light substantially (RD_SPEED diff)."""
+    from baris.resolver import _apply_rd
+    from baris.state import MISSIONS_BY_ID  # noqa: F401 (import for parity)
+
+    def avg_gain(rocket: Rocket, trials: int = 200) -> float:
+        total = 0
+        for seed in range(trials):
+            p = Player(player_id="a", username="A", side=Side.USA, budget=60)
+            p.pending_rd_rocket = rocket.value
+            p.pending_rd_spend = 60
+            state = GameState(players=[p])
+            _apply_rd(p, state, random.Random(seed))
+            total += p.rocket_reliability(rocket)
+        return total / trials
+
+    light_avg = avg_gain(Rocket.LIGHT)
+    heavy_avg = avg_gain(Rocket.HEAVY)
+    assert light_avg > 5        # 60 MB on Light should average well above 5
+    assert heavy_avg < light_avg  # Heavy is harder
+
+
+def test_rd_spend_refunds_partial_batch_remainder() -> None:
+    p = Player(player_id="a", username="A", side=Side.USA, budget=20)
+    p.pending_rd_rocket = Rocket.LIGHT.value
+    p.pending_rd_spend = 20  # 6 batches of 3 MB = 18 MB; 2 MB should be refunded
+    state = GameState(players=[p])
+    from baris.resolver import _apply_rd
+    _apply_rd(p, state, random.Random(0))
+    assert p.budget == 2  # 20 - 18 MB actually spent
 
 
 def test_rd_spend_clamped_to_budget() -> None:
@@ -412,7 +447,7 @@ def test_suborbital_success_awards_first_bonus() -> None:
     state = _two_player_state()
     start_game(state, rng=random.Random(1))
     me = state.players[0]
-    me.rockets[Rocket.LIGHT.value] = RD_TARGETS[Rocket.LIGHT]
+    me.reliability[Rocket.LIGHT.value] = 70
 
     submit_turn(me, rd_rocket=None, rd_spend=0, launch=MissionId.SUBORBITAL)
     submit_turn(state.players[1], rd_rocket=None, rd_spend=0, launch=None)
@@ -427,8 +462,8 @@ def test_second_suborbital_does_not_regrant_first_bonus() -> None:
     start_game(state, rng=random.Random(1))
     me = state.players[0]
     opp = state.players[1]
-    me.rockets[Rocket.LIGHT.value] = RD_TARGETS[Rocket.LIGHT]
-    opp.rockets[Rocket.LIGHT.value] = RD_TARGETS[Rocket.LIGHT]
+    me.reliability[Rocket.LIGHT.value] = 70
+    opp.reliability[Rocket.LIGHT.value] = 70
 
     submit_turn(me, rd_rocket=None, rd_spend=0, launch=MissionId.SUBORBITAL)
     submit_turn(opp, rd_rocket=None, rd_spend=0, launch=MissionId.SUBORBITAL)
@@ -448,7 +483,7 @@ def test_manned_mission_rejected_without_enough_crew() -> None:
     state = _two_player_state()
     start_game(state, rng=random.Random(1))
     me = state.players[0]
-    me.rockets[Rocket.HEAVY.value] = RD_TARGETS[Rocket.HEAVY]
+    me.reliability[Rocket.HEAVY.value] = 70
     me.budget = 100
     # Unlock Tier 3 for this test so the tier gate doesn't mask the crew check.
     me.mission_successes[MissionId.SUBORBITAL.value] = 1
@@ -491,7 +526,7 @@ def test_manned_landing_success_ends_game() -> None:
     state = _two_player_state()
     start_game(state, rng=random.Random(1))
     me = state.players[0]
-    me.rockets[Rocket.HEAVY.value] = RD_TARGETS[Rocket.HEAVY]
+    me.reliability[Rocket.HEAVY.value] = 70
     me.budget = 100
     me.mission_successes[MissionId.SUBORBITAL.value] = 1
     me.mission_successes[MissionId.MULTI_CREW_ORBITAL.value] = 1
@@ -511,7 +546,7 @@ def test_unmanned_landing_only_awards_prestige() -> None:
     state = _two_player_state()
     start_game(state, rng=random.Random(1))
     me = state.players[0]
-    me.rockets[Rocket.HEAVY.value] = RD_TARGETS[Rocket.HEAVY]
+    me.reliability[Rocket.HEAVY.value] = 70
     me.budget = 100
     me.mission_successes[MissionId.SUBORBITAL.value] = 1
     me.mission_successes[MissionId.MULTI_CREW_ORBITAL.value] = 1
@@ -529,7 +564,7 @@ def test_manned_failure_can_kill_crew() -> None:
     state = _two_player_state()
     start_game(state, rng=random.Random(1))
     me = state.players[0]
-    me.rockets[Rocket.MEDIUM.value] = RD_TARGETS[Rocket.MEDIUM]
+    me.reliability[Rocket.MEDIUM.value] = 70
     me.budget = 100
     me.prestige = 20
     for a in me.astronauts:
@@ -569,7 +604,7 @@ def test_manned_failure_with_low_death_roll_kills_crew() -> None:
     state = _two_player_state()
     start_game(state, rng=random.Random(1))
     me = state.players[0]
-    me.rockets[Rocket.MEDIUM.value] = RD_TARGETS[Rocket.MEDIUM]
+    me.reliability[Rocket.MEDIUM.value] = 70
     me.budget = 100
     me.prestige = 20
     for a in me.astronauts:
@@ -620,7 +655,7 @@ def test_prestige_cap_can_win() -> None:
     start_game(state, rng=random.Random(1))
     me = state.players[0]
     me.prestige = 38
-    me.rockets[Rocket.LIGHT.value] = RD_TARGETS[Rocket.LIGHT]
+    me.reliability[Rocket.LIGHT.value] = 70
 
     submit_turn(me, rd_rocket=None, rd_spend=0, launch=MissionId.SUBORBITAL)
     submit_turn(state.players[1], rd_rocket=None, rd_spend=0, launch=None)
@@ -638,7 +673,7 @@ def test_prestige_cap_can_win() -> None:
 def test_available_missions_respects_crew_requirement() -> None:
     me = Player(player_id="a", username="Alice", side=Side.USA)
     me.budget = 100
-    me.rockets[Rocket.MEDIUM.value] = RD_TARGETS[Rocket.MEDIUM]
+    me.reliability[Rocket.MEDIUM.value] = 70
     # zero astronauts → manned_orbital not available
     avail = {m.id for m in available_missions(me)}
     assert MissionId.ORBITAL in avail
@@ -654,82 +689,65 @@ def test_available_missions_respects_crew_requirement() -> None:
 # ----------------------------------------------------------------------
 
 
-def test_rd_completion_seeds_initial_safety() -> None:
+def test_successful_launch_bumps_reliability() -> None:
     state = _two_player_state()
     start_game(state, rng=random.Random(1))
     me = state.players[0]
-    me.budget = 200
-
-    submit_turn(me, rd_rocket=Rocket.LIGHT, rd_spend=RD_TARGETS[Rocket.LIGHT], launch=None)
-    submit_turn(state.players[1], rd_rocket=None, rd_spend=0, launch=None)
-    resolve_turn(state, rng=_FixedRng(0.0))
-
-    assert me.safety(Rocket.LIGHT) == SAFETY_ON_RD_COMPLETE
-    # Medium/Heavy untouched.
-    assert me.safety(Rocket.MEDIUM) == 0
-
-
-def test_successful_launch_bumps_safety() -> None:
-    state = _two_player_state()
-    start_game(state, rng=random.Random(1))
-    me = state.players[0]
-    me.rockets[Rocket.LIGHT.value] = RD_TARGETS[Rocket.LIGHT]
-    me.rocket_safety[Rocket.LIGHT.value] = 50
+    me.reliability[Rocket.LIGHT.value] = 50
 
     submit_turn(me, rd_rocket=None, rd_spend=0, launch=MissionId.SUBORBITAL)
     submit_turn(state.players[1], rd_rocket=None, rd_spend=0, launch=None)
     resolve_turn(state, rng=_FixedRng(0.0))
 
-    assert me.safety(Rocket.LIGHT) == 50 + SAFETY_GAIN_ON_SUCCESS
+    assert me.rocket_reliability(Rocket.LIGHT) == 50 + RELIABILITY_GAIN_ON_SUCCESS
 
 
-def test_failed_launch_drops_safety_but_not_below_floor() -> None:
+def test_failed_launch_drops_reliability_but_not_below_floor() -> None:
     state = _two_player_state()
     start_game(state, rng=random.Random(1))
     me = state.players[0]
-    me.rockets[Rocket.LIGHT.value] = RD_TARGETS[Rocket.LIGHT]
-    me.rocket_safety[Rocket.LIGHT.value] = SAFETY_FLOOR + 3  # just above floor
+    # Rocket must be launch-ready (>= MIN) so the failure path fires; floor
+    # clamp protects launch-ready rockets from a death spiral.
+    me.reliability[Rocket.LIGHT.value] = MIN_RELIABILITY_TO_LAUNCH + 3  # 28
 
     submit_turn(me, rd_rocket=None, rd_spend=0, launch=MissionId.SUBORBITAL)
     submit_turn(state.players[1], rd_rocket=None, rd_spend=0, launch=None)
     resolve_turn(state, rng=_FixedRng(0.99))  # forced failure
 
-    # would be SAFETY_FLOOR+3 - 10 = below floor → clamped
-    assert me.safety(Rocket.LIGHT) == SAFETY_FLOOR
+    # 28 - 10 = 18, below floor → clamped to RELIABILITY_FLOOR (20)
+    assert me.rocket_reliability(Rocket.LIGHT) == RELIABILITY_FLOOR
 
 
-def test_safety_cap_prevents_unbounded_growth() -> None:
+def test_reliability_cap_prevents_unbounded_growth() -> None:
     me = Player(player_id="a", username="Alice", side=Side.USA)
-    me.rocket_safety[Rocket.LIGHT.value] = SAFETY_CAP - 1
-    from baris.resolver import _bump_safety
-    _bump_safety(me, Rocket.LIGHT, 50)
-    assert me.safety(Rocket.LIGHT) == SAFETY_CAP
+    me.reliability[Rocket.LIGHT.value] = RELIABILITY_CAP - 1
+    from baris.resolver import _bump_reliability
+    _bump_reliability(me, Rocket.LIGHT, 50)
+    assert me.rocket_reliability(Rocket.LIGHT) == RELIABILITY_CAP
 
 
-def test_high_safety_improves_effective_success() -> None:
-    """Set safety very high and verify a mission succeeds on a roll that
+def test_high_reliability_improves_effective_success() -> None:
+    """Set reliability very high and verify a mission succeeds on a roll that
     would fail at the base rate."""
     state = _two_player_state()
     start_game(state, rng=random.Random(1))
     me = state.players[0]
-    me.rockets[Rocket.LIGHT.value] = RD_TARGETS[Rocket.LIGHT]
-    me.rocket_safety[Rocket.LIGHT.value] = SAFETY_CAP  # 95 → +0.09 success bonus
+    me.reliability[Rocket.LIGHT.value] = RELIABILITY_CAP  # 99 → +0.098 success bonus
 
     submit_turn(me, rd_rocket=None, rd_spend=0, launch=MissionId.SUBORBITAL)
     submit_turn(state.players[1], rd_rocket=None, rd_spend=0, launch=None)
-    # base suborbital success 0.85; with safety +0.09 → 0.94. Roll 0.9 should succeed.
+    # base suborbital success 0.85; with reliability +0.098 → 0.948. Roll 0.9 should succeed.
     resolve_turn(state, rng=_FixedRng(0.90))
 
     # base 3 + first bonus 2
     assert me.prestige == 5
 
 
-def test_low_safety_worsens_effective_success() -> None:
+def test_low_reliability_worsens_effective_success() -> None:
     state = _two_player_state()
     start_game(state, rng=random.Random(1))
     me = state.players[0]
-    me.rockets[Rocket.LIGHT.value] = RD_TARGETS[Rocket.LIGHT]
-    me.rocket_safety[Rocket.LIGHT.value] = SAFETY_FLOOR  # 20 → -0.06 success penalty
+    me.reliability[Rocket.LIGHT.value] = MIN_RELIABILITY_TO_LAUNCH  # 25 → -0.05 penalty
     me.prestige = 5
 
     submit_turn(me, rd_rocket=None, rd_spend=0, launch=MissionId.SUBORBITAL)
@@ -741,11 +759,11 @@ def test_low_safety_worsens_effective_success() -> None:
     assert me.prestige == 4
 
 
-def test_state_roundtrip_preserves_rocket_safety() -> None:
+def test_state_roundtrip_preserves_reliability() -> None:
     state = _two_player_state()
-    state.players[0].rocket_safety[Rocket.HEAVY.value] = 67
+    state.players[0].reliability[Rocket.HEAVY.value] = 67
     restored = GameState.from_dict(state.to_dict())
-    assert restored.players[0].safety(Rocket.HEAVY) == 67
+    assert restored.players[0].rocket_reliability(Rocket.HEAVY) == 67
 
 
 def test_state_roundtrip_preserves_astronauts() -> None:
