@@ -14,6 +14,7 @@ from baris.client.ui import (
     BG,
     BG_DEEP,
     BORDER,
+    BORDER_HOVER,
     Button,
     DIM,
     FG,
@@ -21,6 +22,7 @@ from baris.client.ui import (
     HIGHLIGHT,
     MUTED,
     PANEL,
+    PANEL_HOVER,
     RED,
     draw_text,
     draw_text_centered,
@@ -85,19 +87,61 @@ GAME = "game"
 ENDED = "ended"
 
 # Tabs (within GAME scene)
-TAB_OVERVIEW   = "overview"
+TAB_HUB        = "hub"
 TAB_RD         = "rd"
 TAB_ASTRONAUTS = "astronauts"
 TAB_MISSIONS   = "missions"
 TAB_LOG        = "log"
 
 TAB_KEYS = {
-    pygame.K_F1: TAB_OVERVIEW,
+    pygame.K_F1: TAB_HUB,
     pygame.K_F2: TAB_RD,
     pygame.K_F3: TAB_ASTRONAUTS,
     pygame.K_F4: TAB_MISSIONS,
     pygame.K_F5: TAB_LOG,
 }
+
+# Mission Control hub map: clickable buildings laid out in a 2x4 grid.
+# Top row = buildings wired to real tabs. Bottom row = flavor-only for now.
+# (id, label, subtitle, linked_tab_or_None)
+HUB_BUILDINGS: tuple[tuple[str, str, str, str | None], ...] = (
+    ("rd",       "R&D Complex",       "Research rockets & modules",   TAB_RD),
+    ("astro",    "Astronaut Complex", "Train & select crews",         TAB_ASTRONAUTS),
+    ("mc",       "Mission Control",   "Schedule & review launches",   TAB_MISSIONS),
+    ("library",  "Library",           "Flight records & event log",   TAB_LOG),
+    ("admin",    "Administration",    "HQ / budget / politics",       None),
+    ("vab",      "VAB",               "Vehicle Assembly Building",    None),
+    ("infirm",   "Infirmary",         "Crew medical bay",             None),
+    ("museum",   "Museum",            "Hall of firsts",               None),
+)
+
+# Rooftop color per building — picks out which buildings go together and
+# gives the map some variety. Dimmer hues implicitly mark flavor-only tiles.
+BUILDING_ROOFS: dict[str, tuple[int, int, int]] = {
+    "rd":      (110, 200, 120),
+    "astro":   (130, 160, 220),
+    "mc":      (240, 200, 90),
+    "library": (200, 170, 110),
+    "admin":   (140, 140, 160),
+    "vab":     (170, 140, 110),
+    "infirm":  (210, 120, 120),
+    "museum":  (170, 140, 180),
+}
+
+BUILDING_KEY_HINTS: dict[str | None, str] = {
+    TAB_RD:         "F2",
+    TAB_ASTRONAUTS: "F3",
+    TAB_MISSIONS:   "F4",
+    TAB_LOG:        "F5",
+}
+
+
+def _hub_title(side: Side | None) -> str:
+    if side == Side.USA:
+        return "MISSION CONTROL COMPLEX — HOUSTON, TEXAS"
+    if side == Side.USSR:
+        return "COSMODROME COMPLEX — BAIKONUR / STAR CITY"
+    return "SPACE PROGRAM COMPLEX"
 
 # Area inside HUD where tab-specific content renders.
 CONTENT_TOP = 100
@@ -137,11 +181,12 @@ class Client:
         self.queued_objectives: set[ObjectiveId] = set()
 
         self.scene: str = MENU
-        self.active_tab: str = TAB_OVERVIEW
+        self.active_tab: str = TAB_HUB
         self.menu_buttons = self._build_menu_buttons()
         self.lobby_buttons: list[Button] = []
         self.game_buttons: dict[str, Button] = {}
         self.mission_buttons: list[Button] = []
+        self.hub_buttons: dict[str, Button] = {}
         self.end_buttons: list[Button] = []
 
     # ------------------------------------------------------------------
@@ -168,9 +213,10 @@ class Client:
 
     def _enter_game(self) -> None:
         self.scene = GAME
-        self.active_tab = TAB_OVERVIEW
+        self.active_tab = TAB_HUB
         self.game_buttons = self._build_game_buttons()
         self.mission_buttons = self._build_mission_buttons()
+        self.hub_buttons = self._build_hub_buttons()
 
     def _enter_ended(self) -> None:
         self.scene = ENDED
@@ -202,7 +248,7 @@ class Client:
         start_x = (WINDOW_SIZE[0] - total) // 2
         tab_y = 40
         tab_specs = [
-            ("tab_overview",   "OVERVIEW",   "F1"),
+            ("tab_hub",        "HUB",        "F1"),
             ("tab_rd",         "R&D",        "F2"),
             ("tab_astronauts", "ASTRONAUTS", "F3"),
             ("tab_missions",   "MISSIONS",   "F4"),
@@ -246,6 +292,23 @@ class Client:
                 label="",
                 key_hint=None,
             ))
+        return buttons
+
+    def _build_hub_buttons(self) -> dict[str, Button]:
+        # 2 rows x 4 columns of building tiles inside the HUB content area.
+        # Top row (y=140): buildings wired to real tabs.
+        # Bottom row (y=420): flavor-only buildings (no tab link yet).
+        cols, rows = 4, 2
+        margin_x, margin_y = 30, 20
+        tile_w = (WINDOW_SIZE[0] - 2 * margin_x - (cols - 1) * margin_y) // cols
+        tile_h = 260
+        top_y = 140
+        buttons: dict[str, Button] = {}
+        for i, (bid, label, _subtitle, _linked) in enumerate(HUB_BUILDINGS):
+            r, c = divmod(i, cols)
+            x = margin_x + c * (tile_w + margin_y)
+            y = top_y + r * (tile_h + margin_y)
+            buttons[f"hub_{bid}"] = Button(pygame.Rect(x, y, tile_w, tile_h), label)
         return buttons
 
     def _build_end_buttons(self) -> list[Button]:
@@ -358,7 +421,7 @@ class Client:
 
         # Tab navigation (always available)
         tab_map = {
-            "tab_overview":   TAB_OVERVIEW,
+            "tab_hub":        TAB_HUB,
             "tab_rd":         TAB_RD,
             "tab_astronauts": TAB_ASTRONAUTS,
             "tab_missions":   TAB_MISSIONS,
@@ -383,6 +446,15 @@ class Client:
             self._submit_turn(me)
         if self.game_buttons["cancel"].handle_event(event):
             self.queued_mission = None
+
+        # Hub: clicking a linked building routes to its tab; flavor buildings
+        # still register hover (for the tooltip) but don't navigate.
+        if self.active_tab == TAB_HUB:
+            for bid, _label, _sub, linked in HUB_BUILDINGS:
+                btn = self.hub_buttons[f"hub_{bid}"]
+                btn.enabled = linked is not None
+                if btn.handle_event(event) and linked is not None:
+                    self.active_tab = linked
 
         # Tab-gated controls
         if self.active_tab == TAB_RD:
@@ -597,13 +669,17 @@ class Client:
                 btn.draw(self.screen)
             elif self.active_tab == TAB_RD and key in (
                 "rocket_light", "rocket_medium", "rocket_heavy",
-                "spend_minus", "spend_plus",
+                "module_docking", "spend_minus", "spend_plus",
             ):
                 btn.draw(self.screen)
             elif self.active_tab == TAB_MISSIONS and key.startswith("arch_"):
                 # Architecture tiles shown only when Tier 3 unlocked.
                 if me is not None and me.is_tier_unlocked(ProgramTier.THREE):
                     btn.draw(self.screen)
+
+        # Hub building tiles: custom-drawn (not Button.draw) so the render lives
+        # entirely inside _render_tab_hub, but we still need hover state from
+        # the Button instances — that's updated during event handling.
 
     def _render_top_hud(self, me: Player | None) -> None:
         assert self.state is not None
@@ -670,8 +746,8 @@ class Client:
                       size=18, color=DIM, bold=True)
 
     def _render_active_tab(self, me: Player | None, opp: Player | None) -> None:
-        if self.active_tab == TAB_OVERVIEW:
-            self._render_tab_overview(me, opp)
+        if self.active_tab == TAB_HUB:
+            self._render_tab_hub(me, opp)
         elif self.active_tab == TAB_RD:
             self._render_tab_rd(me, opp)
         elif self.active_tab == TAB_ASTRONAUTS:
@@ -681,86 +757,190 @@ class Client:
         elif self.active_tab == TAB_LOG:
             self._render_tab_log()
 
-    # --- overview tab ---------------------------------------------------
-    def _render_tab_overview(self, me: Player | None, opp: Player | None) -> None:
-        if me:
-            self._draw_overview_card("YOU", me, (30, CONTENT_TOP + 20))
-        if opp:
-            self._draw_overview_card("OPPONENT", opp, (610, CONTENT_TOP + 20))
-        # recent log
+    # --- hub tab (Mission Control map) ----------------------------------
+    def _render_tab_hub(self, me: Player | None, opp: Player | None) -> None:
         assert self.state is not None
-        pygame.draw.rect(self.screen, PANEL, (20, 550, 1160, 295), border_radius=6)
-        pygame.draw.rect(self.screen, BORDER, (20, 550, 1160, 295), 1, border_radius=6)
-        draw_text(self.screen, "RECENT EVENTS", (36, 562), size=16, color=DIM, bold=True)
-        y = 590
-        for line in self.state.log[-12:]:
-            draw_text(self.screen, line, (36, y), size=14, color=FG)
-            y += 20
-
-    def _draw_overview_card(self, label: str, player: Player, pos: tuple[int, int]) -> None:
-        x, y = pos
-        color = side_color(player.side)
-        pygame.draw.rect(self.screen, PANEL, (x - 8, y - 6, 570, 420), border_radius=6)
-        pygame.draw.rect(self.screen, BORDER, (x - 8, y - 6, 570, 420), 1, border_radius=6)
-        draw_text(self.screen, f"{label}: {player.username}", (x, y), size=20, color=color, bold=True)
-        side_label = player.side.value if player.side else "?"
-        draw_text(self.screen, f"Side:      {side_label}",           (x, y + 32), size=16, color=FG)
-        draw_text(self.screen, f"Budget:    {player.budget} MB",     (x, y + 56), size=16, color=FG)
-        draw_text(self.screen, f"Prestige:  {player.prestige}",      (x, y + 80), size=16, color=FG)
-        active = len(player.active_astronauts())
-        kia = len(player.astronauts) - active
+        title = _hub_title(me.side if me else None)
+        draw_text(self.screen, title, (30, CONTENT_TOP + 8), size=22,
+                  color=HIGHLIGHT, bold=True)
         draw_text(
             self.screen,
-            f"Roster:    {active} active"
-            + (f", {kia} KIA" if kia else ""),
-            (x, y + 104), size=16, color=FG,
+            "Click a building to enter — or use F1-F5 to switch tabs directly.",
+            (30, CONTENT_TOP + 38), size=13, color=DIM,
         )
-        unlocked = [program_name(t, player.side)
-                    for t in (ProgramTier.ONE, ProgramTier.TWO, ProgramTier.THREE)
-                    if player.is_tier_unlocked(t)]
-        draw_text(self.screen, f"Programs:  {', '.join(unlocked) or '-'}", (x, y + 128), size=14, color=FG)
-        if player.is_tier_unlocked(ProgramTier.THREE):
-            if player.architecture:
-                try:
-                    arch = Architecture(player.architecture)
-                    draw_text(
-                        self.screen,
-                        f"Arch:      {arch.value} ({ARCHITECTURE_FULL_NAMES[arch]})",
-                        (x, y + 148), size=14, color=HIGHLIGHT,
-                    )
-                except ValueError:
-                    pass
-            elif player.player_id == self.player_id:
-                draw_text(self.screen, "Arch:      CHOOSE ONE (Missions tab)",
-                          (x, y + 148), size=14, color=RED)
-            else:
-                draw_text(self.screen, "Arch:      (opponent choosing)",
-                          (x, y + 148), size=14, color=DIM)
 
-        # mini R&D bars
-        draw_text(self.screen, "R&D:", (x, y + 180), size=14, color=DIM)
-        ry = y + 202
-        for r in Rocket:
-            self._draw_rd_bar(r, player, (x, ry), compact=True)
-            ry += 22
-        draw_text(self.screen, "Missions completed:", (x, y + 288), size=14, color=DIM)
-        successes = player.mission_successes
-        completed = sum(successes.values())
-        draw_text(self.screen, f"  {completed} total", (x, y + 308), size=14, color=FG)
-        # highlight firsts
-        firsts: list[str] = []
-        assert self.state is not None
-        for mid, holder in self.state.first_completed.items():
-            if player.side and holder == player.side.value:
-                try:
-                    firsts.append(MISSIONS_BY_ID[MissionId(mid)].name)
-                except (ValueError, KeyError):
-                    continue
-        firsts_txt = ", ".join(firsts[:3]) if firsts else "none yet"
-        if firsts and len(firsts) > 3:
-            firsts_txt += ", ..."
-        draw_text(self.screen, f"  firsts: {firsts_txt}",
-                  (x, y + 328), size=14, color=HIGHLIGHT if firsts else DIM)
+        # Ground: subtle darker slab under all the tiles; faint "road" between rows.
+        ground = pygame.Rect(20, 130, WINDOW_SIZE[0] - 40, 560)
+        pygame.draw.rect(self.screen, BG_DEEP, ground)
+        pygame.draw.rect(self.screen, BORDER, ground, 1)
+        pygame.draw.line(self.screen, (40, 50, 70),
+                         (40, 410), (WINDOW_SIZE[0] - 40, 410), 3)
+
+        # Building tiles
+        for bid, label, subtitle, linked in HUB_BUILDINGS:
+            self._draw_building_tile(bid, label, subtitle, linked)
+
+        # Standings: one compact row per player so opponent budget/prestige/
+        # architecture stay visible after losing the old overview cards.
+        standings = pygame.Rect(20, 700, WINDOW_SIZE[0] - 40, 48)
+        pygame.draw.rect(self.screen, PANEL, standings, border_radius=6)
+        pygame.draw.rect(self.screen, BORDER, standings, 1, border_radius=6)
+        for row_idx, (row_label, player) in enumerate((("YOU", me), ("OPP", opp))):
+            if player is None:
+                continue
+            y = standings.y + 6 + row_idx * 20
+            firsts = sum(
+                1 for holder in self.state.first_completed.values()
+                if player.side and holder == player.side.value
+            )
+            arch = player.architecture or "—"
+            side_lbl = player.side.value if player.side else "?"
+            line = (
+                f"{row_label}  [{side_lbl}] {player.username:<12}"
+                f"Budget {player.budget:>3} MB   "
+                f"Prestige {player.prestige:>3}   "
+                f"Firsts {firsts}   "
+                f"Arch {arch}"
+            )
+            draw_text(self.screen, line, (36, y), size=14, color=side_color(player.side))
+
+        # Recent events strip
+        events = pygame.Rect(20, 752, WINDOW_SIZE[0] - 40, 98)
+        pygame.draw.rect(self.screen, PANEL, events, border_radius=6)
+        pygame.draw.rect(self.screen, BORDER, events, 1, border_radius=6)
+        draw_text(self.screen, "RECENT EVENTS",
+                  (36, events.y + 6), size=13, color=DIM, bold=True)
+        y = events.y + 28
+        for line in self.state.log[-3:]:
+            draw_text(self.screen, line, (36, y), size=13, color=FG)
+            y += 20
+
+    def _draw_building_tile(
+        self,
+        bid: str,
+        label: str,
+        subtitle: str,
+        linked: str | None,
+    ) -> None:
+        btn = self.hub_buttons[f"hub_{bid}"]
+        rect = btn.rect
+        is_flavor = linked is None
+        hovering = btn._hover and btn.enabled
+        roof_color = BUILDING_ROOFS.get(bid, MUTED)
+
+        # Body
+        body_bg = PANEL_HOVER if hovering else PANEL
+        if hovering:
+            border_color = BORDER_HOVER
+        elif is_flavor:
+            border_color = MUTED
+        else:
+            border_color = BORDER
+        pygame.draw.rect(self.screen, body_bg, rect, border_radius=6)
+        pygame.draw.rect(self.screen, border_color, rect, 2, border_radius=6)
+
+        # Roof stripe
+        roof_h = 28
+        roof_rect = pygame.Rect(rect.x, rect.y, rect.w, roof_h)
+        pygame.draw.rect(self.screen, roof_color, roof_rect,
+                         border_top_left_radius=6, border_top_right_radius=6)
+        draw_text_centered(
+            self.screen, label,
+            (rect.centerx, rect.y + roof_h // 2),
+            size=16, color=(20, 24, 34), bold=True,
+        )
+
+        # Icon
+        icon_color = FG if not is_flavor else MUTED
+        self._draw_building_icon(bid, (rect.centerx, rect.y + roof_h + 78), icon_color)
+
+        # Subtitle
+        draw_text_centered(
+            self.screen, subtitle,
+            (rect.centerx, rect.bottom - 50),
+            size=13, color=DIM if not is_flavor else MUTED,
+        )
+
+        # Key hint (linked) / placeholder (flavor)
+        hint = BUILDING_KEY_HINTS.get(linked)
+        if hint:
+            draw_text_centered(
+                self.screen, f"[{hint}]",
+                (rect.centerx, rect.bottom - 22),
+                size=14,
+                color=HIGHLIGHT if hovering else DIM,
+                bold=True,
+            )
+        else:
+            draw_text_centered(
+                self.screen, "(flavor)",
+                (rect.centerx, rect.bottom - 22),
+                size=12, color=MUTED,
+            )
+
+    def _draw_building_icon(
+        self,
+        bid: str,
+        center: tuple[int, int],
+        color: tuple[int, int, int],
+    ) -> None:
+        """Stylized pygame-primitive silhouettes, ~60x50 centered on `center`."""
+        cx, cy = center
+        s = self.screen
+        if bid == "rd":
+            # Conical flask: trapezoid body + narrow neck.
+            pygame.draw.polygon(s, color, [
+                (cx - 22, cy + 20), (cx + 22, cy + 20),
+                (cx + 10, cy - 8),  (cx - 10, cy - 8),
+            ])
+            pygame.draw.rect(s, color, (cx - 6, cy - 24, 12, 16), 2)
+            pygame.draw.line(s, BG_DEEP, (cx - 14, cy + 8), (cx + 14, cy + 8), 2)
+        elif bid == "astro":
+            # Helmet: circle outline with a visor band.
+            pygame.draw.circle(s, color, (cx, cy), 22, 2)
+            pygame.draw.rect(s, color, (cx - 14, cy - 6, 28, 10), 2)
+        elif bid == "mc":
+            # Console with three scanlines + base.
+            pygame.draw.rect(s, color, (cx - 26, cy - 18, 52, 30), 2)
+            for i, w in enumerate((30, 24, 36)):
+                pygame.draw.line(s, color,
+                    (cx - 22, cy - 10 + i * 6),
+                    (cx - 22 + w, cy - 10 + i * 6), 1)
+            pygame.draw.rect(s, color, (cx - 6, cy + 12, 12, 6))
+        elif bid == "library":
+            # Three books of varying heights.
+            for i, h in enumerate((28, 22, 32)):
+                x = cx - 26 + i * 18
+                pygame.draw.rect(s, color, (x, cy + 16 - h, 14, h), 2)
+        elif bid == "admin":
+            # Government building: pediment + columns + base.
+            pygame.draw.polygon(s, color, [
+                (cx - 28, cy - 6), (cx + 28, cy - 6), (cx, cy - 22),
+            ])
+            pygame.draw.rect(s, color, (cx - 28, cy - 4, 56, 4))
+            for x in (-20, -10, 0, 10, 20):
+                pygame.draw.rect(s, color, (cx + x - 2, cy, 4, 18))
+            pygame.draw.rect(s, color, (cx - 28, cy + 18, 56, 4))
+        elif bid == "vab":
+            # Tall assembly tower with a crane arm.
+            pygame.draw.rect(s, color, (cx - 14, cy - 22, 28, 42), 2)
+            pygame.draw.line(s, color, (cx, cy - 22), (cx, cy - 32), 2)
+            pygame.draw.line(s, color, (cx, cy - 32), (cx + 16, cy - 32), 2)
+            pygame.draw.rect(s, color, (cx - 5, cy + 14, 10, 6))
+        elif bid == "infirm":
+            # Medical cross inside a square.
+            pygame.draw.rect(s, color, (cx - 22, cy - 22, 44, 44), 2)
+            pygame.draw.rect(s, color, (cx - 4, cy - 14, 8, 28))
+            pygame.draw.rect(s, color, (cx - 14, cy - 4, 28, 8))
+        elif bid == "museum":
+            # Columned facade, slimmer than Admin.
+            pygame.draw.polygon(s, color, [
+                (cx - 26, cy - 6), (cx + 26, cy - 6), (cx, cy - 20),
+            ])
+            pygame.draw.rect(s, color, (cx - 26, cy - 4, 52, 4))
+            pygame.draw.rect(s, color, (cx - 26, cy + 16, 52, 4))
+            for x in (-16, 0, 16):
+                pygame.draw.rect(s, color, (cx + x - 3, cy, 6, 16))
 
     # --- R&D tab --------------------------------------------------------
     def _render_tab_rd(self, me: Player | None, opp: Player | None) -> None:
