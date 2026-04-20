@@ -10,17 +10,19 @@ from baris.client.net import NetClient
 from baris.state import (
     MISSIONS,
     MISSIONS_BY_ID,
+    Astronaut,
     MissionId,
     Phase,
     Player,
     RD_TARGETS,
     Rocket,
     Side,
+    Skill,
 )
 
 log = logging.getLogger("baris.client")
 
-WINDOW_SIZE = (1100, 720)
+WINDOW_SIZE = (1200, 860)
 FPS = 60
 BG = (10, 14, 28)
 PANEL = (20, 28, 48)
@@ -36,6 +38,7 @@ ROCKET_KEYS = {pygame.K_q: Rocket.LIGHT, pygame.K_w: Rocket.MEDIUM, pygame.K_e: 
 MISSION_KEYS = {
     pygame.K_1: 0, pygame.K_2: 1, pygame.K_3: 2,
     pygame.K_4: 3, pygame.K_5: 4, pygame.K_6: 5,
+    pygame.K_7: 6, pygame.K_8: 7, pygame.K_9: 8,
 }
 
 
@@ -92,7 +95,6 @@ class Client:
                 self.status = f"Joined as {side_label}"
             elif mtype == protocol.STATE:
                 self.state = self.GameState.from_dict(msg["state"])
-                # clear queued mission if it's no longer our turn to submit
                 me = self._me()
                 if me is None or me.turn_submitted:
                     self.queued_mission = None
@@ -198,22 +200,25 @@ class Client:
             f"{self.state.season.value} {self.state.year}",
             (30, 20), self.font_big, HIGHLIGHT,
         )
-        prestige_cap = f"(first to 40 prestige or Lunar landing wins)"
-        self._draw_text(prestige_cap, (240, 32), self.font_small, DIM)
+        self._draw_text(
+            "(first manned lunar landing OR 40 prestige wins)",
+            (240, 32), self.font_small, DIM,
+        )
 
         if me:
             self._draw_player_panel("YOU", me, (30, 70))
         if opp:
-            self._draw_player_panel("OPPONENT", opp, (540, 70))
+            self._draw_player_panel("OPPONENT", opp, (610, 70))
 
-        self._render_mission_list((30, 310))
+        self._render_mission_list((30, 430))
 
+        turn_y = 670
         if me and not me.turn_submitted:
-            self._render_turn_controls((30, 540), me)
+            self._render_turn_controls((30, turn_y), me)
         elif me and me.turn_submitted:
-            self._draw_text("Waiting for opponent...", (30, 540), self.font, DIM)
+            self._draw_text("Waiting for opponent...", (30, turn_y), self.font, DIM)
 
-        self._render_log((540, 540))
+        self._render_log((610, turn_y))
 
     def _render_end(self) -> None:
         assert self.state is not None
@@ -222,14 +227,14 @@ class Client:
             msg = f"{self.state.winner.value} WINS THE RACE"
         self._draw_text(msg, (30, 30), self.font_big, HIGHLIGHT)
         y = 90
-        for line in self.state.log[-8:]:
+        for line in self.state.log[-10:]:
             self._draw_text(line, (30, y), self.font, FG)
             y += 22
 
     def _draw_player_panel(self, label: str, player: Player, pos: tuple[int, int]) -> None:
         x, y = pos
         color = side_color(player.side)
-        pygame.draw.rect(self.screen, PANEL, (x - 8, y - 6, 500, 230), border_radius=6)
+        pygame.draw.rect(self.screen, PANEL, (x - 8, y - 6, 570, 350), border_radius=6)
         self._draw_text(f"{label}: {player.username}", (x, y), self.font, color)
         side_label = player.side.value if player.side else "?"
         self._draw_text(f"Side:      {side_label}", (x, y + 28), self.font, FG)
@@ -239,10 +244,16 @@ class Client:
         self._draw_text(f"Turn:      {turn_txt}", (x, y + 100), self.font_small, DIM)
 
         self._draw_text("R&D progress:", (x, y + 128), self.font_small, DIM)
-        ry = y + 150
+        ry = y + 148
         for r in Rocket:
             self._draw_rd_bar(r, player, (x, ry))
             ry += 22
+
+        self._draw_text("Astronauts:", (x, y + 222), self.font_small, DIM)
+        ay = y + 242
+        for astro in player.astronauts:
+            self._draw_astronaut_row(astro, (x, ay))
+            ay += 18
 
     def _draw_rd_bar(self, rocket: Rocket, player: Player, pos: tuple[int, int]) -> None:
         x, y = pos
@@ -257,26 +268,46 @@ class Client:
         pygame.draw.rect(self.screen, GREEN if pct >= 1.0 else HIGHLIGHT,
                          (bar_x + 1, y + 4, int((bar_w - 2) * pct), 10))
 
+    def _draw_astronaut_row(self, astro: Astronaut, pos: tuple[int, int]) -> None:
+        x, y = pos
+        alive = astro.active
+        color = FG if alive else RED
+        status = " " if alive else "+"  # "+" marker for KIA (visible without emoji)
+        row = (
+            f"{status} {astro.name:<8} "
+            f"Cap{astro.capsule:3} Eva{astro.eva:3} End{astro.endurance:3} Cmd{astro.command:3}"
+        )
+        self._draw_text(row, (x, y), self.font_small, color)
+
     def _render_mission_list(self, pos: tuple[int, int]) -> None:
         assert self.state is not None
         me = self._me()
         x, y = pos
         self._draw_text("MISSIONS", (x, y), self.font_big, HIGHLIGHT)
-        header = f"{'#':<3}{'Mission':<22}{'Rocket':<8}{'Cost':<6}{'Succ%':<7}{'Presti':<8}{'First':<7}Status"
+        header = (
+            f"{'#':<3}{'Mission':<22}{'Type':<7}{'Rocket':<8}{'Cost':<6}"
+            f"{'Succ%':<7}{'Presti':<8}{'First':<7}Status"
+        )
         self._draw_text(header, (x, y + 36), self.font_small, DIM)
         ly = y + 56
         for idx, m in enumerate(MISSIONS):
             first_claimed = self.state.first_completed.get(m.id.value)
-            first_txt = f"+{m.first_bonus} (claimed:{first_claimed})" if first_claimed else f"+{m.first_bonus}"
-            status_parts = []
+            first_txt = f"+{m.first_bonus} ({first_claimed})" if first_claimed else f"+{m.first_bonus}"
+            status_parts: list[str] = []
             status_color = DIM
             if me:
                 built = me.rocket_built(m.rocket)
                 affordable = me.budget >= m.launch_cost
+                crew_ok = True
+                if m.manned:
+                    active = me.active_astronauts()
+                    crew_ok = len(active) >= m.crew_size
                 if not built:
                     status_parts.append(f"need {m.rocket.value}")
                 elif not affordable:
                     status_parts.append("low funds")
+                elif not crew_ok:
+                    status_parts.append(f"need {m.crew_size} astro")
                 else:
                     status_parts.append("READY")
                     status_color = GREEN
@@ -284,24 +315,25 @@ class Client:
                     status_parts.append("[QUEUED]")
                     status_color = HIGHLIGHT
             status = " ".join(status_parts) or "-"
+            mtype = "manned" if m.manned else "unmanned"
             row = (
-                f"{idx + 1}  {m.name:<22}{m.rocket.value:<8}{m.launch_cost:<6}"
+                f"{idx + 1}  {m.name:<22}{mtype:<7}{m.rocket.value:<8}{m.launch_cost:<6}"
                 f"{int(m.base_success * 100):<7}{m.prestige_success:<8}{first_txt:<7}"
             )
             self._draw_text(row, (x, ly), self.font_small, FG)
-            self._draw_text(status, (x + 760, ly), self.font_small, status_color)
+            self._draw_text(status, (x + 820, ly), self.font_small, status_color)
             ly += 20
 
     def _render_turn_controls(self, pos: tuple[int, int], me: Player) -> None:
         x, y = pos
-        pygame.draw.rect(self.screen, PANEL, (x - 8, y - 6, 500, 160), border_radius=6)
+        pygame.draw.rect(self.screen, PANEL, (x - 8, y - 6, 570, 165), border_radius=6)
         self._draw_text("YOUR TURN", (x, y), self.font_big, HIGHLIGHT)
         self._draw_text(
-            "Q/W/E: R&D target   ←/→: adjust spend",
+            "Q/W/E: R&D target    ←/→: adjust spend",
             (x, y + 34), self.font_small, DIM,
         )
         self._draw_text(
-            "1-6: queue mission   0/Esc: cancel   Enter: submit",
+            "1-9: queue mission   0/Esc: cancel   Enter: submit",
             (x, y + 52), self.font_small, DIM,
         )
         spend = min(self.rd_spend, me.budget)
@@ -311,18 +343,39 @@ class Client:
         )
         if self.queued_mission is not None:
             m = MISSIONS_BY_ID[self.queued_mission]
+            effective = m.base_success
+            crew_note = ""
+            if m.manned:
+                crew = self._preview_crew(me, m)
+                if crew:
+                    from baris.resolver import _crew_bonus
+                    effective = m.base_success + _crew_bonus(crew, m)
+                    crew_note = f"  crew: {', '.join(a.name for a in crew)}"
+                else:
+                    crew_note = "  crew: NONE (will abort)"
             self._draw_text(
-                f"Launching: {m.name}  (cost {m.launch_cost} MB, {int(m.base_success * 100)}% success)",
+                f"Launching: {m.name}  cost {m.launch_cost} MB, {int(effective * 100)}%",
                 (x, y + 104), self.font, GREEN,
             )
+            if crew_note:
+                self._draw_text(crew_note, (x, y + 126), self.font_small, FG)
         else:
             self._draw_text("No launch queued this turn.", (x, y + 104), self.font, DIM)
+
+    def _preview_crew(self, player: Player, mission) -> list[Astronaut]:
+        active = player.active_astronauts()
+        if len(active) < mission.crew_size:
+            return []
+        skill_key: Skill = mission.primary_skill or Skill.COMMAND
+        ranked = sorted(active, key=lambda a: a.skill(skill_key), reverse=True)
+        return ranked[:mission.crew_size]
 
     def _render_log(self, pos: tuple[int, int]) -> None:
         assert self.state is not None
         x, y = pos
+        pygame.draw.rect(self.screen, PANEL, (x - 8, y - 6, 570, 165), border_radius=6)
         self._draw_text("LOG:", (x, y), self.font_small, DIM)
-        ly = y + 18
+        ly = y + 20
         for line in self.state.log[-7:]:
             self._draw_text(line, (x, ly), self.font_small, FG)
             ly += 18

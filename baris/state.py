@@ -29,6 +29,18 @@ class Rocket(str, Enum):
     HEAVY = "Heavy"
 
 
+class Skill(str, Enum):
+    CAPSULE = "capsule"
+    EVA = "eva"
+    ENDURANCE = "endurance"
+    COMMAND = "command"
+
+
+class AstronautStatus(str, Enum):
+    ACTIVE = "active"
+    KIA = "kia"
+
+
 class MissionId(str, Enum):
     SUBORBITAL = "suborbital"
     SATELLITE = "satellite"
@@ -36,6 +48,9 @@ class MissionId(str, Enum):
     LUNAR_PASS = "lunar_pass"
     LUNAR_ORBIT = "lunar_orbit"
     LUNAR_LANDING = "lunar_landing"
+    MANNED_ORBITAL = "manned_orbital"
+    MANNED_LUNAR_ORBIT = "manned_lunar_orbit"
+    MANNED_LUNAR_LANDING = "manned_lunar_landing"
 
 
 @dataclass(frozen=True)
@@ -48,16 +63,25 @@ class Mission:
     prestige_success: int
     prestige_fail: int
     first_bonus: int
+    manned: bool = False
+    crew_size: int = 0
+    primary_skill: Skill | None = None
 
 
-# Ordered catalog — UI iterates this to build the mission list (indices map to keys 1-6).
+# Ordered catalog — UI iterates this to build the mission list (indices map to keys 1-9).
 MISSIONS: tuple[Mission, ...] = (
-    Mission(MissionId.SUBORBITAL,    "Sub-orbital flight", Rocket.LIGHT,  3, 0.85,  3, 1, 2),
-    Mission(MissionId.SATELLITE,     "Satellite launch",   Rocket.LIGHT,  5, 0.75,  5, 2, 3),
-    Mission(MissionId.ORBITAL,       "Orbital flight",     Rocket.MEDIUM, 8, 0.70,  7, 2, 4),
-    Mission(MissionId.LUNAR_PASS,    "Lunar flyby",        Rocket.MEDIUM,12, 0.60, 10, 3, 5),
-    Mission(MissionId.LUNAR_ORBIT,   "Lunar orbit",        Rocket.HEAVY, 18, 0.50, 15, 4, 7),
-    Mission(MissionId.LUNAR_LANDING, "Lunar landing",      Rocket.HEAVY, 25, 0.35, 25, 5, 10),
+    Mission(MissionId.SUBORBITAL,          "Sub-orbital flight",    Rocket.LIGHT,  3, 0.85,  3, 1,  2),
+    Mission(MissionId.SATELLITE,           "Satellite launch",      Rocket.LIGHT,  5, 0.75,  5, 2,  3),
+    Mission(MissionId.ORBITAL,             "Orbital flight",        Rocket.MEDIUM, 8, 0.70,  7, 2,  4),
+    Mission(MissionId.LUNAR_PASS,          "Lunar flyby",           Rocket.MEDIUM,12, 0.60, 10, 3,  5),
+    Mission(MissionId.LUNAR_ORBIT,         "Lunar orbit",           Rocket.HEAVY, 18, 0.50, 15, 4,  7),
+    Mission(MissionId.LUNAR_LANDING,       "Lunar landing",         Rocket.HEAVY, 25, 0.35, 20, 5, 10),
+    Mission(MissionId.MANNED_ORBITAL,      "Manned orbital",        Rocket.MEDIUM,15, 0.55, 12, 4,  6,
+            manned=True,  crew_size=1, primary_skill=Skill.CAPSULE),
+    Mission(MissionId.MANNED_LUNAR_ORBIT,  "Manned lunar orbit",    Rocket.HEAVY, 25, 0.40, 20, 6,  9,
+            manned=True,  crew_size=2, primary_skill=Skill.COMMAND),
+    Mission(MissionId.MANNED_LUNAR_LANDING,"Manned lunar landing",  Rocket.HEAVY, 35, 0.25, 35, 8, 15,
+            manned=True,  crew_size=3, primary_skill=Skill.COMMAND),
 )
 
 MISSIONS_BY_ID: dict[MissionId, Mission] = {m.id: m for m in MISSIONS}
@@ -71,6 +95,33 @@ RD_TARGETS: dict[Rocket, int] = {
 STARTING_BUDGET = 30
 SEASON_REFILL = 15
 PRESTIGE_TO_WIN = 40
+STARTING_ASTRONAUTS = 5
+DEATH_CHANCE_ON_FAIL = 0.25
+DEATH_PRESTIGE_PENALTY = 3
+# Crew skill bonus to success: full crew averaging 100 in primary skill → +15%.
+CREW_MAX_BONUS = 0.15
+
+
+@dataclass
+class Astronaut:
+    id: str
+    name: str
+    capsule: int = 0
+    eva: int = 0
+    endurance: int = 0
+    command: int = 0
+    status: str = AstronautStatus.ACTIVE.value  # stored as string for JSON safety
+
+    def skill(self, kind: Skill) -> int:
+        return getattr(self, kind.value)
+
+    def bump_skill(self, kind: Skill, amount: int) -> None:
+        value = min(100, max(0, self.skill(kind) + amount))
+        setattr(self, kind.value, value)
+
+    @property
+    def active(self) -> bool:
+        return self.status == AstronautStatus.ACTIVE.value
 
 
 @dataclass
@@ -84,6 +135,7 @@ class Player:
     rockets: dict[str, int] = field(
         default_factory=lambda: {r.value: 0 for r in Rocket}
     )
+    astronauts: list[Astronaut] = field(default_factory=list)
     turn_submitted: bool = False
     pending_rd_rocket: str | None = None   # Rocket.value or None
     pending_rd_spend: int = 0
@@ -94,6 +146,9 @@ class Player:
 
     def rocket_built(self, rocket: Rocket) -> bool:
         return self.rd_progress(rocket) >= RD_TARGETS[rocket]
+
+    def active_astronauts(self) -> list[Astronaut]:
+        return [a for a in self.astronauts if a.active]
 
 
 @dataclass
@@ -134,7 +189,8 @@ def _player_from_dict(d: dict[str, Any]) -> Player:
     data = dict(d)
     side = data.get("side")
     data["side"] = Side(side) if side else None
-    # rockets dict keys are rocket-name strings, keep as-is
+    raw_astronauts = data.get("astronauts") or []
+    data["astronauts"] = [Astronaut(**a) for a in raw_astronauts]
     return Player(**data)
 
 
