@@ -102,13 +102,42 @@ def can_start(state: GameState) -> bool:
     return all(p.ready for p in state.players)
 
 
-def start_game(state: GameState, rng: random.Random | None = None) -> None:
+def start_game(
+    state: GameState,
+    rng: random.Random | None = None,
+    debug: bool = False,
+) -> None:
     rng = rng or random.Random()
     state.phase = Phase.PLAYING
     for player in state.players:
         if not player.astronauts:
             player.astronauts = _generate_starting_roster(player, rng)
-    state.log.append(f"Game started — {state.season.value} {state.year}.")
+        if debug:
+            _apply_debug_preseed(player)
+    state.log.append(
+        f"Game started — {state.season.value} {state.year}"
+        + (" [DEBUG MODE]" if debug else "")
+        + "."
+    )
+
+
+def _apply_debug_preseed(player: Player) -> None:
+    """Give the player a fat starting kit so testing skips the grind:
+    big budget, all rockets fully R&Ded, Apollo/Soyuz unlocked, roster
+    boosted, and every rocket's safety nudged up."""
+    player.budget = 500
+    for r in Rocket:
+        player.rockets[r.value] = RD_TARGETS[r]
+        player.rocket_safety[r.value] = 70
+    # seed two successes so Tier 3 is unlocked (but LSR still requires a real
+    # unmanned landing, which the player can trigger at will)
+    player.mission_successes[MissionId.SUBORBITAL.value] = 1
+    player.mission_successes[MissionId.MULTI_CREW_ORBITAL.value] = 1
+    for a in player.astronauts:
+        a.capsule = max(a.capsule, 70)
+        a.eva = max(a.eva, 70)
+        a.endurance = max(a.endurance, 70)
+        a.command = max(a.command, 70)
 
 
 def _generate_starting_roster(player: Player, rng: random.Random) -> list[Astronaut]:

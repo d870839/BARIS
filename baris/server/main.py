@@ -25,9 +25,10 @@ log = logging.getLogger("baris.server")
 class Room:
     """Single-game room. MVP: one room per server process."""
 
-    def __init__(self) -> None:
+    def __init__(self, debug: bool = False) -> None:
         self.state = GameState()
         self.connections: dict[str, Any] = {}
+        self.debug = debug
 
     def is_full(self) -> bool:
         return len(self.state.players) >= 2
@@ -108,7 +109,7 @@ async def handle_ready(player: Player, ready: bool) -> None:
         return
     player.ready = ready
     if can_start(room.state):
-        start_game(room.state)
+        start_game(room.state, debug=room.debug)
 
 
 async def handle_end_turn(player: Player, msg: dict[str, Any]) -> None:
@@ -199,8 +200,15 @@ def main() -> None:
     parser = argparse.ArgumentParser()
     parser.add_argument("--host", default="0.0.0.0")
     parser.add_argument("--port", type=int, default=8765)
+    parser.add_argument("--debug", action="store_true",
+                        help="Preseed both players with fat budget, built rockets, "
+                             "and Apollo/Soyuz unlocked when the game starts.")
     args = parser.parse_args()
     logging.basicConfig(level=logging.INFO, format="%(asctime)s %(name)s %(levelname)s %(message)s")
+    global room
+    room = Room(debug=args.debug)
+    if args.debug:
+        log.warning("DEBUG MODE: players will be preseeded at game start.")
     asyncio.run(serve(args.host, args.port))
 
 
