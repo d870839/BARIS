@@ -17,6 +17,7 @@ from baris.state import (
     AstronautStatus,
     CREW_MAX_BONUS,
     GameState,
+    HISTORICAL_ROSTERS,
     MISSIONS_BY_ID,
     MissionId,
     Phase,
@@ -32,6 +33,7 @@ from baris.state import (
     Side,
     Skill,
     STARTING_ASTRONAUTS,
+    rocket_display_name,
 )
 
 
@@ -97,7 +99,32 @@ def test_start_game_generates_starting_roster() -> None:
         for astro in p.astronauts:
             assert astro.status == AstronautStatus.ACTIVE.value
             assert 0 < astro.capsule <= 100  # within generator's 20-50 band
-            assert astro.name.startswith(p.side.value)
+        roster_names = [a.name for a in p.astronauts]
+        assert roster_names == list(HISTORICAL_ROSTERS[p.side.value])
+
+
+def test_historical_roster_contents() -> None:
+    """Protects the small historical fact set from accidental regressions."""
+    usa = HISTORICAL_ROSTERS[Side.USA.value]
+    ussr = HISTORICAL_ROSTERS[Side.USSR.value]
+    # Mercury Seven.
+    assert set(usa) == {"Shepard", "Grissom", "Glenn", "Carpenter",
+                        "Schirra", "Cooper", "Slayton"}
+    # Soviet first group + Tereshkova (first woman in space, 1963).
+    assert "Tereshkova" in ussr
+    assert "Gagarin" in ussr
+    assert len(ussr) == 7
+
+
+def test_rocket_display_name_is_per_side() -> None:
+    assert rocket_display_name(Rocket.LIGHT,  Side.USA)  == "Redstone"
+    assert rocket_display_name(Rocket.MEDIUM, Side.USA)  == "Titan II"
+    assert rocket_display_name(Rocket.HEAVY,  Side.USA)  == "Saturn V"
+    assert rocket_display_name(Rocket.LIGHT,  Side.USSR) == "R-7"
+    assert rocket_display_name(Rocket.MEDIUM, Side.USSR) == "Proton"
+    assert rocket_display_name(Rocket.HEAVY,  Side.USSR) == "N1"
+    # With no side (lobby / unknown), falls back to class name.
+    assert rocket_display_name(Rocket.LIGHT, None) == "Light"
 
 
 # ----------------------------------------------------------------------
@@ -185,7 +212,7 @@ def test_manned_mission_rejected_without_enough_crew() -> None:
     me.rockets[Rocket.HEAVY.value] = RD_TARGETS[Rocket.HEAVY]
     me.budget = 100
     # kill all but 2 astronauts — landing needs 3
-    for a in me.astronauts[:3]:
+    for a in me.astronauts[:STARTING_ASTRONAUTS - 2]:
         a.status = AstronautStatus.KIA.value
     assert len(me.active_astronauts()) == 2
 

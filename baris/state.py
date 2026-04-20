@@ -95,9 +95,46 @@ RD_TARGETS: dict[Rocket, int] = {
 STARTING_BUDGET = 30
 SEASON_REFILL = 15
 PRESTIGE_TO_WIN = 40
-STARTING_ASTRONAUTS = 5
+STARTING_ASTRONAUTS = 7
 DEATH_CHANCE_ON_FAIL = 0.25
 DEATH_PRESTIGE_PENALTY = 3
+
+# Historical starting rosters (last names, in selection-group order).
+# USA: Mercury Seven (selected 1959).
+# USSR: first-group cosmonauts (1960) plus Tereshkova (first female cosmonaut, 1962).
+HISTORICAL_ROSTERS: dict[str, tuple[str, ...]] = {
+    Side.USA.value: (
+        "Shepard", "Grissom", "Glenn", "Carpenter",
+        "Schirra", "Cooper", "Slayton",
+    ),
+    Side.USSR.value: (
+        "Gagarin", "Titov", "Tereshkova", "Komarov",
+        "Leonov", "Nikolayev", "Popovich",
+    ),
+}
+
+# Per-side historical rocket names, mapped to our Light/Medium/Heavy classes.
+# USA: Redstone (Mercury sub-orbital), Titan II (Gemini orbital), Saturn V (Apollo lunar).
+# USSR: R-7 (Sputnik/Vostok), Proton (heavy LEO/lunar probes), N1 (lunar — historically never flew successfully).
+HISTORICAL_ROCKET_NAMES: dict[str, dict[Rocket, str]] = {
+    Side.USA.value: {
+        Rocket.LIGHT:  "Redstone",
+        Rocket.MEDIUM: "Titan II",
+        Rocket.HEAVY:  "Saturn V",
+    },
+    Side.USSR.value: {
+        Rocket.LIGHT:  "R-7",
+        Rocket.MEDIUM: "Proton",
+        Rocket.HEAVY:  "N1",
+    },
+}
+
+
+def rocket_display_name(rocket: Rocket, side: Side | None) -> str:
+    """Return the historical per-side name if a side is known, else the class name."""
+    if side is None:
+        return rocket.value
+    return HISTORICAL_ROCKET_NAMES.get(side.value, {}).get(rocket, rocket.value)
 # Crew skill bonus to success: full crew averaging 100 in primary skill → +15%.
 CREW_MAX_BONUS = 0.15
 

@@ -18,6 +18,7 @@ from baris.state import (
     Rocket,
     Side,
     Skill,
+    rocket_display_name,
 )
 
 log = logging.getLogger("baris.client")
@@ -261,9 +262,10 @@ class Client:
         progress = player.rd_progress(rocket)
         pct = progress / target
         bar_w = 220
-        label = f"{rocket.value:<6} {progress:3}/{target:3}"
+        display = rocket_display_name(rocket, player.side)
+        label = f"{display:<10} {progress:3}/{target:3}"
         self._draw_text(label, (x, y), self.font_small, FG)
-        bar_x = x + 180
+        bar_x = x + 200
         pygame.draw.rect(self.screen, DIM, (bar_x, y + 3, bar_w, 12), 1)
         pygame.draw.rect(self.screen, GREEN if pct >= 1.0 else HIGHLIGHT,
                          (bar_x + 1, y + 4, int((bar_w - 2) * pct), 10))
@@ -283,9 +285,9 @@ class Client:
         x, y = pos
         alive = astro.active
         color = FG if alive else RED
-        status = " " if alive else "+"  # "+" marker for KIA (visible without emoji)
+        status = " " if alive else "+"  # "+" marker for KIA
         row = (
-            f"{status} {astro.name:<8} "
+            f"{status} {astro.name:<12} "
             f"Cap{astro.capsule:3} Eva{astro.eva:3} End{astro.endurance:3} Cmd{astro.command:3}"
         )
         self._draw_text(row, (x, y), self.font_small, color)
@@ -296,7 +298,7 @@ class Client:
         x, y = pos
         self._draw_text("MISSIONS", (x, y), self.font_big, HIGHLIGHT)
         header = (
-            f"{'#':<3}{'Mission':<22}{'Type':<7}{'Rocket':<8}{'Cost':<6}"
+            f"{'#':<3}{'Mission':<22}{'Type':<7}{'Rocket':<10}{'Cost':<6}"
             f"{'Succ%':<7}{'Presti':<8}{'First':<7}Status"
         )
         self._draw_text(header, (x, y + 36), self.font_small, DIM)
@@ -327,8 +329,10 @@ class Client:
                     status_color = HIGHLIGHT
             status = " ".join(status_parts) or "-"
             mtype = "manned" if m.manned else "unmanned"
+            my_side = me.side if me else None
+            rocket_display = rocket_display_name(m.rocket, my_side)
             row = (
-                f"{idx + 1}  {m.name:<22}{mtype:<7}{m.rocket.value:<8}{m.launch_cost:<6}"
+                f"{idx + 1}  {m.name:<22}{mtype:<7}{rocket_display:<10}{m.launch_cost:<6}"
                 f"{int(m.base_success * 100):<7}{m.prestige_success:<8}{first_txt:<7}"
             )
             self._draw_text(row, (x, ly), self.font_small, FG)

@@ -53,12 +53,16 @@ def start_game(state: GameState, rng: random.Random | None = None) -> None:
 
 
 def _generate_starting_roster(player: Player, rng: random.Random) -> list[Astronaut]:
+    from baris.state import HISTORICAL_ROSTERS
     side_code = player.side.value if player.side else "ROS"
+    names = HISTORICAL_ROSTERS.get(side_code, ())
     roster: list[Astronaut] = []
     for i in range(STARTING_ASTRONAUTS):
+        default = f"{side_code}-{i + 1:02d}"
+        name = names[i] if i < len(names) else default
         roster.append(Astronaut(
             id=uuid.uuid4().hex[:6],
-            name=f"{side_code}-{i + 1:02d}",
+            name=name,
             capsule=rng.randint(20, 50),
             eva=rng.randint(20, 50),
             endurance=rng.randint(20, 50),
