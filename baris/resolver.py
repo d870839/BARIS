@@ -4,11 +4,15 @@ import random
 
 from baris.state import (
     GameState,
+    MISSIONS_BY_ID,
+    Mission,
+    MissionId,
     Phase,
-    Player,
     PRESTIGE_TO_WIN,
-    RD_COST_PER_POINT,
-    RD_TARGET,
+    Player,
+    RD_TARGETS,
+    Rocket,
+    SEASON_REFILL,
     Side,
     next_season,
 )
@@ -30,9 +34,20 @@ def start_game(state: GameState) -> None:
     state.log.append(f"Game started — {state.season.value} {state.year}.")
 
 
-def submit_turn(player: Player, rd_spend: int, launch: bool) -> None:
+def submit_turn(
+    player: Player,
+    rd_rocket: Rocket | None,
+    rd_spend: int,
+    launch: MissionId | None,
+) -> None:
+    player.pending_rd_rocket = rd_rocket.value if rd_rocket else None
     player.pending_rd_spend = max(0, min(rd_spend, player.budget))
-    player.pending_launch = launch and player.rocket_built
+    # validate launch: only allow if rocket is built and player can afford launch cost.
+    player.pending_launch = None
+    if launch is not None:
+        mission = MISSIONS_BY_ID[launch]
+        if player.rocket_built(mission.rocket) and player.budget >= mission.launch_cost + player.pending_rd_spend:
+            player.pending_launch = launch.value
     player.turn_submitted = True
 
 
@@ -47,13 +62,12 @@ def resolve_turn(state: GameState, rng: random.Random | None = None) -> None:
 
     for player in state.players:
         _apply_rd(player, state)
-        if player.pending_launch:
-            _resolve_launch(player, state, rng)
+        _resolve_launch(player, state, rng)
+        player.pending_rd_rocket = None
         player.pending_rd_spend = 0
-        player.pending_launch = False
+        player.pending_launch = None
         player.turn_submitted = False
-        # modest seasonal budget refill, keeps the MVP loop going
-        player.budget += 10
+        player.budget += SEASON_REFILL
 
     _check_victory(state)
 
@@ -63,36 +77,82 @@ def resolve_turn(state: GameState, rng: random.Random | None = None) -> None:
 
 
 def _apply_rd(player: Player, state: GameState) -> None:
-    if player.pending_rd_spend <= 0 or player.rocket_built:
+    if player.pending_rd_spend <= 0 or not player.pending_rd_rocket:
         return
+    try:
+        rocket = Rocket(player.pending_rd_rocket)
+    except ValueError:
+        return
+    if player.rocket_built(rocket):
+        return  # already done, refund nothing, drop spend
     spend = player.pending_rd_spend
     player.budget -= spend
-    gained = spend // RD_COST_PER_POINT
-    player.rd_progress = min(RD_TARGET, player.rd_progress + gained)
-    state.log.append(f"{player.username} invests {spend} MB into R&D (+{gained}%).")
-    if player.rd_progress >= RD_TARGET:
-        player.rocket_built = True
-        state.log.append(f"{player.username} completes rocket R&D!")
+    target = RD_TARGETS[rocket]
+    new_progress = min(target, player.rd_progress(rocket) + spend)
+    player.rockets[rocket.value] = new_progress
+    state.log.append(
+        f"{player.username} invests {spend} MB into {rocket.value} R&D "
+        f"({new_progress}/{target})."
+    )
+    if new_progress >= target:
+        state.log.append(f"{player.username} completes {rocket.value}-class rocket!")
 
 
 def _resolve_launch(player: Player, state: GameState, rng: random.Random) -> None:
-    # Sub-orbital unmanned: 75% success, +3 prestige; failure costs 1 prestige.
+    if not player.pending_launch:
+        return
+    try:
+        mission = MISSIONS_BY_ID[MissionId(player.pending_launch)]
+    except (ValueError, KeyError):
+        return
+    # re-check prereqs — player may have just finished R&D this turn (fine).
+    if not player.rocket_built(mission.rocket) or player.budget < mission.launch_cost:
+        state.log.append(
+            f"{player.username} aborts {mission.name} — prereqs no longer met."
+        )
+        return
+
+    player.budget -= mission.launch_cost
     roll = rng.random()
-    if roll < 0.75:
-        player.prestige += 3
-        state.log.append(f"{player.username} launches sub-orbital — SUCCESS (+3 prestige).")
+    if roll < mission.base_success:
+        gain = mission.prestige_success
+        bonus = 0
+        if mission.id.value not in state.first_completed and player.side is not None:
+            state.first_completed[mission.id.value] = player.side.value
+            bonus = mission.first_bonus
+        player.prestige += gain + bonus
+        bonus_txt = f" +{bonus} FIRST!" if bonus else ""
+        state.log.append(
+            f"{player.username} — {mission.name}: SUCCESS (+{gain}{bonus_txt} prestige)."
+        )
+        if mission.id == MissionId.LUNAR_LANDING:
+            state.phase = Phase.ENDED
+            state.winner = player.side
+            state.log.append(f"{player.username} lands on the Moon — game over!")
     else:
-        player.prestige = max(0, player.prestige - 1)
-        state.log.append(f"{player.username} launches sub-orbital — FAILURE (-1 prestige).")
+        player.prestige = max(0, player.prestige - mission.prestige_fail)
+        state.log.append(
+            f"{player.username} — {mission.name}: FAILURE (-{mission.prestige_fail} prestige)."
+        )
 
 
 def _check_victory(state: GameState) -> None:
+    if state.phase == Phase.ENDED:
+        return  # already decided by lunar landing
     leaders = [p for p in state.players if p.prestige >= PRESTIGE_TO_WIN]
     if not leaders:
         return
-    # If both crossed in the same turn, highest prestige wins; ties break to USA (placeholder).
     leaders.sort(key=lambda p: p.prestige, reverse=True)
     winner = leaders[0]
     state.phase = Phase.ENDED
     state.winner = winner.side
-    state.log.append(f"{winner.username} ({winner.side.value if winner.side else '?'}) wins the space race!")
+    side_label = winner.side.value if winner.side else "?"
+    state.log.append(f"{winner.username} ({side_label}) wins on prestige!")
+
+
+def available_missions(player: Player) -> list[Mission]:
+    """Missions the player could launch right now (rocket built & can afford)."""
+    return [
+        m for m in MISSIONS_BY_ID.values()
+        if player.rocket_built(m.rocket) and player.budget >= m.launch_cost
+    ]

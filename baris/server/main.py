@@ -10,7 +10,7 @@ import websockets
 
 from baris import protocol
 from baris.resolver import all_turns_in, can_start, resolve_turn, start_game, submit_turn
-from baris.state import GameState, Phase, Player, Side
+from baris.state import GameState, MissionId, Phase, Player, Rocket, Side
 
 log = logging.getLogger("baris.server")
 
@@ -108,8 +108,21 @@ async def handle_end_turn(player: Player, msg: dict[str, Any]) -> None:
     if room.state.phase != Phase.PLAYING or player.turn_submitted:
         return
     rd_spend = int(msg.get("rd_spend", 0))
-    launch = bool(msg.get("launch", False))
-    submit_turn(player, rd_spend, launch)
+    rd_rocket: Rocket | None = None
+    raw_rocket = msg.get("rd_rocket")
+    if raw_rocket:
+        try:
+            rd_rocket = Rocket(raw_rocket)
+        except ValueError:
+            rd_rocket = None
+    launch: MissionId | None = None
+    raw_launch = msg.get("launch")
+    if raw_launch:
+        try:
+            launch = MissionId(raw_launch)
+        except ValueError:
+            launch = None
+    submit_turn(player, rd_rocket, rd_spend, launch)
     if all_turns_in(room.state):
         resolve_turn(room.state)
 

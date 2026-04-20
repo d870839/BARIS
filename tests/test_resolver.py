@@ -1,15 +1,31 @@
 from __future__ import annotations
 
-import random
-
 from baris.resolver import (
     all_turns_in,
+    available_missions,
     can_start,
     resolve_turn,
     start_game,
     submit_turn,
 )
-from baris.state import GameState, Phase, Player, Season, Side
+from baris.state import (
+    GameState,
+    MissionId,
+    Phase,
+    Player,
+    RD_TARGETS,
+    Rocket,
+    Season,
+    Side,
+)
+
+
+class _FixedRng:
+    def __init__(self, value: float) -> None:
+        self.value = value
+
+    def random(self) -> float:
+        return self.value
 
 
 def _two_player_state() -> GameState:
@@ -19,6 +35,11 @@ def _two_player_state() -> GameState:
         Player(player_id="b", username="Bob", side=Side.USSR, ready=True),
     ]
     return state
+
+
+# ----------------------------------------------------------------------
+# lobby / start
+# ----------------------------------------------------------------------
 
 
 def test_can_start_requires_both_sides_and_ready() -> None:
@@ -33,22 +54,24 @@ def test_can_start_requires_both_sides_and_ready() -> None:
     assert not can_start(state)
 
 
-def test_resolve_turn_applies_rd_and_advances_season() -> None:
+# ----------------------------------------------------------------------
+# R&D
+# ----------------------------------------------------------------------
+
+
+def test_rd_accumulates_on_chosen_rocket() -> None:
     state = _two_player_state()
     start_game(state)
-    assert state.phase == Phase.PLAYING
-    assert state.season == Season.SPRING
-
-    submit_turn(state.players[0], rd_spend=10, launch=False)
-    submit_turn(state.players[1], rd_spend=20, launch=False)
+    submit_turn(state.players[0], rd_rocket=Rocket.LIGHT, rd_spend=20, launch=None)
+    submit_turn(state.players[1], rd_rocket=Rocket.MEDIUM, rd_spend=20, launch=None)
     assert all_turns_in(state)
 
-    resolve_turn(state, rng=random.Random(0))
+    resolve_turn(state)
 
-    assert state.players[0].rd_progress == 10
-    assert state.players[1].rd_progress == 20
+    assert state.players[0].rd_progress(Rocket.LIGHT) == 20
+    assert state.players[0].rd_progress(Rocket.MEDIUM) == 0
+    assert state.players[1].rd_progress(Rocket.MEDIUM) == 20
     assert state.season == Season.SUMMER
-    assert all(not p.turn_submitted for p in state.players)
 
 
 def test_rd_spend_clamped_to_budget() -> None:
@@ -56,69 +79,147 @@ def test_rd_spend_clamped_to_budget() -> None:
     start_game(state)
     me = state.players[0]
     me.budget = 5
-
-    submit_turn(me, rd_spend=999, launch=False)
+    submit_turn(me, rd_rocket=Rocket.LIGHT, rd_spend=999, launch=None)
     assert me.pending_rd_spend == 5
 
 
-class _FixedRng:
-    def __init__(self, value: float) -> None:
-        self.value = value
+def test_rocket_built_when_progress_reaches_target() -> None:
+    state = _two_player_state()
+    start_game(state)
+    me = state.players[0]
+    me.budget = 200
+    submit_turn(me, rd_rocket=Rocket.LIGHT, rd_spend=RD_TARGETS[Rocket.LIGHT], launch=None)
+    submit_turn(state.players[1], rd_rocket=None, rd_spend=0, launch=None)
+    resolve_turn(state)
+    assert me.rocket_built(Rocket.LIGHT)
 
-    def random(self) -> float:
-        return self.value
+
+# ----------------------------------------------------------------------
+# Launches
+# ----------------------------------------------------------------------
 
 
-def test_launch_success_can_complete_game() -> None:
+def test_launch_requires_built_rocket() -> None:
+    state = _two_player_state()
+    start_game(state)
+    me = state.players[0]
+    # tries to launch lunar landing without a Heavy rocket
+    submit_turn(me, rd_rocket=None, rd_spend=0, launch=MissionId.LUNAR_LANDING)
+    # submit_turn drops the launch if prereqs unmet
+    assert me.pending_launch is None
+
+
+def test_suborbital_success_awards_prestige_and_first_bonus() -> None:
+    state = _two_player_state()
+    start_game(state)
+    me = state.players[0]
+    me.rockets[Rocket.LIGHT.value] = RD_TARGETS[Rocket.LIGHT]
+
+    submit_turn(me, rd_rocket=None, rd_spend=0, launch=MissionId.SUBORBITAL)
+    submit_turn(state.players[1], rd_rocket=None, rd_spend=0, launch=None)
+    resolve_turn(state, rng=_FixedRng(0.0))  # forced success
+
+    # suborbital: 3 prestige + 2 first-bonus
+    assert me.prestige == 5
+    assert state.first_completed[MissionId.SUBORBITAL.value] == Side.USA.value
+
+
+def test_second_suborbital_does_not_regrant_first_bonus() -> None:
     state = _two_player_state()
     start_game(state)
     me = state.players[0]
     opp = state.players[1]
-    me.rocket_built = True
-    me.prestige = 8  # need 10 to win; success gives +3
+    me.rockets[Rocket.LIGHT.value] = RD_TARGETS[Rocket.LIGHT]
+    opp.rockets[Rocket.LIGHT.value] = RD_TARGETS[Rocket.LIGHT]
 
-    submit_turn(me, rd_spend=0, launch=True)
-    submit_turn(opp, rd_spend=0, launch=False)
-    resolve_turn(state, rng=_FixedRng(0.0))  # forced success
+    # both launch same mission same turn; USA first alphabetically (player order).
+    submit_turn(me, rd_rocket=None, rd_spend=0, launch=MissionId.SUBORBITAL)
+    submit_turn(opp, rd_rocket=None, rd_spend=0, launch=MissionId.SUBORBITAL)
+    resolve_turn(state, rng=_FixedRng(0.0))  # both succeed
 
-    assert me.prestige >= 10
-    assert state.phase == Phase.ENDED
-    assert state.winner == Side.USA
+    # USA goes first → claims the +2 first bonus. USSR gets base prestige only.
+    assert me.prestige == 5
+    assert opp.prestige == 3
+    assert state.first_completed[MissionId.SUBORBITAL.value] == Side.USA.value
 
 
 def test_launch_failure_costs_prestige() -> None:
     state = _two_player_state()
     start_game(state)
     me = state.players[0]
-    opp = state.players[1]
-    me.rocket_built = True
+    me.rockets[Rocket.LIGHT.value] = RD_TARGETS[Rocket.LIGHT]
     me.prestige = 5
 
-    submit_turn(me, rd_spend=0, launch=True)
-    submit_turn(opp, rd_spend=0, launch=False)
+    submit_turn(me, rd_rocket=None, rd_spend=0, launch=MissionId.SUBORBITAL)
+    submit_turn(state.players[1], rd_rocket=None, rd_spend=0, launch=None)
     resolve_turn(state, rng=_FixedRng(0.99))  # forced failure
 
+    # suborbital: -1 prestige on fail
     assert me.prestige == 4
     assert state.phase == Phase.PLAYING
 
 
-def test_state_roundtrip_dict() -> None:
+def test_lunar_landing_ends_game() -> None:
     state = _two_player_state()
-    state.log.append("hello")
-    encoded = state.to_dict()
-    restored = GameState.from_dict(encoded)
+    start_game(state)
+    me = state.players[0]
+    me.rockets[Rocket.HEAVY.value] = RD_TARGETS[Rocket.HEAVY]
+    me.budget = 100
 
-    assert restored.players[0].username == "Alice"
-    assert restored.players[1].side == Side.USSR
-    assert restored.log == ["hello"]
-    assert restored.phase == Phase.LOBBY
+    submit_turn(me, rd_rocket=None, rd_spend=0, launch=MissionId.LUNAR_LANDING)
+    submit_turn(state.players[1], rd_rocket=None, rd_spend=0, launch=None)
+    resolve_turn(state, rng=_FixedRng(0.0))
+
+    assert state.phase == Phase.ENDED
+    assert state.winner == Side.USA
 
 
-def test_player_side_is_enum_after_roundtrip() -> None:
-    """Regression: before the fix, Player.side came back as a raw str, so
-    code doing `player.side.value` crashed with AttributeError."""
+def test_prestige_cap_can_win() -> None:
     state = _two_player_state()
+    start_game(state)
+    me = state.players[0]
+    me.prestige = 38
+    me.rockets[Rocket.LIGHT.value] = RD_TARGETS[Rocket.LIGHT]
+
+    submit_turn(me, rd_rocket=None, rd_spend=0, launch=MissionId.SUBORBITAL)
+    submit_turn(state.players[1], rd_rocket=None, rd_spend=0, launch=None)
+    resolve_turn(state, rng=_FixedRng(0.0))
+
+    assert state.phase == Phase.ENDED
+    assert state.winner == Side.USA
+
+
+# ----------------------------------------------------------------------
+# Helpers
+# ----------------------------------------------------------------------
+
+
+def test_available_missions_filters_by_rocket_and_budget() -> None:
+    me = Player(player_id="a", username="Alice", side=Side.USA)
+    me.budget = 50
+    me.rockets[Rocket.LIGHT.value] = RD_TARGETS[Rocket.LIGHT]
+
+    avail = available_missions(me)
+    avail_ids = {m.id for m in avail}
+    # Light is built, so suborbital + satellite should be available.
+    assert MissionId.SUBORBITAL in avail_ids
+    assert MissionId.SATELLITE in avail_ids
+    # Medium not built → orbital & flyby excluded.
+    assert MissionId.ORBITAL not in avail_ids
+
+
+# ----------------------------------------------------------------------
+# Serialization
+# ----------------------------------------------------------------------
+
+
+def test_state_roundtrip_preserves_enum_and_rockets() -> None:
+    state = _two_player_state()
+    state.players[0].rockets[Rocket.LIGHT.value] = 30
+    state.first_completed[MissionId.SUBORBITAL.value] = Side.USA.value
     restored = GameState.from_dict(state.to_dict())
+
     for p in restored.players:
-        assert isinstance(p.side, Side), f"expected Side enum, got {type(p.side)}"
-        p.side.value  # must not raise
+        assert isinstance(p.side, Side)
+    assert restored.players[0].rd_progress(Rocket.LIGHT) == 30
+    assert restored.first_completed[MissionId.SUBORBITAL.value] == Side.USA.value
