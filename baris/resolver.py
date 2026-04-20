@@ -16,6 +16,7 @@ from baris.state import (
     Phase,
     PRESTIGE_TO_WIN,
     Player,
+    ProgramTier,
     RD_TARGETS,
     Rocket,
     SAFETY_CAP,
@@ -84,7 +85,8 @@ def submit_turn(
         mission = MISSIONS_BY_ID[launch]
         can_afford = player.budget >= mission.launch_cost + player.pending_rd_spend
         crew_ok = not mission.manned or _select_crew(player, mission) is not None
-        if player.rocket_built(mission.rocket) and can_afford and crew_ok:
+        tier_ok = player.is_tier_unlocked(mission.tier)
+        if player.rocket_built(mission.rocket) and can_afford and crew_ok and tier_ok:
             player.pending_launch = launch.value
     player.turn_submitted = True
 
@@ -163,6 +165,11 @@ def _resolve_launch(player: Player, state: GameState, rng: random.Random) -> Non
             f"{player.username} aborts {mission.name} — prereqs no longer met."
         )
         return
+    if not player.is_tier_unlocked(mission.tier):
+        state.log.append(
+            f"{player.username} aborts {mission.name} — program not unlocked."
+        )
+        return
 
     crew: list[Astronaut] = []
     if mission.manned:
@@ -189,6 +196,12 @@ def _bump_safety(player: Player, rocket: Rocket, delta: int) -> None:
     current = player.safety(rocket)
     new_value = max(SAFETY_FLOOR, min(SAFETY_CAP, current + delta))
     player.rocket_safety[rocket.value] = new_value
+
+
+def _next_tier(tier: ProgramTier) -> ProgramTier:
+    order = [ProgramTier.ONE, ProgramTier.TWO, ProgramTier.THREE]
+    idx = order.index(tier)
+    return order[min(idx + 1, len(order) - 1)]
 
 
 def _select_crew(player: Player, mission: Mission) -> list[Astronaut] | None:
@@ -222,6 +235,10 @@ def _handle_mission_success(
         state.first_completed[mission.id.value] = player.side.value
         bonus = mission.first_bonus
     player.prestige += gain + bonus
+    previously_locked_next_tier = not player.is_tier_unlocked(_next_tier(mission.tier))
+    player.mission_successes[mission.id.value] = (
+        player.mission_successes.get(mission.id.value, 0) + 1
+    )
     crew_note = ""
     if crew:
         crew_note = f" [crew: {', '.join(a.name for a in crew)}]"
@@ -233,6 +250,11 @@ def _handle_mission_success(
     state.log.append(
         f"{player.username} — {mission.name}: SUCCESS (+{gain}{bonus_txt} prestige){crew_note}."
     )
+    # If this success unlocks the next tier, announce it.
+    if previously_locked_next_tier and player.is_tier_unlocked(_next_tier(mission.tier)):
+        from baris.state import program_name
+        next_program = program_name(_next_tier(mission.tier), player.side)
+        state.log.append(f"{player.username} unlocks the {next_program} program.")
     if mission.id == MissionId.MANNED_LUNAR_LANDING:
         state.phase = Phase.ENDED
         state.winner = player.side
@@ -303,9 +325,11 @@ def _check_victory(state: GameState) -> None:
 
 
 def available_missions(player: Player) -> list[Mission]:
-    """Missions the player could launch right now (rocket built, can afford, crew if needed)."""
+    """Missions the player could launch right now (rocket built, can afford, crew, tier unlocked)."""
     result: list[Mission] = []
     for m in MISSIONS_BY_ID.values():
+        if not player.is_tier_unlocked(m.tier):
+            continue
         if not player.rocket_built(m.rocket):
             continue
         if player.budget < m.launch_cost:

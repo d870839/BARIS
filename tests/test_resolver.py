@@ -22,6 +22,7 @@ from baris.state import (
     MissionId,
     Phase,
     Player,
+    ProgramTier,
     RD_TARGETS,
     Rocket,
     SAFETY_CAP,
@@ -33,6 +34,7 @@ from baris.state import (
     Side,
     Skill,
     STARTING_ASTRONAUTS,
+    program_name,
     rocket_display_name,
 )
 
@@ -114,6 +116,84 @@ def test_historical_roster_contents() -> None:
     assert "Tereshkova" in ussr
     assert "Gagarin" in ussr
     assert len(ussr) == 7
+
+
+def test_program_names_per_side() -> None:
+    assert program_name(ProgramTier.ONE,   Side.USA)  == "Mercury"
+    assert program_name(ProgramTier.TWO,   Side.USA)  == "Gemini"
+    assert program_name(ProgramTier.THREE, Side.USA)  == "Apollo"
+    assert program_name(ProgramTier.ONE,   Side.USSR) == "Vostok"
+    assert program_name(ProgramTier.TWO,   Side.USSR) == "Voskhod"
+    assert program_name(ProgramTier.THREE, Side.USSR) == "Soyuz"
+    assert program_name(ProgramTier.ONE,   None)      == "Tier 1"
+
+
+def test_tier_one_unlocked_by_default_others_locked() -> None:
+    p = Player(player_id="a", username="x", side=Side.USA)
+    assert p.is_tier_unlocked(ProgramTier.ONE)
+    assert not p.is_tier_unlocked(ProgramTier.TWO)
+    assert not p.is_tier_unlocked(ProgramTier.THREE)
+
+
+def test_tier_two_unlocks_after_tier_one_success() -> None:
+    state = _two_player_state()
+    start_game(state, rng=random.Random(1))
+    me = state.players[0]
+    me.rockets[Rocket.LIGHT.value] = RD_TARGETS[Rocket.LIGHT]
+
+    assert not me.is_tier_unlocked(ProgramTier.TWO)
+    submit_turn(me, rd_rocket=None, rd_spend=0, launch=MissionId.SUBORBITAL)
+    submit_turn(state.players[1], rd_rocket=None, rd_spend=0, launch=None)
+    resolve_turn(state, rng=_FixedRng(0.0))
+
+    assert me.is_tier_unlocked(ProgramTier.TWO)
+    assert me.mission_successes[MissionId.SUBORBITAL.value] == 1
+
+
+def test_tier_three_locked_without_tier_two_success() -> None:
+    state = _two_player_state()
+    start_game(state, rng=random.Random(1))
+    me = state.players[0]
+    # Fake a Tier 1 success so Tier 2 is unlocked, but no Tier 2 success → Tier 3 still locked.
+    me.mission_successes[MissionId.SUBORBITAL.value] = 1
+    me.rockets[Rocket.HEAVY.value] = RD_TARGETS[Rocket.HEAVY]
+    me.budget = 100
+
+    assert me.is_tier_unlocked(ProgramTier.TWO)
+    assert not me.is_tier_unlocked(ProgramTier.THREE)
+
+    submit_turn(me, rd_rocket=None, rd_spend=0, launch=MissionId.MANNED_LUNAR_LANDING)
+    # submit_turn should have refused the queue because Tier 3 is locked.
+    assert me.pending_launch is None
+
+
+def test_tier_three_unlocks_after_tier_two_success() -> None:
+    state = _two_player_state()
+    start_game(state, rng=random.Random(1))
+    me = state.players[0]
+    me.mission_successes[MissionId.SUBORBITAL.value] = 1  # Tier 1 success, so Tier 2 unlocked
+    me.rockets[Rocket.MEDIUM.value] = RD_TARGETS[Rocket.MEDIUM]
+    me.budget = 100
+    for a in me.astronauts:
+        a.endurance = 80
+
+    submit_turn(me, rd_rocket=None, rd_spend=0, launch=MissionId.MULTI_CREW_ORBITAL)
+    submit_turn(state.players[1], rd_rocket=None, rd_spend=0, launch=None)
+    resolve_turn(state, rng=_FixedRng(0.0))
+
+    assert me.is_tier_unlocked(ProgramTier.THREE)
+    # Log should mention the Apollo unlock.
+    assert any("Apollo" in line for line in state.log)
+
+
+def test_available_missions_respects_tier_lock() -> None:
+    me = Player(player_id="a", username="Alice", side=Side.USA)
+    me.budget = 200
+    me.rockets[Rocket.HEAVY.value] = RD_TARGETS[Rocket.HEAVY]
+    # Even with a Heavy rocket built, Tier 3 missions should be locked until a Tier 2 success.
+    avail = {m.id for m in available_missions(me)}
+    assert MissionId.LUNAR_LANDING not in avail
+    assert MissionId.MANNED_LUNAR_LANDING not in avail
 
 
 def test_rocket_display_name_is_per_side() -> None:
@@ -211,6 +291,9 @@ def test_manned_mission_rejected_without_enough_crew() -> None:
     me = state.players[0]
     me.rockets[Rocket.HEAVY.value] = RD_TARGETS[Rocket.HEAVY]
     me.budget = 100
+    # Unlock Tier 3 for this test so the tier gate doesn't mask the crew check.
+    me.mission_successes[MissionId.SUBORBITAL.value] = 1
+    me.mission_successes[MissionId.MULTI_CREW_ORBITAL.value] = 1
     # kill all but 2 astronauts — landing needs 3
     for a in me.astronauts[:STARTING_ASTRONAUTS - 2]:
         a.status = AstronautStatus.KIA.value
@@ -251,6 +334,8 @@ def test_manned_landing_success_ends_game() -> None:
     me = state.players[0]
     me.rockets[Rocket.HEAVY.value] = RD_TARGETS[Rocket.HEAVY]
     me.budget = 100
+    me.mission_successes[MissionId.SUBORBITAL.value] = 1
+    me.mission_successes[MissionId.MULTI_CREW_ORBITAL.value] = 1
     for a in me.astronauts:
         a.command = 100
 
@@ -268,6 +353,8 @@ def test_unmanned_landing_only_awards_prestige() -> None:
     me = state.players[0]
     me.rockets[Rocket.HEAVY.value] = RD_TARGETS[Rocket.HEAVY]
     me.budget = 100
+    me.mission_successes[MissionId.SUBORBITAL.value] = 1
+    me.mission_successes[MissionId.MULTI_CREW_ORBITAL.value] = 1
 
     submit_turn(me, rd_rocket=None, rd_spend=0, launch=MissionId.LUNAR_LANDING)
     submit_turn(state.players[1], rd_rocket=None, rd_spend=0, launch=None)

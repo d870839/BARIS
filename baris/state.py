@@ -49,8 +49,16 @@ class MissionId(str, Enum):
     LUNAR_ORBIT = "lunar_orbit"
     LUNAR_LANDING = "lunar_landing"
     MANNED_ORBITAL = "manned_orbital"
+    MULTI_CREW_ORBITAL = "multi_crew_orbital"
+    ORBITAL_EVA = "orbital_eva"
     MANNED_LUNAR_ORBIT = "manned_lunar_orbit"
     MANNED_LUNAR_LANDING = "manned_lunar_landing"
+
+
+class ProgramTier(str, Enum):
+    ONE = "1"   # Mercury / Vostok
+    TWO = "2"   # Gemini / Voskhod
+    THREE = "3" # Apollo / Soyuz
 
 
 @dataclass(frozen=True)
@@ -63,25 +71,39 @@ class Mission:
     prestige_success: int
     prestige_fail: int
     first_bonus: int
+    tier: ProgramTier = ProgramTier.ONE
     manned: bool = False
     crew_size: int = 0
     primary_skill: Skill | None = None
 
 
-# Ordered catalog — UI iterates this to build the mission list (indices map to keys 1-9).
+# Ordered catalog — UI iterates this to build the mission list (indices map to keys 1-0 and -).
 MISSIONS: tuple[Mission, ...] = (
-    Mission(MissionId.SUBORBITAL,          "Sub-orbital flight",    Rocket.LIGHT,  3, 0.85,  3, 1,  2),
-    Mission(MissionId.SATELLITE,           "Satellite launch",      Rocket.LIGHT,  5, 0.75,  5, 2,  3),
-    Mission(MissionId.ORBITAL,             "Orbital flight",        Rocket.MEDIUM, 8, 0.70,  7, 2,  4),
-    Mission(MissionId.LUNAR_PASS,          "Lunar flyby",           Rocket.MEDIUM,12, 0.60, 10, 3,  5),
-    Mission(MissionId.LUNAR_ORBIT,         "Lunar orbit",           Rocket.HEAVY, 18, 0.50, 15, 4,  7),
-    Mission(MissionId.LUNAR_LANDING,       "Lunar landing",         Rocket.HEAVY, 25, 0.35, 20, 5, 10),
-    Mission(MissionId.MANNED_ORBITAL,      "Manned orbital",        Rocket.MEDIUM,15, 0.55, 12, 4,  6,
-            manned=True,  crew_size=1, primary_skill=Skill.CAPSULE),
-    Mission(MissionId.MANNED_LUNAR_ORBIT,  "Manned lunar orbit",    Rocket.HEAVY, 25, 0.40, 20, 6,  9,
-            manned=True,  crew_size=2, primary_skill=Skill.COMMAND),
-    Mission(MissionId.MANNED_LUNAR_LANDING,"Manned lunar landing",  Rocket.HEAVY, 35, 0.25, 35, 8, 15,
-            manned=True,  crew_size=3, primary_skill=Skill.COMMAND),
+    # Tier 1 — Mercury / Vostok
+    Mission(MissionId.SUBORBITAL,           "Sub-orbital flight",   Rocket.LIGHT,  3, 0.85,  3, 1,  2,
+            tier=ProgramTier.ONE),
+    Mission(MissionId.SATELLITE,            "Satellite launch",     Rocket.LIGHT,  5, 0.75,  5, 2,  3,
+            tier=ProgramTier.ONE),
+    Mission(MissionId.ORBITAL,              "Orbital flight",       Rocket.MEDIUM, 8, 0.70,  7, 2,  4,
+            tier=ProgramTier.ONE),
+    Mission(MissionId.MANNED_ORBITAL,       "Manned orbital",       Rocket.MEDIUM,15, 0.55, 12, 4,  6,
+            tier=ProgramTier.ONE, manned=True, crew_size=1, primary_skill=Skill.CAPSULE),
+    # Tier 2 — Gemini / Voskhod
+    Mission(MissionId.MULTI_CREW_ORBITAL,   "Multi-crew orbital",   Rocket.MEDIUM,18, 0.55, 12, 4,  6,
+            tier=ProgramTier.TWO, manned=True, crew_size=2, primary_skill=Skill.ENDURANCE),
+    Mission(MissionId.ORBITAL_EVA,          "Orbital EVA",          Rocket.MEDIUM,20, 0.50, 14, 5,  7,
+            tier=ProgramTier.TWO, manned=True, crew_size=2, primary_skill=Skill.EVA),
+    Mission(MissionId.LUNAR_PASS,           "Lunar flyby",          Rocket.MEDIUM,12, 0.60, 10, 3,  5,
+            tier=ProgramTier.TWO),
+    Mission(MissionId.LUNAR_ORBIT,          "Lunar orbit",          Rocket.HEAVY, 18, 0.50, 15, 4,  7,
+            tier=ProgramTier.TWO),
+    # Tier 3 — Apollo / Soyuz
+    Mission(MissionId.LUNAR_LANDING,        "Lunar landing",        Rocket.HEAVY, 25, 0.35, 20, 5, 10,
+            tier=ProgramTier.THREE),
+    Mission(MissionId.MANNED_LUNAR_ORBIT,   "Manned lunar orbit",   Rocket.HEAVY, 25, 0.40, 20, 6,  9,
+            tier=ProgramTier.THREE, manned=True, crew_size=2, primary_skill=Skill.COMMAND),
+    Mission(MissionId.MANNED_LUNAR_LANDING, "Manned lunar landing", Rocket.HEAVY, 35, 0.25, 35, 8, 15,
+            tier=ProgramTier.THREE, manned=True, crew_size=3, primary_skill=Skill.COMMAND),
 )
 
 MISSIONS_BY_ID: dict[MissionId, Mission] = {m.id: m for m in MISSIONS}
@@ -129,12 +151,35 @@ HISTORICAL_ROCKET_NAMES: dict[str, dict[Rocket, str]] = {
     },
 }
 
+# Per-side historical program names per tier.
+# USA: Mercury (ONE), Gemini (TWO), Apollo (THREE).
+# USSR: Vostok (ONE), Voskhod (TWO), Soyuz (THREE).
+PROGRAM_NAMES: dict[str, dict[ProgramTier, str]] = {
+    Side.USA.value: {
+        ProgramTier.ONE:   "Mercury",
+        ProgramTier.TWO:   "Gemini",
+        ProgramTier.THREE: "Apollo",
+    },
+    Side.USSR.value: {
+        ProgramTier.ONE:   "Vostok",
+        ProgramTier.TWO:   "Voskhod",
+        ProgramTier.THREE: "Soyuz",
+    },
+}
+
 
 def rocket_display_name(rocket: Rocket, side: Side | None) -> str:
     """Return the historical per-side name if a side is known, else the class name."""
     if side is None:
         return rocket.value
     return HISTORICAL_ROCKET_NAMES.get(side.value, {}).get(rocket, rocket.value)
+
+
+def program_name(tier: ProgramTier, side: Side | None) -> str:
+    """Return the historical per-side program name if known, else a generic 'Tier N' label."""
+    if side is None:
+        return f"Tier {tier.value}"
+    return PROGRAM_NAMES.get(side.value, {}).get(tier, f"Tier {tier.value}")
 # Crew skill bonus to success: full crew averaging 100 in primary skill → +15%.
 CREW_MAX_BONUS = 0.15
 
@@ -187,6 +232,7 @@ class Player:
         default_factory=lambda: {r.value: 0 for r in Rocket}
     )
     astronauts: list[Astronaut] = field(default_factory=list)
+    mission_successes: dict[str, int] = field(default_factory=dict)
     turn_submitted: bool = False
     pending_rd_rocket: str | None = None   # Rocket.value or None
     pending_rd_spend: int = 0
@@ -203,6 +249,33 @@ class Player:
 
     def active_astronauts(self) -> list[Astronaut]:
         return [a for a in self.astronauts if a.active]
+
+    def has_any_success_in(self, tier: ProgramTier) -> bool:
+        """True if the player has at least one success in any mission of the given tier."""
+        from baris.state import MISSIONS_BY_ID  # self-reference, resolved at call-time
+        for mission_id_str, count in self.mission_successes.items():
+            if count <= 0:
+                continue
+            try:
+                mid = MissionId(mission_id_str)
+            except ValueError:
+                continue
+            mission = MISSIONS_BY_ID.get(mid)
+            if mission is not None and mission.tier == tier:
+                return True
+        return False
+
+    def unlocked_tiers(self) -> set[ProgramTier]:
+        """Tier 1 is always unlocked. Tier N unlocks once any Tier N-1 mission succeeded."""
+        tiers: set[ProgramTier] = {ProgramTier.ONE}
+        if self.has_any_success_in(ProgramTier.ONE):
+            tiers.add(ProgramTier.TWO)
+        if self.has_any_success_in(ProgramTier.TWO):
+            tiers.add(ProgramTier.THREE)
+        return tiers
+
+    def is_tier_unlocked(self, tier: ProgramTier) -> bool:
+        return tier in self.unlocked_tiers()
 
 
 @dataclass

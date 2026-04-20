@@ -14,16 +14,18 @@ from baris.state import (
     MissionId,
     Phase,
     Player,
+    ProgramTier,
     RD_TARGETS,
     Rocket,
     Side,
     Skill,
+    program_name,
     rocket_display_name,
 )
 
 log = logging.getLogger("baris.client")
 
-WINDOW_SIZE = (1200, 860)
+WINDOW_SIZE = (1200, 940)
 FPS = 60
 BG = (10, 14, 28)
 PANEL = (20, 28, 48)
@@ -40,6 +42,7 @@ MISSION_KEYS = {
     pygame.K_1: 0, pygame.K_2: 1, pygame.K_3: 2,
     pygame.K_4: 3, pygame.K_5: 4, pygame.K_6: 5,
     pygame.K_7: 6, pygame.K_8: 7, pygame.K_9: 8,
+    pygame.K_0: 9, pygame.K_MINUS: 10,
 }
 
 
@@ -149,7 +152,7 @@ class Client:
             idx = MISSION_KEYS[event.key]
             if idx < len(MISSIONS):
                 self.queued_mission = MISSIONS[idx].id
-        elif event.key in (pygame.K_0, pygame.K_ESCAPE):
+        elif event.key == pygame.K_ESCAPE:
             self.queued_mission = None
         elif event.key == pygame.K_RETURN:
             self.net.send(
@@ -211,9 +214,9 @@ class Client:
         if opp:
             self._draw_player_panel("OPPONENT", opp, (610, 70))
 
-        self._render_mission_list((30, 430))
+        self._render_mission_list((30, 470))
 
-        turn_y = 670
+        turn_y = 760
         if me and not me.turn_submitted:
             self._render_turn_controls((30, turn_y), me)
         elif me and me.turn_submitted:
@@ -235,14 +238,16 @@ class Client:
     def _draw_player_panel(self, label: str, player: Player, pos: tuple[int, int]) -> None:
         x, y = pos
         color = side_color(player.side)
-        pygame.draw.rect(self.screen, PANEL, (x - 8, y - 6, 570, 350), border_radius=6)
+        pygame.draw.rect(self.screen, PANEL, (x - 8, y - 6, 570, 390), border_radius=6)
         self._draw_text(f"{label}: {player.username}", (x, y), self.font, color)
         side_label = player.side.value if player.side else "?"
         self._draw_text(f"Side:      {side_label}", (x, y + 28), self.font, FG)
         self._draw_text(f"Budget:    {player.budget} MB", (x, y + 52), self.font, FG)
         self._draw_text(f"Prestige:  {player.prestige}", (x, y + 76), self.font, FG)
-        turn_txt = "submitted" if player.turn_submitted else "pending"
-        self._draw_text(f"Turn:      {turn_txt}", (x, y + 100), self.font_small, DIM)
+        unlocked_order = [t for t in (ProgramTier.ONE, ProgramTier.TWO, ProgramTier.THREE)
+                          if player.is_tier_unlocked(t)]
+        programs = ", ".join(program_name(t, player.side) for t in unlocked_order) or "-"
+        self._draw_text(f"Programs:  {programs}", (x, y + 100), self.font_small, FG)
 
         self._draw_text("R&D progress:", (x, y + 128), self.font_small, DIM)
         ry = y + 148
@@ -298,24 +303,29 @@ class Client:
         x, y = pos
         self._draw_text("MISSIONS", (x, y), self.font_big, HIGHLIGHT)
         header = (
-            f"{'#':<3}{'Mission':<22}{'Type':<7}{'Rocket':<10}{'Cost':<6}"
-            f"{'Succ%':<7}{'Presti':<8}{'First':<7}Status"
+            f"{'#':<4}{'Program':<10}{'Mission':<22}{'Type':<7}{'Rocket':<10}{'Cost':<6}"
+            f"{'Succ%':<7}{'Presti':<8}{'First':<8}Status"
         )
         self._draw_text(header, (x, y + 36), self.font_small, DIM)
         ly = y + 56
+        key_labels = [str(i + 1) for i in range(9)] + ["0", "-"]
         for idx, m in enumerate(MISSIONS):
             first_claimed = self.state.first_completed.get(m.id.value)
             first_txt = f"+{m.first_bonus} ({first_claimed})" if first_claimed else f"+{m.first_bonus}"
             status_parts: list[str] = []
             status_color = DIM
             if me:
+                tier_unlocked = me.is_tier_unlocked(m.tier)
                 built = me.rocket_built(m.rocket)
                 affordable = me.budget >= m.launch_cost
                 crew_ok = True
                 if m.manned:
                     active = me.active_astronauts()
                     crew_ok = len(active) >= m.crew_size
-                if not built:
+                if not tier_unlocked:
+                    status_parts.append(f"{program_name(m.tier, me.side)} LOCKED")
+                    status_color = DIM
+                elif not built:
                     status_parts.append(f"need {m.rocket.value}")
                 elif not affordable:
                     status_parts.append("low funds")
@@ -331,12 +341,16 @@ class Client:
             mtype = "manned" if m.manned else "unmanned"
             my_side = me.side if me else None
             rocket_display = rocket_display_name(m.rocket, my_side)
+            prog_display = program_name(m.tier, my_side)
+            key_label = key_labels[idx] if idx < len(key_labels) else "?"
             row = (
-                f"{idx + 1}  {m.name:<22}{mtype:<7}{rocket_display:<10}{m.launch_cost:<6}"
-                f"{int(m.base_success * 100):<7}{m.prestige_success:<8}{first_txt:<7}"
+                f"{key_label:<4}{prog_display:<10}{m.name:<22}{mtype:<7}{rocket_display:<10}"
+                f"{m.launch_cost:<6}{int(m.base_success * 100):<7}{m.prestige_success:<8}"
+                f"{first_txt:<8}"
             )
-            self._draw_text(row, (x, ly), self.font_small, FG)
-            self._draw_text(status, (x + 820, ly), self.font_small, status_color)
+            row_color = FG if me and me.is_tier_unlocked(m.tier) else DIM
+            self._draw_text(row, (x, ly), self.font_small, row_color)
+            self._draw_text(status, (x + 870, ly), self.font_small, status_color)
             ly += 20
 
     def _render_turn_controls(self, pos: tuple[int, int], me: Player) -> None:
@@ -348,7 +362,7 @@ class Client:
             (x, y + 34), self.font_small, DIM,
         )
         self._draw_text(
-            "1-9: queue mission   0/Esc: cancel   Enter: submit",
+            "1-9,0,-: queue mission   Esc: cancel   Enter: submit",
             (x, y + 52), self.font_small, DIM,
         )
         spend = min(self.rd_spend, me.budget)
