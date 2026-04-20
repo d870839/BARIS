@@ -12,10 +12,26 @@ Usage:
 from __future__ import annotations
 
 import argparse
+import os
 import subprocess
 import sys
 import time
 from pathlib import Path
+
+
+def _find_python(root: Path) -> str:
+    """Prefer the project venv's Python so subprocesses have pygame etc.
+    Falls back to the current interpreter if no venv is found."""
+    candidates = [
+        root / ".venv" / "Scripts" / "python.exe",  # Windows
+        root / ".venv" / "bin" / "python",          # Unix
+        root / "venv"  / "Scripts" / "python.exe",
+        root / "venv"  / "bin" / "python",
+    ]
+    for p in candidates:
+        if p.exists():
+            return str(p)
+    return sys.executable
 
 
 def main() -> None:
@@ -27,12 +43,17 @@ def main() -> None:
                         help="Client display names. Length drives number of clients unless --clients overrides.")
     parser.add_argument("--clients", type=int, default=None,
                         help="How many clients to spawn. Defaults to len(--names). Use 0 to launch only the server.")
+    parser.add_argument("--python", default=None,
+                        help="Python interpreter to launch subprocesses with. Default: project .venv if present, else this interpreter.")
     args = parser.parse_args()
 
-    python = sys.executable
     root = Path(__file__).resolve().parent.parent
+    python = args.python or _find_python(root)
     url = f"ws://localhost:{args.port}"
     n_clients = args.clients if args.clients is not None else len(args.names)
+
+    if python != sys.executable:
+        print(f"[dev] using interpreter: {python}")
 
     server_cmd = [python, "-m", "baris.server.main", "--port", str(args.port)]
     if args.debug:
