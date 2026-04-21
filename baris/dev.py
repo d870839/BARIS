@@ -44,6 +44,10 @@ def main() -> None:
                         help="Which client to spawn. '2d' = pygame (default), "
                              "'3d' = Ursina first-person facility. Requires the "
                              "3d deps: pip install -r requirements-3d.txt.")
+    parser.add_argument("--auto-ready", action="store_true",
+                        help="Have the spawned clients auto-ready in the lobby. "
+                             "Currently only the 3D client supports this flag; "
+                             "2D clients still need to press Enter in-lobby.")
     parser.add_argument("--names", nargs="*", default=["Alice", "Bob"],
                         help="Client display names. Length drives number of clients unless --clients overrides.")
     parser.add_argument("--clients", type=int, default=None,
@@ -75,10 +79,10 @@ def main() -> None:
         for i in range(n_clients):
             name = args.names[i] if i < len(args.names) else f"Player{i + 1}"
             print(f"[dev] starting {args.mode} client: {name}")
-            procs.append(subprocess.Popen(
-                [python, "-m", client_module, "--server", url, "--name", name],
-                cwd=root,
-            ))
+            client_cmd = [python, "-m", client_module, "--server", url, "--name", name]
+            if args.auto_ready and args.mode == "3d":
+                client_cmd.append("--auto-ready")
+            procs.append(subprocess.Popen(client_cmd, cwd=root))
             time.sleep(0.3)
 
         print("[dev] all launched. Close any window or hit Ctrl+C here to shut everything down.")

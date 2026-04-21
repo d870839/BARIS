@@ -58,16 +58,18 @@ INTERACT_RANGE = 8.0
 
 
 class BarisClient(Entity):
-    def __init__(self, server_url: str, username: str) -> None:
+    def __init__(self, server_url: str, username: str, auto_ready: bool = False) -> None:
         super().__init__()
         self.server_url = server_url
         self.username = username
+        self.auto_ready = auto_ready
         self.net = NetClient(server_url)
         self.net.start()
 
         self.state: GameState | None = None
         self.player_id: str | None = None
         self.joined_sent = False
+        self._auto_readied = False
 
         # Pending-turn selections mirrored from the 2D client semantics.
         self.rd_target: str | None = None     # Rocket.value or Module.value
@@ -270,6 +272,11 @@ class BarisClient(Entity):
             self.state = GameState.from_dict(msg["state"])
         elif mtype == protocol.STATE:
             self.state = GameState.from_dict(msg["state"])
+            if self.auto_ready and not self._auto_readied:
+                me = self.me()
+                if me is not None and self.state.phase == Phase.LOBBY and not me.ready:
+                    self._auto_readied = True
+                    self.net.send(protocol.READY)
             self._maybe_auto_open_lobby()
             self._maybe_start_launch_sequence()
             self._maybe_close_lobby_on_start()

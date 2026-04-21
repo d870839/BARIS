@@ -118,7 +118,16 @@ async def handle_ready(player: Player, ready: bool) -> None:
     if room.state.phase != Phase.LOBBY:
         return
     player.ready = ready
+    log.info(
+        "%s [%s] set ready=%s (%s/%s ready on opposing sides)",
+        player.username,
+        player.side.value if player.side else "?",
+        ready,
+        sum(1 for p in room.state.players if p.ready),
+        len(room.state.players),
+    )
     if can_start(room.state):
+        log.info("All players ready — starting game.")
         start_game(room.state, debug=room.debug)
 
 
