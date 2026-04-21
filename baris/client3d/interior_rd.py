@@ -213,8 +213,45 @@ class RDInterior:
 
     def _build_spend_station(self) -> None:
         """Two big console buttons on the west wall for -5 / +5 MB spend,
-        with a live readout between them."""
+        with a wall TV above showing the live queued spend."""
         x = -ROOM_WIDTH / 2 + 0.6
+        # Wall TV (mirrors the target TVs but mounted on the west wall so
+        # the screen face normal points +x into the room).
+        wall_x = -ROOM_WIDTH / 2
+        tv_y = 2.8
+        # Frame
+        Entity(
+            parent=self.root, model="cube",
+            position=(wall_x + 0.12, tv_y, 0),
+            scale=(0.1, TV_SCREEN_H + 0.2, TV_SCREEN_W + 1.0),
+            color=color.rgb32(40, 45, 55),
+        )
+        # Dark screen slightly in front of the frame.
+        Entity(
+            parent=self.root, model="cube",
+            position=(wall_x + 0.19, tv_y, 0),
+            scale=(0.02, TV_SCREEN_H, TV_SCREEN_W + 0.8),
+            color=color.rgb32(12, 16, 28),
+        )
+        # "SPEND" header above the big readout, rotated so it faces the room.
+        Text(
+            text="QUEUED  SPEND",
+            parent=self.root,
+            position=(wall_x + 0.22, tv_y + TV_SCREEN_H / 2 - 0.15, 0),
+            scale=4.5, origin=(0, 0),
+            rotation=(0, 90, 0),
+            color=color.rgb32(220, 225, 235),
+        )
+        # Big live readout.
+        self.spend_display = Text(
+            text="10 MB",
+            parent=self.root,
+            position=(wall_x + 0.22, tv_y, 0),
+            scale=12, origin=(0, 0),
+            rotation=(0, 90, 0),
+            color=color.rgb32(240, 200, 90),
+        )
+
         # A low console block the buttons sit on.
         Entity(
             parent=self.root, model="cube",
@@ -242,15 +279,6 @@ class RDInterior:
                 rotation=(0, 90, 0),
                 color=color.rgb32(240, 245, 250),
             )
-        # Spend readout above the console.
-        self.spend_display = Text(
-            text="SPEND  10 MB",
-            parent=self.root,
-            position=(x - 0.2, 2.6, 0),
-            scale=8, origin=(0, 0),
-            rotation=(0, 90, 0),
-            color=color.rgb32(240, 200, 90),
-        )
 
     def _build_exit(self) -> None:
         """A glowing 'EXIT' sign + trigger pedestal just inside the doorway."""
@@ -310,7 +338,7 @@ class RDInterior:
                 color.rgb32(240, 200, 90) if selected else color.rgb32(40, 45, 55)
             )
         if self.spend_display is not None:
-            self.spend_display.text = f"SPEND  {rd_spend} MB"
+            self.spend_display.text = f"{rd_spend} MB"
 
     def nearby_button(self, world_xz: tuple[float, float]) -> str | None:
         """Which physical button is within BUTTON_RANGE of the player, if any."""
