@@ -27,6 +27,7 @@ from baris import protocol
 from baris.client.net import NetClient
 from baris.client3d import launch as launch_scene
 from baris.client3d import panels_action, panels_info
+from baris.client3d.interior_rd import RDInterior
 from baris.state import (
     Architecture,
     GameState,
@@ -86,8 +87,19 @@ class BarisClient(Entity):
         # True once the lobby panel has auto-opened for this game.
         self._lobby_opened = False
 
+        # Interior-walk state: which building the player is currently inside,
+        # if any. None = outside in the main facility.
+        self.in_interior: str | None = None
+        # Remember where the player left the facility from, so exit drops
+        # them back on the right side of the building.
+        self._exit_return_pos: tuple[float, float, float] | None = None
+
         self._build_scene()
         self._build_hud()
+
+        # Pre-build the R&D interior off to the side. It's hidden until
+        # the player walks into the outdoor R&D Complex and presses E.
+        self.rd_interior = RDInterior(origin=(100.0, 0.0, 0.0))
 
     # ------------------------------------------------------------------
     # Scene
@@ -195,6 +207,10 @@ class BarisClient(Entity):
     def update(self) -> None:
         self._pump_network()
         self._update_prompt()
+        # Keep the R&D interior's wall TVs + spend display live so they
+        # reflect the most recent state / queued selections every frame.
+        if self.in_interior == "rd":
+            self.rd_interior.sync_state(self.me(), self.rd_target, self.rd_spend)
 
     def input(self, key: str) -> None:
         if self.panel_id == "result" and key in ("space", "enter", "escape"):
@@ -220,8 +236,18 @@ class BarisClient(Entity):
             self.mc_submit_turn()
             return
         if key == "e" and self.panel is None:
+            # Inside an interior: press physical buttons or walk out.
+            if self.in_interior == "rd":
+                self._press_rd_interior_button()
+                return
+            # Outside: approaching a building either enters its interior
+            # (R&D) or opens its 2D panel (everything else for now).
             nearby = self._nearby_interactive_building()
-            if nearby is not None:
+            if nearby is None:
+                return
+            if nearby._bid == "rd":
+                self._enter_rd_interior()
+            else:
                 self._open_panel(nearby._bid)
 
     # ------------------------------------------------------------------
@@ -300,6 +326,25 @@ class BarisClient(Entity):
         if self.state.phase == Phase.LOBBY:
             self.prompt_text.text = "Lobby open — pick a side and ready up"
             return
+        # Interior prompts override the outdoor proximity prompt — inside a
+        # walk-in building, we surface the nearest physical button instead.
+        if self.in_interior == "rd":
+            px, _, pz = self.player.position
+            bid = self.rd_interior.nearby_button((px, pz))
+            if bid is None:
+                self.prompt_text.text = "Walk up to a button and press E"
+            elif bid == "exit":
+                self.prompt_text.text = "[E] Exit R&D Complex"
+            elif bid.startswith("target:"):
+                pretty = bid.split(":", 1)[1]
+                self.prompt_text.text = f"[E] Set R&D target: {pretty}"
+            elif bid == "spend_plus":
+                self.prompt_text.text = "[E] +5 MB"
+            elif bid == "spend_minus":
+                self.prompt_text.text = "[E] -5 MB"
+            else:
+                self.prompt_text.text = ""
+            return
         if me.turn_submitted:
             self.prompt_text.text = "Turn submitted — waiting for opponent…"
             return
@@ -362,6 +407,48 @@ class BarisClient(Entity):
         current = self.panel_id
         self._close_panel_silent()
         self._open_panel(current)
+
+    # ------------------------------------------------------------------
+    # R&D interior — walkable room, not a panel
+    # ------------------------------------------------------------------
+    def _enter_rd_interior(self) -> None:
+        # Remember where the player was so exit can drop them back there.
+        self._exit_return_pos = tuple(self.player.position)
+        self.in_interior = "rd"
+        self.rd_interior.show()
+        self.rd_interior.sync_state(self.me(), self.rd_target, self.rd_spend)
+        self.player.position = self.rd_interior.entry_world_pos
+        # Keep the FPS controller active — pointer stays locked for mouselook.
+        mouse.locked = True
+        mouse.visible = False
+
+    def _exit_interior(self) -> None:
+        if self.in_interior == "rd":
+            self.rd_interior.hide()
+        self.in_interior = None
+        if self._exit_return_pos is not None:
+            self.player.position = self._exit_return_pos
+            self._exit_return_pos = None
+
+    def _press_rd_interior_button(self) -> None:
+        """Dispatch an E press while inside the R&D interior."""
+        px, _, pz = self.player.position
+        bid = self.rd_interior.nearby_button((px, pz))
+        if bid is None:
+            return
+        self.rd_interior.press_feedback(bid)
+        if bid == "exit":
+            self._exit_interior()
+            return
+        if bid.startswith("target:"):
+            self.rd_set_target(bid.split(":", 1)[1])
+            return
+        if bid == "spend_plus":
+            self.rd_change_spend(5)
+            return
+        if bid == "spend_minus":
+            self.rd_change_spend(-5)
+            return
 
     # ------------------------------------------------------------------
     # Lobby actions
@@ -471,6 +558,11 @@ class BarisClient(Entity):
         self.report_queue = own + other
         if not self.report_queue:
             return
+        # Make sure the player is standing on the main facility so the
+        # rocket animation is actually visible — otherwise they'd be
+        # locked inside a windowless room while their rocket lifts off.
+        if self.in_interior is not None:
+            self._exit_interior()
         self.report_idx = 0
         self._start_next_report()
 
