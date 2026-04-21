@@ -37,6 +37,31 @@ python -m baris.client.main --name Alice
 python -m baris.client.main --name Bob --server ws://HOST:8765
 ```
 
+## Experimental 3D client
+
+A first-person Ursina client is under `baris.client3d`. It talks to the same
+websocket server as the 2D client, so they can coexist — you can run one of
+each against the same game.
+
+Install (separate deps):
+```
+pip install -r requirements-3d.txt
+```
+
+Run against a running server:
+```
+# Terminal 1
+python -m baris.server.main --debug
+
+# Terminals 2 and 3
+python -m baris.client3d.main --name Alice
+python -m baris.client3d.main --name Bob --server ws://HOST:8765
+```
+
+Walk with **WASD** + mouse look. Approach Mission Control and press **E** to
+open the turn-submit panel; **Esc** closes. V1 only supports pass turns — R&D,
+missions, briefings, and the launch sequence still live in the 2D client.
+
 ## Controls
 
 **Lobby:**
