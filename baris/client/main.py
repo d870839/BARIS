@@ -167,7 +167,9 @@ class Client:
     def __init__(self, server_url: str, username: str) -> None:
         pygame.init()
         pygame.display.set_caption("BARIS — Race Into Space (remake)")
-        self.screen = pygame.display.set_mode(WINDOW_SIZE)
+        self.screen = pygame.display.set_mode(
+            WINDOW_SIZE, pygame.RESIZABLE | pygame.SCALED
+        )
         self.clock = pygame.time.Clock()
 
         self.server_url = server_url
