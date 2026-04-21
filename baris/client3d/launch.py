@@ -21,20 +21,50 @@ LIFTOFF_DURATION: float = 2.4
 
 
 def build_launch_pad() -> Entity:
-    """Concrete-ish pad with four scaffold arms around the ignition point."""
+    """Concrete apron + four red-striped scaffold arms — Saturn-V LC-39 vibes."""
     px, py, pz = PAD_POSITION
     pad = Entity(
         model="cube",
         position=(px, py, pz),
         scale=(5, PAD_HEIGHT, 5),
-        color=color.rgb(70, 70, 80),
+        color=color.rgb(165, 165, 175),
     )
+    # Pad edge trim (black-and-yellow caution stripe).
+    Entity(
+        model="cube",
+        position=(px, py + PAD_HEIGHT / 2 + 0.01, pz),
+        scale=(5.05, 0.02, 5.05),
+        color=color.rgb(40, 40, 45),
+    )
+    # Scaffold legs.
     for dx, dz in ((-2.2, -2.2), (2.2, -2.2), (-2.2, 2.2), (2.2, 2.2)):
         Entity(
             model="cube",
-            position=(px + dx, py + 2.5, pz + dz),
-            scale=(0.25, 5.5, 0.25),
-            color=color.rgb(90, 80, 70),
+            position=(px + dx, py + 2.8, pz + dz),
+            scale=(0.3, 6.0, 0.3),
+            color=color.rgb(210, 210, 215),
+        )
+        # Red hazard cap at the top of each leg.
+        Entity(
+            model="cube",
+            position=(px + dx, py + 5.6, pz + dz),
+            scale=(0.35, 0.3, 0.35),
+            color=color.rgb(210, 60, 60),
+        )
+    # Gantry crossbeams.
+    for z in (pz - 2.2, pz + 2.2):
+        Entity(
+            model="cube",
+            position=(px, py + 5.4, z),
+            scale=(4.8, 0.2, 0.2),
+            color=color.rgb(210, 210, 215),
+        )
+    for x in (px - 2.2, px + 2.2):
+        Entity(
+            model="cube",
+            position=(x, py + 5.4, pz),
+            scale=(0.2, 0.2, 4.8),
+            color=color.rgb(210, 210, 215),
         )
     return pad
 

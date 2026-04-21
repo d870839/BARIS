@@ -9,7 +9,10 @@ import logging
 from typing import Any
 
 from ursina import (
+    AmbientLight,
+    DirectionalLight,
     Entity,
+    Sky,
     Text,
     camera,
     color,
@@ -42,11 +45,12 @@ log = logging.getLogger("baris.client3d")
 
 
 # (id, label, (x, z), roof color, interactive)
+# NASA-era roof accents: saturated Space-Race palette against white bodies.
 BUILDINGS: tuple[tuple[str, str, tuple[float, float], Any, bool], ...] = (
-    ("mc",      "Mission Control",   (0.0,   20.0), color.rgb(240, 200, 90),  True),
-    ("rd",      "R&D Complex",       (0.0,  -20.0), color.rgb(110, 200, 120), True),
-    ("astro",   "Astronaut Complex", (20.0,   0.0), color.rgb(130, 160, 220), True),
-    ("library", "Library",           (-20.0,  0.0), color.rgb(200, 170, 110), True),
+    ("mc",      "Mission Control",   (0.0,   20.0), color.rgb(240, 130,  50), True),   # NASA orange
+    ("rd",      "R&D Complex",       (0.0,  -20.0), color.rgb( 60, 150,  90), True),   # lab green
+    ("astro",   "Astronaut Complex", (20.0,   0.0), color.rgb( 40, 100, 200), True),   # sky blue
+    ("library", "Library",           (-20.0,  0.0), color.rgb(200, 170, 110), True),   # archive tan
 )
 
 INTERACT_RANGE = 8.0
@@ -89,38 +93,77 @@ class BarisClient(Entity):
     # Scene
     # ------------------------------------------------------------------
     def _build_scene(self) -> None:
-        # Ground — collider='box' is required so the FirstPersonController
-        # has something to stand on; without it gravity drops the camera
-        # through the plane and the whole world disappears below you.
+        # Sky + basic lighting so the cubes read as 3D instead of flat
+        # silhouettes. Sun is high + slightly from the south for a Florida
+        # launch-complex feel; ambient keeps shadows from going full-black.
+        Sky(color=color.rgb(130, 180, 225))
+        AmbientLight(color=color.rgba(150, 150, 160, 255))
+        sun = DirectionalLight(shadows=False)
+        sun.look_at((0.3, -0.9, 0.4))
+
+        # Ground — concrete apron, with a collider so the FPC doesn't fall
+        # through. `texture_scale` tiles the built-in white_cube texture so
+        # the eye can pick up movement across the apron.
         Entity(
-            model="plane", scale=(140, 1, 140),
-            color=color.rgb(40, 50, 70),
-            texture="white_cube", texture_scale=(70, 70),
+            model="plane", scale=(160, 1, 160),
+            color=color.rgb(180, 180, 190),
+            texture="white_cube", texture_scale=(80, 80),
             collider="box",
         )
+        # Central plaza — slightly warmer concrete with a ring of paving.
         Entity(
-            model="plane", scale=(24, 1, 24), y=0.01,
-            color=color.rgb(70, 80, 100),
+            model="plane", scale=(26, 1, 26), y=0.02,
+            color=color.rgb(210, 205, 195),
+            texture="white_cube", texture_scale=(13, 13),
         )
+        # Painted taxi lines from the plaza out to each building (thin
+        # low-lying rectangles so they read as striping without a texture).
+        for (x, z) in ((0, 14), (0, -14), (14, 0), (-14, 0)):
+            Entity(
+                model="cube",
+                position=(x * 0.5, 0.03, z * 0.5),
+                scale=(1.0 if z == 0 else 0.5, 0.02, 1.0 if x == 0 else 0.5),
+                color=color.rgb(240, 225, 120),
+            )
+
         self.buildings: dict[str, Entity] = {}
         for bid, label, (x, z), roof, interactive in BUILDINGS:
+            # White NASA-facility body.
             body = Entity(
                 model="cube", position=(x, 3, z),
-                scale=(7, 6, 7), color=color.rgb(90, 100, 130),
+                scale=(7, 6, 7), color=color.rgb(245, 245, 248),
             )
             body._bid = bid
             body._interactive = interactive
             self.buildings[bid] = body
+            # Roof slab — saturated accent so each building is identifiable
+            # at a glance from across the complex.
             Entity(
                 parent=body, model="cube",
-                scale=(1.05, 0.15, 1.05),
+                scale=(1.05, 0.18, 1.05),
                 y=0.5, color=roof,
             )
+            # Trim strip between roof and body (a faint shadow line).
+            Entity(
+                parent=body, model="cube",
+                scale=(1.02, 0.03, 1.02),
+                y=0.4, color=color.rgb(180, 185, 200),
+            )
+            # Tiny ground-level doorway stripe on the player-facing side.
+            Entity(
+                parent=body, model="cube",
+                scale=(0.25, 0.4, 0.01),
+                y=-0.35, z=-0.505,
+                color=color.rgb(60, 70, 90),
+            )
+            # Floating sign: smaller so the building is the focal point.
             Text(
                 text=label, parent=body,
-                y=1.2, scale=14,
+                y=1.05, scale=4,
                 origin=(0, 0), billboard=True,
-                color=color.white,
+                color=color.rgb(30, 35, 45),
+                background=True,
+                background_color=color.rgba(255, 255, 255, 200),
             )
         # Launch pad + rocket
         self.pad = launch_scene.build_launch_pad()
