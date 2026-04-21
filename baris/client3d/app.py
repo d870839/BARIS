@@ -182,6 +182,33 @@ class BarisClient(Entity):
                 origin=(0, 0), billboard=True,
                 color=color.rgb32(30, 35, 45),
             )
+        # Big central SUBMIT TURN button on the plaza. Pedestal + cap +
+        # a billboard label. The cap's colour is swapped every frame by
+        # _tick_submit_button() to signal lock state.
+        submit_pos = (0.0, 0.0, 6.0)   # a bit north of spawn so it's in view
+        Entity(
+            model="cube",
+            position=(submit_pos[0], 0.7, submit_pos[2]),
+            scale=(1.6, 1.4, 1.6),
+            color=color.rgb32(65, 70, 85),
+            collider="box",
+        )
+        self.submit_button_cap = Entity(
+            model="cube",
+            position=(submit_pos[0], 1.5, submit_pos[2]),
+            scale=(1.2, 0.25, 1.2),
+            color=color.rgb32(90, 200, 110),
+        )
+        self.submit_button_cap._rest_y = self.submit_button_cap.y
+        self.submit_button_pos = submit_pos
+        Text(
+            text="SUBMIT TURN",
+            position=(submit_pos[0], 2.8, submit_pos[2]),
+            scale=6, origin=(0, 0),
+            billboard=True,
+            color=color.rgb32(240, 240, 245),
+        )
+
         # Launch pad + a rocket silhouette per class. Only one is visible
         # at a time; whichever matches the queued mission / R&D target
         # shows on the pad so the player always sees what's about to fly.
@@ -220,10 +247,47 @@ class BarisClient(Entity):
         self._pump_network()
         self._update_prompt()
         self._update_pad_rocket()
+        self._tick_submit_button()
+        # Once the player has committed the turn, there's nothing useful
+        # to do inside the R&D room — kick them back out so they see the
+        # rocket + submit lamp and can't tap the physical R&D buttons.
+        me = self.me()
+        if me is not None and me.turn_submitted and self.in_interior is not None:
+            self._exit_interior()
         # Keep the R&D interior's wall TVs + spend display live so they
         # reflect the most recent state / queued selections every frame.
         if self.in_interior == "rd":
             self.rd_interior.sync_state(self.me(), self.rd_target, self.rd_spend)
+
+    _SUBMIT_RANGE = 3.0
+
+    def _tick_submit_button(self) -> None:
+        """Recolour the big plaza button so the player can see at a glance
+        whether it's armed (green), disabled while waiting (grey), or the
+        game is not in a submittable state (dim red)."""
+        cap = self.submit_button_cap
+        if self.state is None or self.state.phase != Phase.PLAYING:
+            cap.color = color.rgb32(120, 60, 60)
+            return
+        me = self.me()
+        if me is None or me.turn_submitted:
+            cap.color = color.rgb32(110, 115, 125)
+            return
+        cap.color = color.rgb32(90, 200, 110)
+
+    def _near_submit_button(self) -> bool:
+        sx, _, sz = self.submit_button_pos
+        px, _, pz = self.player.position
+        return ((px - sx) ** 2 + (pz - sz) ** 2) ** 0.5 < self._SUBMIT_RANGE
+
+    def _press_submit_button(self) -> None:
+        """Big-button equivalent of the Mission Control panel's SUBMIT."""
+        if self._turn_locked():
+            return
+        cap = self.submit_button_cap
+        cap.animate_y(cap._rest_y - 0.1, duration=0.08)
+        invoke(setattr, cap, "y", cap._rest_y, delay=0.18)
+        self.mc_submit_turn()
 
     def _update_pad_rocket(self) -> None:
         """Swap which rocket silhouette sits on the pad based on what the
@@ -274,8 +338,14 @@ class BarisClient(Entity):
             if self.in_interior == "rd":
                 self._press_rd_interior_button()
                 return
-            # Outside: approaching a building either enters its interior
-            # (R&D) or opens its 2D panel (everything else for now).
+            # Outside: check the big central submit pedestal first so it
+            # always wins proximity even if you're near the plaza edge of
+            # a building.
+            if self._near_submit_button():
+                self._press_submit_button()
+                return
+            # Approaching a building either enters its interior (R&D) or
+            # opens its 2D panel (everything else for now).
             nearby = self._nearby_interactive_building()
             if nearby is None:
                 return
@@ -337,6 +407,17 @@ class BarisClient(Entity):
             return None
         return self.state.find_player(self.player_id)
 
+    def _turn_locked(self) -> bool:
+        """True once the player has submitted this turn. Every action that
+        mutates pending selections should early-out while this is set so
+        the player can't queue changes mid-resolve."""
+        me = self.me()
+        if self.state is None or me is None:
+            return True
+        if self.state.phase != Phase.PLAYING:
+            return True
+        return me.turn_submitted
+
     # ------------------------------------------------------------------
     # Proximity / prompts
     # ------------------------------------------------------------------
@@ -365,6 +446,11 @@ class BarisClient(Entity):
         if self.state.phase == Phase.LOBBY:
             self.prompt_text.text = "Lobby open — pick a side and ready up"
             return
+        # Locked: while the turn is already submitted, everything reads as
+        # waiting; buttons still render hover but actions are guarded.
+        if me.turn_submitted:
+            self.prompt_text.text = "Turn submitted — waiting for opponent…"
+            return
         # Interior prompts override the outdoor proximity prompt — inside a
         # walk-in building, we surface the nearest physical button instead.
         if self.in_interior == "rd":
@@ -384,8 +470,8 @@ class BarisClient(Entity):
             else:
                 self.prompt_text.text = ""
             return
-        if me.turn_submitted:
-            self.prompt_text.text = "Turn submitted — waiting for opponent…"
+        if self._near_submit_button():
+            self.prompt_text.text = "[E] SUBMIT TURN"
             return
         nearby = self._nearby_interactive_building()
         if nearby is not None:
@@ -525,10 +611,14 @@ class BarisClient(Entity):
     # R&D actions
     # ------------------------------------------------------------------
     def rd_set_target(self, value: str) -> None:
+        if self._turn_locked():
+            return
         self.rd_target = value
         self._refresh_current_panel()
 
     def rd_change_spend(self, delta: int) -> None:
+        if self._turn_locked():
+            return
         me = self.me()
         ceiling = me.budget if me is not None else 999
         self.rd_spend = max(0, min(ceiling, self.rd_spend + delta))
@@ -538,6 +628,8 @@ class BarisClient(Entity):
     # Mission Control actions
     # ------------------------------------------------------------------
     def mc_select_mission(self, mission_id: MissionId) -> None:
+        if self._turn_locked():
+            return
         if self.queued_mission == mission_id:
             self.queued_mission = None
             self.queued_objectives.clear()
@@ -549,6 +641,8 @@ class BarisClient(Entity):
         self._refresh_current_panel()
 
     def mc_toggle_objective(self, obj_id: ObjectiveId) -> None:
+        if self._turn_locked():
+            return
         if obj_id in self.queued_objectives:
             self.queued_objectives.discard(obj_id)
         else:
@@ -556,6 +650,8 @@ class BarisClient(Entity):
         self._refresh_current_panel()
 
     def mc_choose_architecture(self, arch: Architecture) -> None:
+        if self._turn_locked():
+            return
         self.net.send(protocol.CHOOSE_ARCHITECTURE, architecture=arch.value)
         self._refresh_current_panel()
 
