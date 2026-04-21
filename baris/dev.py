@@ -5,6 +5,7 @@ terminal; Ctrl+C shuts everything down cleanly.
 Usage:
     python -m baris.dev                    # normal: Alice + Bob join a fresh game
     python -m baris.dev --debug            # preseed players with fat budget and Apollo/Soyuz unlocked
+    python -m baris.dev --mode 3d --debug  # launch the Ursina 3D clients instead of the 2D pygame ones
     python -m baris.dev --port 9000 --names Red Blue
     python -m baris.dev --clients 0        # launch only the server (test with your own clients)
 """
@@ -39,6 +40,10 @@ def main() -> None:
     parser.add_argument("--port", type=int, default=8765)
     parser.add_argument("--debug", action="store_true",
                         help="Server preseeds players with full kit when the game starts.")
+    parser.add_argument("--mode", choices=["2d", "3d"], default="2d",
+                        help="Which client to spawn. '2d' = pygame (default), "
+                             "'3d' = Ursina first-person facility. Requires the "
+                             "3d deps: pip install -r requirements-3d.txt.")
     parser.add_argument("--names", nargs="*", default=["Alice", "Bob"],
                         help="Client display names. Length drives number of clients unless --clients overrides.")
     parser.add_argument("--clients", type=int, default=None,
@@ -51,6 +56,7 @@ def main() -> None:
     python = args.python or _find_python(root)
     url = f"ws://localhost:{args.port}"
     n_clients = args.clients if args.clients is not None else len(args.names)
+    client_module = "baris.client3d.main" if args.mode == "3d" else "baris.client.main"
 
     if python != sys.executable:
         print(f"[dev] using interpreter: {python}")
@@ -62,15 +68,15 @@ def main() -> None:
     procs: list[subprocess.Popen] = []
     try:
         print(f"[dev] starting server on {url} "
-              f"(debug={args.debug})...")
+              f"(debug={args.debug}, mode={args.mode})...")
         procs.append(subprocess.Popen(server_cmd, cwd=root))
         time.sleep(0.7)  # let the server bind the port before clients dial it
 
         for i in range(n_clients):
             name = args.names[i] if i < len(args.names) else f"Player{i + 1}"
-            print(f"[dev] starting client: {name}")
+            print(f"[dev] starting {args.mode} client: {name}")
             procs.append(subprocess.Popen(
-                [python, "-m", "baris.client.main", "--server", url, "--name", name],
+                [python, "-m", client_module, "--server", url, "--name", name],
                 cwd=root,
             ))
             time.sleep(0.3)
