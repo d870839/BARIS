@@ -182,10 +182,20 @@ class BarisClient(Entity):
                 origin=(0, 0), billboard=True,
                 color=color.rgb32(30, 35, 45),
             )
-        # Launch pad + rocket
+        # Launch pad + a rocket silhouette per class. Only one is visible
+        # at a time; whichever matches the queued mission / R&D target
+        # shows on the pad so the player always sees what's about to fly.
         self.pad = launch_scene.build_launch_pad()
-        self.rocket = launch_scene.build_rocket()
-        self.flame = launch_scene.build_exhaust_flame(self.rocket)
+        self.rockets: dict[str, Entity] = {}
+        self.flames: dict[str, Entity] = {}
+        for cls in ("Light", "Medium", "Heavy"):
+            rocket = launch_scene.build_rocket(cls)
+            flame = launch_scene.build_exhaust_flame(rocket)
+            rocket.enabled = False
+            self.rockets[cls] = rocket
+            self.flames[cls] = flame
+        self.current_rocket_class = "Light"
+        self.rockets["Light"].enabled = True
 
         self.player = FirstPersonController(position=(0, 2, -5), speed=8)
 
@@ -209,10 +219,32 @@ class BarisClient(Entity):
     def update(self) -> None:
         self._pump_network()
         self._update_prompt()
+        self._update_pad_rocket()
         # Keep the R&D interior's wall TVs + spend display live so they
         # reflect the most recent state / queued selections every frame.
         if self.in_interior == "rd":
             self.rd_interior.sync_state(self.me(), self.rd_target, self.rd_spend)
+
+    def _update_pad_rocket(self) -> None:
+        """Swap which rocket silhouette sits on the pad based on what the
+        player is about to launch. Priority: queued mission's effective
+        rocket > current R&D target > whatever was already showing.
+        No-op while a launch animation is actually playing."""
+        if self.launch_phase != "idle":
+            return
+        desired = None
+        me = self.me()
+        if self.queued_mission is not None and me is not None:
+            from baris.resolver import effective_rocket
+            mission = MISSIONS_BY_ID[self.queued_mission]
+            desired = effective_rocket(me, mission).value
+        elif self.rd_target in ("Light", "Medium", "Heavy"):
+            desired = self.rd_target
+        if desired is None or desired == self.current_rocket_class:
+            return
+        for cls, rkt in self.rockets.items():
+            rkt.enabled = (cls == desired)
+        self.current_rocket_class = desired
 
     def input(self, key: str) -> None:
         if self.panel_id == "result" and key in ("space", "enter", "escape"):
@@ -583,11 +615,17 @@ class BarisClient(Entity):
         # Own non-aborted launches get the ascend animation; everything else
         # jumps straight to the result panel.
         if is_own and not report.aborted:
+            # Make sure the rocket on the pad matches the class that
+            # actually launched (the player may have been showing R&D
+            # target instead of the queued mission's rocket).
+            self._show_only_rocket(report.rocket_class or self.current_rocket_class)
             self._close_panel_silent()
             self._enter_ui_mode()
             self.launch_phase = "ascend"
-            self.flame.enabled = True
-            self.rocket.animate_y(
+            rocket = self.rockets[self.current_rocket_class]
+            flame = self.flames[self.current_rocket_class]
+            flame.enabled = True
+            rocket.animate_y(
                 launch_scene.APEX_Y,
                 duration=launch_scene.LIFTOFF_DURATION,
                 curve=curve.linear,
@@ -596,12 +634,19 @@ class BarisClient(Entity):
         else:
             self._show_result_panel(report)
 
+    def _show_only_rocket(self, cls: str) -> None:
+        if cls not in self.rockets:
+            cls = "Light"
+        for name, rkt in self.rockets.items():
+            rkt.enabled = (name == cls)
+        self.current_rocket_class = cls
+
     def _show_result_after_ascend(self) -> None:
         if self.launch_phase != "ascend":
             return
         if self.report_idx >= len(self.report_queue):
             return
-        self.flame.enabled = False
+        self.flames[self.current_rocket_class].enabled = False
         self._show_result_panel(self.report_queue[self.report_idx])
 
     def _show_result_panel(self, report: LaunchReport) -> None:
@@ -620,8 +665,10 @@ class BarisClient(Entity):
             self._finish_launch_sequence()
 
     def _skip_ascend(self) -> None:
-        self.rocket.y = launch_scene.APEX_Y
-        self.flame.enabled = False
+        rocket = self.rockets[self.current_rocket_class]
+        flame = self.flames[self.current_rocket_class]
+        rocket.y = launch_scene.APEX_Y
+        flame.enabled = False
         if self.report_idx < len(self.report_queue):
             self._show_result_panel(self.report_queue[self.report_idx])
 
@@ -629,5 +676,8 @@ class BarisClient(Entity):
         self.report_queue = []
         self.report_idx = 0
         self.launch_phase = "idle"
-        launch_scene.reset_rocket(self.rocket, self.flame)
+        # Drop every rocket back onto the pad so whichever one gets shown
+        # next is at its rest height, not still floating at apex.
+        for cls, rkt in self.rockets.items():
+            launch_scene.reset_rocket(rkt, self.flames[cls])
         self._exit_ui_mode()
