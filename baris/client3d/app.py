@@ -12,7 +12,6 @@ from ursina import (
     AmbientLight,
     DirectionalLight,
     Entity,
-    Sky,
     Text,
     camera,
     color,
@@ -20,6 +19,7 @@ from ursina import (
     destroy,
     invoke,
     mouse,
+    window,
 )
 from ursina.prefabs.first_person_controller import FirstPersonController
 
@@ -93,13 +93,15 @@ class BarisClient(Entity):
     # Scene
     # ------------------------------------------------------------------
     def _build_scene(self) -> None:
-        # Sky + basic lighting so the cubes read as 3D instead of flat
-        # silhouettes. Sun is high + slightly from the south for a Florida
-        # launch-complex feel; ambient keeps shadows from going full-black.
-        Sky(color=color.rgb(130, 180, 225))
-        AmbientLight(color=color.rgba(150, 150, 160, 255))
+        # Sky via the window clear color — more reliable than Sky(color=...)
+        # across Ursina versions, which sometimes ignores the color arg and
+        # draws a default texture.
+        window.color = color.rgb(130, 180, 225)
+        # Soft ambient so facades don't blow out against the sky; a single
+        # directional sun adds side-lit shading without full shadows.
+        AmbientLight(color=color.rgba(70, 75, 85, 255))
         sun = DirectionalLight(shadows=False)
-        sun.look_at((0.3, -0.9, 0.4))
+        sun.look_at((0.3, -0.8, 0.4))
 
         # Ground — concrete apron, with a collider so the FPC doesn't fall
         # through. `texture_scale` tiles the built-in white_cube texture so
@@ -156,14 +158,15 @@ class BarisClient(Entity):
                 y=-0.35, z=-0.505,
                 color=color.rgb(60, 70, 90),
             )
-            # Floating sign: smaller so the building is the focal point.
+            # Floating sign. In Ursina's world-space, text scale is meters,
+            # so we keep it small — a tiny plate above the roof instead of
+            # a billboard that swallows the building. No `background=True`
+            # because that draws a huge world-space quad around the text.
             Text(
                 text=label, parent=body,
-                y=1.05, scale=4,
+                y=0.75, scale=1.8,
                 origin=(0, 0), billboard=True,
                 color=color.rgb(30, 35, 45),
-                background=True,
-                background_color=color.rgba(255, 255, 255, 200),
             )
         # Launch pad + rocket
         self.pad = launch_scene.build_launch_pad()
