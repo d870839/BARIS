@@ -89,10 +89,14 @@ class BarisClient(Entity):
     # Scene
     # ------------------------------------------------------------------
     def _build_scene(self) -> None:
+        # Ground — collider='box' is required so the FirstPersonController
+        # has something to stand on; without it gravity drops the camera
+        # through the plane and the whole world disappears below you.
         Entity(
             model="plane", scale=(140, 1, 140),
             color=color.rgb(40, 50, 70),
             texture="white_cube", texture_scale=(70, 70),
+            collider="box",
         )
         Entity(
             model="plane", scale=(24, 1, 24), y=0.01,
