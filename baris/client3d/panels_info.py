@@ -29,30 +29,19 @@ def _panel_shell(
     height: float = 0.8,
     title_color: tuple[int, int, int] = (240, 200, 90),
 ) -> tuple[Entity, float, float]:
-    """Common chrome: border + dark background + title banner.
-
-    Creation order = draw order, so later children render on top of
-    earlier ones. No explicit z offsets — in Ursina's camera.ui space,
-    positive z sits behind the camera's near plane and gets culled,
-    which is what was making the panel backgrounds vanish on v8.x.
+    """Single dark background quad + title. No separate border quad —
+    two overlapping quads at the same z z-fight and the panel flickers
+    colors between frames. If we want a frame later, draw four thin
+    strips around the edges instead of an outer-larger full quad.
 
     Returns (root, width, height) so the caller can place children
     relative to the panel size."""
     root = Entity(parent=parent)
-    # Border (slightly larger, drawn first so the smaller background
-    # paints on top and the outer rim reads as a frame).
-    Entity(
-        parent=root, model="quad",
-        scale=(width + 0.012, height + 0.012),
-        color=color.rgb32(90, 100, 140),
-    )
-    # Background
     Entity(
         parent=root, model="quad",
         scale=(width, height),
         color=color.rgb32(18, 26, 44),
     )
-    # Title
     Text(
         text=title, parent=root,
         position=(0, height / 2 - 0.05),
