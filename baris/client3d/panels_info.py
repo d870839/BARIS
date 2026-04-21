@@ -97,19 +97,27 @@ def build_lobby_panel(client: "BarisClient", parent: Entity) -> Entity:
                 color=color.rgb32(180, 180, 180),
             )
 
-    # Side buttons
+    # Side buttons — brighten the one that matches the player's current
+    # side so the pick is obvious after the state broadcast lands.
+    my_side = me.side if me is not None else None
+    usa_selected = my_side == Side.USA
+    ussr_selected = my_side == Side.USSR
     usa_btn = Button(
-        parent=root, text="Pick USA [1]",
+        parent=root,
+        text=("[X] USA [1]" if usa_selected else "    USA [1]"),
         position=(-0.17, -0.05), scale=(0.22, 0.055),
-        color=color.rgb32(40, 60, 110),
-        highlight_color=color.rgb32(70, 100, 160),
+        color=(color.rgb32(80, 140, 220) if usa_selected
+               else color.rgb32(35, 50, 90)),
+        highlight_color=color.rgb32(110, 170, 240),
     )
     usa_btn.on_click = lambda: client.lobby_pick_side("USA")
     ussr_btn = Button(
-        parent=root, text="Pick USSR [2]",
+        parent=root,
+        text=("[X] USSR [2]" if ussr_selected else "    USSR [2]"),
         position=(0.17, -0.05), scale=(0.22, 0.055),
-        color=color.rgb32(100, 40, 40),
-        highlight_color=color.rgb32(160, 70, 70),
+        color=(color.rgb32(220, 90, 90) if ussr_selected
+               else color.rgb32(90, 35, 35)),
+        highlight_color=color.rgb32(240, 120, 120),
     )
     ussr_btn.on_click = lambda: client.lobby_pick_side("USSR")
 

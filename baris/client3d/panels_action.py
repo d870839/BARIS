@@ -64,11 +64,21 @@ def build_rd_panel(client: "BarisClient", parent: Entity) -> Entity:
     x_positions = [-0.32, -0.11, 0.11, 0.32]
     for (tvalue, tlabel, hint), x in zip(targets, x_positions):
         selected = client.rd_target == tvalue
+        # Selected = bright green + "[X]" prefix so it reads at a glance;
+        # unselected = dim grey-blue with a clearly brighter hover tint so
+        # clicks don't look like the same colour dancing around.
+        if selected:
+            btn_color = color.rgb32(70, 170, 90)
+            btn_hl = color.rgb32(100, 210, 120)
+            label = f"[X] {tlabel} [{hint}]"
+        else:
+            btn_color = color.rgb32(45, 55, 75)
+            btn_hl = color.rgb32(85, 105, 140)
+            label = f"    {tlabel} [{hint}]"
         btn = Button(
-            parent=root, text=f"{tlabel} [{hint}]",
+            parent=root, text=label,
             position=(x, 0.19), scale=(0.19, 0.06),
-            color=color.rgb32(50, 80, 60) if selected else color.rgb32(34, 44, 70),
-            highlight_color=color.rgb32(80, 130, 100),
+            color=btn_color, highlight_color=btn_hl,
         )
         btn.on_click = (lambda v=tvalue: client.rd_set_target(v))
 
@@ -158,18 +168,26 @@ def build_mc_panel(client: "BarisClient", parent: Entity) -> Entity:
         eff_succ = effective_base_success(me, m)
         built = me.rocket_built(eff_rocket)
         mtype = "M" if m.manned else "U"
+        queued = client.queued_mission is not None and m.id == client.queued_mission
+        marker = "[X]" if queued else ("   " if built else "[!]")
         label = (
-            f"{mtype} {m.name[:18]:<18} {rocket_display_name(eff_rocket, me.side)[:10]:<10} "
+            f"{marker} {mtype} {m.name[:18]:<18} "
+            f"{rocket_display_name(eff_rocket, me.side)[:10]:<10} "
             f"{eff_cost:>3} MB  {int(eff_succ*100):>3}%"
         )
-        queued = client.queued_mission is not None and m.id == client.queued_mission
+        if queued:
+            fill = color.rgb32(70, 170, 90)
+            hl = color.rgb32(100, 210, 120)
+        elif built:
+            fill = color.rgb32(45, 55, 75)
+            hl = color.rgb32(85, 105, 140)
+        else:
+            fill = color.rgb32(80, 45, 45)   # unavailable — dim red
+            hl = color.rgb32(130, 70, 70)
         btn = Button(
             parent=root, text=label,
             position=(-0.22, y), scale=(0.4, 0.032),
-            color=(
-                color.rgb32(80, 100, 60) if queued
-                else (color.rgb32(34, 44, 70) if built else color.rgb32(55, 40, 40))
-            ),
+            color=fill, highlight_color=hl,
         )
         btn.on_click = (lambda mid=m.id: client.mc_select_mission(mid))
         y -= 0.035
