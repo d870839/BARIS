@@ -167,9 +167,19 @@ class Client:
     def __init__(self, server_url: str, username: str) -> None:
         pygame.init()
         pygame.display.set_caption("BARIS — Race Into Space (remake)")
-        self.screen = pygame.display.set_mode(
-            WINDOW_SIZE, pygame.RESIZABLE | pygame.SCALED
-        )
+        # Real OS window — resizable. Start at WINDOW_SIZE but fit the
+        # display if that's taller than the user's screen (laptops) so the
+        # bottom of the canvas isn't clipped on first open.
+        info = pygame.display.Info()
+        max_w = max(640, int(info.current_w * 0.9))
+        max_h = max(480, int(info.current_h * 0.85))
+        scale = min(1.0, max_w / WINDOW_SIZE[0], max_h / WINDOW_SIZE[1])
+        initial = (int(WINDOW_SIZE[0] * scale), int(WINDOW_SIZE[1] * scale))
+        self.window = pygame.display.set_mode(initial, pygame.RESIZABLE)
+        # All rendering goes to a fixed-size off-screen canvas; render()
+        # blits it scaled into self.window so the UI layout is resolution-
+        # independent and mouse coordinates are predictable.
+        self.screen = pygame.Surface(WINDOW_SIZE)
         self.clock = pygame.time.Clock()
 
         self.server_url = server_url
@@ -743,6 +753,12 @@ class Client:
         elif self.scene == ENDED:
             self._render_end()
         draw_text(self.screen, self.status, (30, WINDOW_SIZE[1] - 22), size=14, color=DIM)
+        # Scale the logical canvas to whatever the real window size is now.
+        win_size = self.window.get_size()
+        if win_size == WINDOW_SIZE:
+            self.window.blit(self.screen, (0, 0))
+        else:
+            pygame.transform.smoothscale(self.screen, win_size, self.window)
         pygame.display.flip()
 
     def _tick_launching(self) -> None:
@@ -1850,11 +1866,35 @@ class Client:
     # ------------------------------------------------------------------
     # Main loop
     # ------------------------------------------------------------------
+    def _translate_mouse_event(self, event: pygame.event.Event) -> pygame.event.Event:
+        """Map mouse coordinates from real-window space to logical canvas
+        space so buttons (which hit-test in canvas coords) fire correctly
+        after the user resizes the window."""
+        if event.type not in (
+            pygame.MOUSEMOTION, pygame.MOUSEBUTTONDOWN, pygame.MOUSEBUTTONUP,
+        ):
+            return event
+        win_w, win_h = self.window.get_size()
+        if (win_w, win_h) == WINDOW_SIZE:
+            return event
+        cx, cy = WINDOW_SIZE
+        sx, sy = event.pos
+        tx = int(sx * cx / max(1, win_w))
+        ty = int(sy * cy / max(1, win_h))
+        fields: dict = {"pos": (tx, ty)}
+        if event.type == pygame.MOUSEMOTION:
+            fields["rel"] = event.rel
+            fields["buttons"] = event.buttons
+        else:
+            fields["button"] = event.button
+        return pygame.event.Event(event.type, fields)
+
     def run(self) -> None:
         running = True
         while running:
             self.pump_network()
             for event in pygame.event.get():
+                event = self._translate_mouse_event(event)
                 if not self.handle_event(event):
                     running = False
                     break
