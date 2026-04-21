@@ -89,7 +89,16 @@ def build_launch_pad() -> Entity:
 
 def build_rocket(rocket_class: str = "Light") -> Entity:
     """Rocket silhouette sized by class. Children's scales are relative to
-    the body so fins / cone / porthole automatically get bigger on Heavy.
+    the body so fins / cone / porthole / paint automatically scale with
+    the rocket.
+
+    Detail set (rough Saturn-V / Titan II / Redstone cues):
+    - Alternating white body + thin black paint bands (roll patterns).
+    - A vertical black stripe on the 'nameplate' face of the first stage.
+    - A tapered, stepped nose cone (stacked narrower cubes).
+    - A bottom cluster of engine bells (1 for Light, 3 for Medium,
+      5 for Heavy).
+    - A launch-escape tower on Medium and Heavy.
 
     The returned entity carries `_rocket_class` and `_rest_y` so the caller
     can reset it after a liftoff animation without juggling globals."""
@@ -103,58 +112,149 @@ def build_rocket(rocket_class: str = "Light") -> Entity:
         model="cube",
         position=(px, base_y, pz),
         scale=(body_w, body_h, body_w),
-        color=color.white,
+        color=color.rgb32(245, 245, 245),
     )
     body._rocket_class = rocket_class
     body._rest_y = base_y
 
-    # Nose cone — cube narrowed at the top. Heights are fractions of the
-    # parent body height so the cone is proportionally short on a tall rocket.
-    cone_rel_h = 0.13
+    black = color.rgb32(22, 22, 26)
+    silver = color.rgb32(180, 180, 190)
+
+    # ------------------------------------------------------------------
+    # Paint pattern — horizontal roll-pattern bands on the body.
+    # ------------------------------------------------------------------
+    for band_y, band_h in (
+        (0.42, 0.02),       # just below the top shoulder
+        (0.22, 0.025),      # upper third
+        (-0.05, 0.04),      # waistline (thicker band)
+        (-0.28, 0.02),      # lower third
+    ):
+        Entity(
+            parent=body, model="cube",
+            scale=(1.04, band_h, 1.04),
+            y=band_y, color=black,
+        )
+    # "Nameplate" — a vertical black stripe on the front face.
     Entity(
         parent=body, model="cube",
-        scale=(0.72, cone_rel_h, 0.72),
-        y=0.5 + cone_rel_h / 2,
-        color=color.rgb32(210, 70, 70),
+        scale=(0.14, 0.55, 0.01),
+        y=0.05, z=-0.505,
+        color=black,
     )
-    # Faint dark ring under the cone for visual separation.
+    # Small silver trim square on the nameplate, suggesting roundels.
     Entity(
         parent=body, model="cube",
-        scale=(1.04, 0.008, 1.04),
-        y=0.5,
-        color=color.rgb32(40, 40, 45),
+        scale=(0.09, 0.09, 0.01),
+        y=0.25, z=-0.51,
+        color=silver,
     )
-    # Stage-separation rings.
+
+    # ------------------------------------------------------------------
+    # Stepped nose cone — three narrowing cubes stacked above the body.
+    # ------------------------------------------------------------------
+    cone_tiers = (
+        (0.78, 0.06, 0.53),
+        (0.58, 0.05, 0.585),
+        (0.36, 0.04, 0.628),
+    )
+    for w, h, y in cone_tiers:
+        Entity(
+            parent=body, model="cube",
+            scale=(w, h, w),
+            y=y, color=color.rgb32(235, 230, 225),
+        )
+    # Red ring where the command module joins the service module.
+    Entity(
+        parent=body, model="cube",
+        scale=(0.82, 0.01, 0.82),
+        y=0.503, color=color.rgb32(200, 60, 60),
+    )
+
+    # ------------------------------------------------------------------
+    # Launch-escape tower (only tall enough to matter on Medium / Heavy).
+    # ------------------------------------------------------------------
+    if rocket_class in ("Medium", "Heavy"):
+        Entity(
+            parent=body, model="cube",
+            scale=(0.04, 0.08, 0.04),
+            y=0.67, color=silver,
+        )
+        Entity(
+            parent=body, model="cube",
+            scale=(0.06, 0.03, 0.06),
+            y=0.715, color=color.rgb32(200, 60, 60),
+        )
+
+    # ------------------------------------------------------------------
+    # Stage-separation rings (kept in addition to the paint bands).
+    # ------------------------------------------------------------------
     for i in range(1, specs["stages"]):
         Entity(
             parent=body, model="cube",
-            scale=(1.04, 0.008, 1.04),
+            scale=(1.05, 0.01, 1.05),
             y=0.5 - i / specs["stages"],
-            color=color.rgb32(40, 40, 45),
+            color=black,
         )
-    # Porthole window — parented so it rides up with the body.
+
+    # ------------------------------------------------------------------
+    # Porthole (Command Module window).
+    # ------------------------------------------------------------------
     Entity(
         parent=body, model="sphere",
-        scale=(0.28 / body_w, 0.28 / body_h, 0.28 / body_w),
-        y=0.32, z=0.48,
+        scale=(0.22 / body_w, 0.22 / body_h, 0.22 / body_w),
+        y=0.38, z=0.48,
         color=color.rgb32(70, 130, 220),
     )
-    # Fins — proportional to body, x-axis pair.
+
+    # ------------------------------------------------------------------
+    # Fins (stabilisers on the first stage).
+    # ------------------------------------------------------------------
     for x in (-0.55, 0.55):
         Entity(
             parent=body, model="cube",
-            scale=(0.05, 0.13, 0.55),
+            scale=(0.05, 0.13, 0.6),
             position=(x, -0.4, 0),
             color=color.rgb32(180, 60, 60),
         )
-    # Fins — z-axis pair.
     for z in (-0.55, 0.55):
         Entity(
             parent=body, model="cube",
-            scale=(0.55, 0.13, 0.05),
+            scale=(0.6, 0.13, 0.05),
             position=(0, -0.4, z),
             color=color.rgb32(180, 60, 60),
         )
+
+    # ------------------------------------------------------------------
+    # Engine bells at the base — count scales with class (1 / 3 / 5),
+    # hinting at Redstone single engine up to Saturn V's F-1 cluster.
+    # ------------------------------------------------------------------
+    bell_positions: tuple[tuple[float, float], ...]
+    if rocket_class == "Light":
+        bell_positions = ((0.0, 0.0),)
+    elif rocket_class == "Medium":
+        bell_positions = ((0.0, 0.0), (-0.28, 0.0), (0.28, 0.0))
+    else:  # Heavy
+        bell_positions = (
+            (0.0, 0.0),
+            (-0.3, -0.3), (0.3, -0.3),
+            (-0.3, 0.3),  (0.3, 0.3),
+        )
+    bell_col = color.rgb32(55, 55, 65)
+    for ex, ez in bell_positions:
+        Entity(
+            parent=body, model="cube",
+            scale=(0.17, 0.06, 0.17),
+            position=(ex, -0.53, ez),
+            color=bell_col,
+        )
+        # Nozzle lip (slightly flared darker ring beneath each bell).
+        Entity(
+            parent=body, model="cube",
+            scale=(0.2, 0.015, 0.2),
+            position=(ex, -0.565, ez),
+            color=color.rgb32(30, 30, 35),
+        )
+
     return body
 
 
