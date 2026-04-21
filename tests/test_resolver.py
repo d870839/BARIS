@@ -28,6 +28,9 @@ from baris.state import (
     CREW_MAX_BONUS,
     GameState,
     HISTORICAL_ROSTERS,
+    LaunchReport,
+    ObjectiveId,
+    ObjectiveReport,
     MIN_RELIABILITY_TO_LAUNCH,
     MISSIONS_BY_ID,
     MissionId,
@@ -1018,3 +1021,185 @@ def test_state_roundtrip_preserves_astronauts() -> None:
     assert isinstance(restored.players[0].astronauts[0], Astronaut)
     assert restored.players[0].astronauts[0].status == AstronautStatus.KIA.value
     assert len(restored.players[0].active_astronauts()) == STARTING_ASTRONAUTS - 1
+
+
+# ----------------------------------------------------------------------
+# LaunchReport — per-mission data the client uses to animate launch scenes
+# ----------------------------------------------------------------------
+
+
+def test_no_launch_produces_no_report() -> None:
+    state = _two_player_state()
+    start_game(state, rng=random.Random(1))
+    submit_turn(state.players[0], rd_rocket=None, rd_spend=0, launch=None)
+    submit_turn(state.players[1], rd_rocket=None, rd_spend=0, launch=None)
+    resolve_turn(state, rng=_FixedRng(0.0))
+    assert state.last_launches == []
+
+
+def test_successful_unmanned_launch_produces_report() -> None:
+    state = _two_player_state()
+    start_game(state, rng=random.Random(1))
+    me = state.players[0]
+    me.reliability[Rocket.LIGHT.value] = 70
+
+    submit_turn(me, rd_rocket=None, rd_spend=0, launch=MissionId.SUBORBITAL)
+    submit_turn(state.players[1], rd_rocket=None, rd_spend=0, launch=None)
+    resolve_turn(state, rng=_FixedRng(0.0))
+
+    assert len(state.last_launches) == 1
+    r = state.last_launches[0]
+    assert r.side == Side.USA.value
+    assert r.username == "Alice"
+    assert r.mission_id == MissionId.SUBORBITAL.value
+    assert r.success is True
+    assert r.aborted is False
+    assert r.manned is False
+    assert r.crew == []
+    assert r.first_claimed is True
+    # 3 base + 2 first bonus
+    assert r.prestige_delta == 5
+    assert r.rocket == "Redstone"  # USA side display name
+    assert r.rocket_class == Rocket.LIGHT.value
+    # Reliability before the launch == 70; successful flight +5 → 75.
+    assert r.reliability_before == 70
+    assert r.reliability_after == 75
+
+
+def test_failed_unmanned_launch_report() -> None:
+    state = _two_player_state()
+    start_game(state, rng=random.Random(1))
+    me = state.players[0]
+    me.reliability[Rocket.LIGHT.value] = 70
+    me.prestige = 10
+
+    submit_turn(me, rd_rocket=None, rd_spend=0, launch=MissionId.SUBORBITAL)
+    submit_turn(state.players[1], rd_rocket=None, rd_spend=0, launch=None)
+    resolve_turn(state, rng=_FixedRng(0.99))  # forced failure
+
+    r = state.last_launches[0]
+    assert r.success is False
+    assert r.first_claimed is False
+    # suborbital prestige_fail = 1
+    assert r.prestige_delta == -1
+    # unmanned failure adds +2 reliability from post-flight analysis.
+    assert r.reliability_after == r.reliability_before + 2
+
+
+def test_failed_manned_launch_captures_deaths_and_budget_cut() -> None:
+    """Feed a sequence RNG so the success roll fails and every crew-death roll trips."""
+
+    class _SeqRng:
+        def __init__(self, values):
+            self.values = list(values)
+            self._r = random.Random(1)
+
+        def random(self) -> float:
+            return self.values.pop(0)
+
+        def randint(self, a: int, b: int) -> int:
+            return self._r.randint(a, b)
+
+        def choice(self, seq):
+            return self._r.choice(seq)
+
+    state = _two_player_state()
+    start_game(state, rng=random.Random(1))
+    me = state.players[0]
+    me.reliability[Rocket.MEDIUM.value] = 70
+    me.budget = 200
+    me.prestige = 30
+    for a in me.astronauts:
+        a.capsule = 50
+
+    submit_turn(me, rd_rocket=None, rd_spend=0, launch=MissionId.MANNED_ORBITAL)
+    submit_turn(state.players[1], rd_rocket=None, rd_spend=0, launch=None)
+    # success roll high (fail), death roll low (crew dies).
+    resolve_turn(state, rng=_SeqRng([0.99, 0.01]))
+
+    r = state.last_launches[0]
+    assert r.success is False
+    assert r.manned is True
+    assert len(r.crew) == 1
+    assert r.deaths == r.crew
+    assert r.budget_cut == 30
+
+
+def test_manned_lunar_landing_success_marks_ended_game() -> None:
+    state = _two_player_state()
+    start_game(state, rng=random.Random(1))
+    me = state.players[0]
+    me.reliability[Rocket.HEAVY.value] = 70
+    me.budget = 100
+    me.mission_successes[MissionId.SUBORBITAL.value] = 1
+    me.mission_successes[MissionId.MULTI_CREW_ORBITAL.value] = 1
+    choose_architecture(me, Architecture.LOR)
+    for a in me.astronauts:
+        a.command = 100
+
+    submit_turn(me, rd_rocket=None, rd_spend=0, launch=MissionId.MANNED_LUNAR_LANDING)
+    submit_turn(state.players[1], rd_rocket=None, rd_spend=0, launch=None)
+    resolve_turn(state, rng=_FixedRng(0.0))
+
+    r = state.last_launches[0]
+    assert r.success is True
+    assert r.ended_game is True
+
+
+def test_objective_success_recorded_in_report() -> None:
+    state = _two_player_state()
+    start_game(state, rng=random.Random(1))
+    me = state.players[0]
+    me.reliability[Rocket.MEDIUM.value] = 70
+    me.budget = 100
+    for a in me.astronauts:
+        a.capsule = 80
+        a.eva = 100  # guarantee EVA objective clears
+        a.endurance = 80
+
+    submit_turn(me, rd_rocket=None, rd_spend=0,
+                launch=MissionId.MANNED_ORBITAL, objectives=[ObjectiveId.EVA])
+    submit_turn(state.players[1], rd_rocket=None, rd_spend=0, launch=None)
+    resolve_turn(state, rng=_FixedRng(0.0))
+
+    r = state.last_launches[0]
+    assert r.success is True
+    assert len(r.objectives) == 1
+    obj = r.objectives[0]
+    assert obj.objective_id == ObjectiveId.EVA.value
+    assert obj.success is True
+    assert obj.prestige_delta == 4  # MANNED_ORBITAL EVA bonus
+
+
+def test_resolve_turn_clears_previous_last_launches() -> None:
+    state = _two_player_state()
+    start_game(state, rng=random.Random(1))
+    me = state.players[0]
+    me.reliability[Rocket.LIGHT.value] = 70
+
+    submit_turn(me, rd_rocket=None, rd_spend=0, launch=MissionId.SUBORBITAL)
+    submit_turn(state.players[1], rd_rocket=None, rd_spend=0, launch=None)
+    resolve_turn(state, rng=_FixedRng(0.0))
+    assert len(state.last_launches) == 1
+
+    # Second turn: nobody launches. last_launches should be cleared.
+    submit_turn(me, rd_rocket=None, rd_spend=0, launch=None)
+    submit_turn(state.players[1], rd_rocket=None, rd_spend=0, launch=None)
+    resolve_turn(state, rng=_FixedRng(0.0))
+    assert state.last_launches == []
+
+
+def test_launch_report_roundtrip_through_state_dict() -> None:
+    state = _two_player_state()
+    start_game(state, rng=random.Random(1))
+    me = state.players[0]
+    me.reliability[Rocket.LIGHT.value] = 70
+    submit_turn(me, rd_rocket=None, rd_spend=0, launch=MissionId.SUBORBITAL)
+    submit_turn(state.players[1], rd_rocket=None, rd_spend=0, launch=None)
+    resolve_turn(state, rng=_FixedRng(0.0))
+
+    restored = GameState.from_dict(state.to_dict())
+    assert len(restored.last_launches) == 1
+    assert isinstance(restored.last_launches[0], LaunchReport)
+    assert restored.last_launches[0].mission_id == MissionId.SUBORBITAL.value
+    assert restored.last_launches[0].success is True

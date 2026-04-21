@@ -37,6 +37,7 @@ from baris.state import (
     Architecture,
     Astronaut,
     GameState,
+    LaunchReport,
     MissionId,
     Module,
     ObjectiveId,
@@ -84,7 +85,13 @@ MENU = "menu"
 CONNECTING = "connecting"
 LOBBY = "lobby"
 GAME = "game"
+BRIEFING = "briefing"
+LAUNCHING = "launching"
 ENDED = "ended"
+
+# Launch-sequence timing (ms). Ascend runs for ASCEND_DURATION_MS before
+# auto-advancing to the RESULT sub-phase; results wait for user input.
+ASCEND_DURATION_MS = 2400
 
 # Tabs (within GAME scene)
 TAB_HUB        = "hub"
@@ -187,7 +194,18 @@ class Client:
         self.game_buttons: dict[str, Button] = {}
         self.mission_buttons: list[Button] = []
         self.hub_buttons: dict[str, Button] = {}
+        self.briefing_buttons: list[Button] = []
+        self.launching_buttons: list[Button] = []
         self.end_buttons: list[Button] = []
+
+        # Launch-sequence playback state.
+        self.report_queue: list[LaunchReport] = []
+        self.report_idx: int = 0
+        self.launch_phase: str = "ascend"   # "ascend" | "result"
+        self.launch_phase_start_ms: int = 0
+        # Identity of the last resolve we've already animated so repeat state
+        # broadcasts (e.g. after READY / CHOOSE_SIDE) don't replay the scene.
+        self._consumed_launch_sig: tuple | None = None
 
     # ------------------------------------------------------------------
     # Scene transitions
@@ -204,6 +222,10 @@ class Client:
         self.player_id = None
         self.joined_sent = False
         self.queued_mission = None
+        self.queued_objectives.clear()
+        self.report_queue = []
+        self.report_idx = 0
+        self._consumed_launch_sig = None
         self.status = ""
         self.scene = MENU
 
@@ -217,6 +239,53 @@ class Client:
         self.game_buttons = self._build_game_buttons()
         self.mission_buttons = self._build_mission_buttons()
         self.hub_buttons = self._build_hub_buttons()
+
+    def _enter_briefing(self) -> None:
+        self.scene = BRIEFING
+        self.briefing_buttons = self._build_briefing_buttons()
+
+    def _enter_launching(self, reports: list[LaunchReport]) -> None:
+        """Seed the animation queue (own launch first, opponent's after) and
+        jump to the full-screen launch-sequence scene."""
+        me = self._me()
+        my_side = me.side.value if me and me.side else None
+        own = [r for r in reports if my_side and r.side == my_side]
+        other = [r for r in reports if not my_side or r.side != my_side]
+        self.report_queue = own + other
+        if not self.report_queue:
+            return
+        self.report_idx = 0
+        self._enter_current_report()
+        self.launching_buttons = self._build_launching_buttons()
+        self.scene = LAUNCHING
+
+    def _enter_current_report(self) -> None:
+        """Reset phase + timer for the report at self.report_idx.
+        Aborted reports skip straight to RESULT (no countdown to show)."""
+        report = self.report_queue[self.report_idx]
+        self.launch_phase = "result" if report.aborted else "ascend"
+        self.launch_phase_start_ms = pygame.time.get_ticks()
+
+    def _advance_launch_sequence(self) -> None:
+        """User pressed space / clicked 'continue'. Skip to result if still
+        ascending; otherwise advance to the next report or finish."""
+        if self.launch_phase == "ascend":
+            self.launch_phase = "result"
+            self.launch_phase_start_ms = pygame.time.get_ticks()
+            return
+        self.report_idx += 1
+        if self.report_idx >= len(self.report_queue):
+            self._finish_launch_sequence()
+        else:
+            self._enter_current_report()
+
+    def _finish_launch_sequence(self) -> None:
+        self.report_queue = []
+        self.report_idx = 0
+        if self.state and self.state.phase == Phase.ENDED:
+            self._enter_ended()
+        else:
+            self.scene = GAME
 
     def _enter_ended(self) -> None:
         self.scene = ENDED
@@ -311,6 +380,17 @@ class Client:
             buttons[f"hub_{bid}"] = Button(pygame.Rect(x, y, tile_w, tile_h), label)
         return buttons
 
+    def _build_briefing_buttons(self) -> list[Button]:
+        cx = WINDOW_SIZE[0] // 2
+        return [
+            Button(pygame.Rect(cx + 30, 860, 260, 56), "LAUNCH", key_hint="Enter"),
+            Button(pygame.Rect(cx - 290, 860, 260, 56), "Abort", key_hint="Esc"),
+        ]
+
+    def _build_launching_buttons(self) -> list[Button]:
+        cx = WINDOW_SIZE[0] // 2
+        return [Button(pygame.Rect(cx - 120, 880, 240, 46), "Continue", key_hint="Space")]
+
     def _build_end_buttons(self) -> list[Button]:
         cx = WINDOW_SIZE[0] // 2
         return [Button(pygame.Rect(cx - 150, 810, 300, 55), "RETURN TO MENU")]
@@ -341,9 +421,28 @@ class Client:
                 me = self._me()
                 if me is None or me.turn_submitted:
                     self.queued_mission = None
-                if self.state.phase == Phase.PLAYING and self.scene != GAME:
+                if self.state.phase == Phase.PLAYING and self.scene not in (
+                    GAME, BRIEFING, LAUNCHING,
+                ):
                     self._enter_game()
-                elif self.state.phase == Phase.ENDED and self.scene != ENDED:
+                # Detect a freshly-resolved turn with launches to animate.
+                # We guard against re-firing on unrelated state broadcasts by
+                # remembering the (year, season, phase) tuple we've already
+                # consumed — last_launches is cleared on every resolve, so a
+                # repeat with the same sig always has the same content.
+                current_sig = (
+                    self.state.year, self.state.season.value, self.state.phase.value,
+                )
+                if (
+                    self.state.last_launches
+                    and current_sig != self._consumed_launch_sig
+                ):
+                    self._consumed_launch_sig = current_sig
+                    self._enter_launching(self.state.last_launches)
+                elif self.state.phase == Phase.ENDED and self.scene not in (
+                    ENDED, LAUNCHING,
+                ):
+                    # Game ended (on prestige) with no launch to animate.
                     self._enter_ended()
             elif mtype == protocol.ERROR:
                 self.status = f"Error: {msg.get('message', '?')}"
@@ -372,6 +471,10 @@ class Client:
             return self._handle_lobby_event(event)
         if self.scene == GAME:
             return self._handle_game_event(event)
+        if self.scene == BRIEFING:
+            return self._handle_briefing_event(event)
+        if self.scene == LAUNCHING:
+            return self._handle_launching_event(event)
         if self.scene == ENDED:
             return self._handle_end_event(event)
         return True
@@ -558,6 +661,15 @@ class Client:
         return True
 
     def _submit_turn(self, me: Player) -> None:
+        """Open the briefing screen if the player queued a mission; otherwise
+        (R&D-only turns) skip straight to sending END_TURN."""
+        if self.queued_mission is not None:
+            self._enter_briefing()
+            return
+        self._send_end_turn(me)
+
+    def _send_end_turn(self, me: Player) -> None:
+        """Actually wire the turn over the network and clear the queue."""
         payload: dict[str, object] = {
             "rd_spend": min(self.rd_spend, me.budget),
             "launch": self.queued_mission.value if self.queued_mission else None,
@@ -570,6 +682,36 @@ class Client:
         self.net.send(protocol.END_TURN, **payload)
         self.queued_mission = None
         self.queued_objectives.clear()
+
+    def _handle_briefing_event(self, event: pygame.event.Event) -> bool:
+        me = self._me()
+        if me is None:
+            return True
+        # buttons[0] = LAUNCH, buttons[1] = Abort
+        if self.briefing_buttons[0].handle_event(event):
+            self._send_end_turn(me)
+            self.scene = GAME
+            return True
+        if self.briefing_buttons[1].handle_event(event):
+            self.scene = GAME
+            return True
+        if event.type == pygame.KEYDOWN:
+            if event.key == pygame.K_RETURN:
+                self._send_end_turn(me)
+                self.scene = GAME
+            elif event.key == pygame.K_ESCAPE:
+                self.scene = GAME
+        return True
+
+    def _handle_launching_event(self, event: pygame.event.Event) -> bool:
+        if self.launching_buttons and self.launching_buttons[0].handle_event(event):
+            self._advance_launch_sequence()
+            return True
+        if event.type == pygame.KEYDOWN and event.key in (
+            pygame.K_SPACE, pygame.K_RETURN, pygame.K_ESCAPE,
+        ):
+            self._advance_launch_sequence()
+        return True
 
     def _handle_end_event(self, event: pygame.event.Event) -> bool:
         if self.end_buttons[0].handle_event(event):
@@ -591,10 +733,24 @@ class Client:
             self._render_lobby()
         elif self.scene == GAME:
             self._render_game()
+        elif self.scene == BRIEFING:
+            self._render_briefing()
+        elif self.scene == LAUNCHING:
+            self._tick_launching()
+            self._render_launching()
         elif self.scene == ENDED:
             self._render_end()
         draw_text(self.screen, self.status, (30, WINDOW_SIZE[1] - 22), size=14, color=DIM)
         pygame.display.flip()
+
+    def _tick_launching(self) -> None:
+        """Auto-advance from ascend → result once the ascend timer elapses."""
+        if not self.report_queue or self.launch_phase != "ascend":
+            return
+        now = pygame.time.get_ticks()
+        if now - self.launch_phase_start_ms >= ASCEND_DURATION_MS:
+            self.launch_phase = "result"
+            self.launch_phase_start_ms = now
 
     # --- menu -----------------------------------------------------------
     def _render_menu(self) -> None:
@@ -1283,6 +1439,391 @@ class Client:
         skill_key: Skill = mission.primary_skill or Skill.COMMAND
         ranked = sorted(active, key=lambda a: a.skill(skill_key), reverse=True)
         return ranked[:mission.crew_size]
+
+    # --- briefing scene -------------------------------------------------
+    def _render_briefing(self) -> None:
+        assert self.state is not None
+        me = self._me()
+        if me is None or self.queued_mission is None:
+            return
+        from baris.resolver import (
+            _crew_bonus,
+            effective_base_success,
+            effective_launch_cost,
+            effective_rocket,
+        )
+        from baris.state import RELIABILITY_SWING_PER_POINT, objectives_for
+
+        mission = MISSIONS_BY_ID[self.queued_mission]
+        eff_rocket = effective_rocket(me, mission)
+        eff_cost = effective_launch_cost(me, mission)
+        base_succ = effective_base_success(me, mission)
+        reliability = me.rocket_reliability(eff_rocket)
+        rel_bonus = (reliability - 50) * RELIABILITY_SWING_PER_POINT
+        crew: list[Astronaut] = []
+        crew_b = 0.0
+        if mission.manned:
+            crew = self._preview_crew(me, mission)
+            crew_b = _crew_bonus(crew, mission)
+        effective = base_succ + crew_b + rel_bonus
+
+        # Ribbon header
+        pygame.draw.rect(self.screen, BG_DEEP, (0, 0, WINDOW_SIZE[0], 80))
+        pygame.draw.rect(self.screen, BORDER, (0, 80, WINDOW_SIZE[0], 1))
+        draw_text(self.screen, "FLIGHT PLAN", (30, 12), size=26, color=HIGHLIGHT, bold=True)
+        draw_text(
+            self.screen,
+            f"{self.state.season.value} {self.state.year}  —  "
+            f"{me.username} [{me.side.value if me.side else '?'}]",
+            (30, 48), size=16, color=DIM,
+        )
+
+        # Main panel
+        panel = pygame.Rect(40, 110, WINDOW_SIZE[0] - 80, 730)
+        pygame.draw.rect(self.screen, PANEL, panel, border_radius=8)
+        pygame.draw.rect(self.screen, BORDER, panel, 1, border_radius=8)
+
+        x, y = panel.x + 30, panel.y + 26
+        draw_text(self.screen, mission.name.upper(), (x, y), size=34,
+                  color=side_color(me.side), bold=True)
+        y += 54
+        rocket_label = rocket_display_name(eff_rocket, me.side)
+        draw_text(
+            self.screen,
+            f"Rocket:  {eff_rocket.value} class — {rocket_label}  "
+            f"(reliability {reliability}%)",
+            (x, y), size=18, color=FG,
+        )
+        y += 30
+        draw_text(self.screen, f"Launch cost:  {eff_cost} MB",
+                  (x, y), size=18, color=FG)
+        y += 34
+
+        if mission.manned:
+            crew_line = ", ".join(a.name for a in crew) if crew else "(roster too small)"
+            draw_text(self.screen, f"Crew ({mission.crew_size}):  {crew_line}",
+                      (x, y), size=18, color=FG)
+            if mission.primary_skill and crew:
+                avg = sum(a.skill(mission.primary_skill) for a in crew) / len(crew)
+                y += 24
+                draw_text(
+                    self.screen,
+                    f"  Avg {mission.primary_skill.value.capitalize()}: {avg:.0f}",
+                    (x, y), size=14, color=DIM,
+                )
+            y += 34
+
+        # Odds breakdown
+        draw_text(self.screen, "Odds", (x, y), size=20, color=HIGHLIGHT, bold=True)
+        y += 28
+        draw_text(self.screen, f"  Base success         {base_succ:+.2f}",
+                  (x, y), size=16, color=FG)
+        y += 22
+        if mission.manned:
+            draw_text(self.screen, f"  Crew bonus           {crew_b:+.2f}",
+                      (x, y), size=16, color=FG)
+            y += 22
+        draw_text(self.screen, f"  Reliability bonus    {rel_bonus:+.3f}",
+                  (x, y), size=16, color=FG)
+        y += 22
+        draw_text(self.screen, "  " + "-" * 44, (x, y), size=16, color=DIM)
+        y += 22
+        draw_text(
+            self.screen,
+            f"  Effective chance     {effective:.2f}   "
+            f"(~{int(max(0, min(1, effective)) * 100)}% success)",
+            (x, y), size=18,
+            color=GREEN if effective >= 0.6 else HIGHLIGHT if effective >= 0.4 else RED,
+            bold=True,
+        )
+        y += 38
+
+        # Architecture line (only for manned lunar landing)
+        if mission.id == MissionId.MANNED_LUNAR_LANDING and me.architecture:
+            try:
+                arch = Architecture(me.architecture)
+                draw_text(
+                    self.screen,
+                    f"Architecture: {arch.value} ({ARCHITECTURE_FULL_NAMES[arch]})  "
+                    f"— success {ARCHITECTURE_SUCCESS_DELTA[arch]:+.0%}, "
+                    f"cost {ARCHITECTURE_COST_DELTA[arch]:+} MB",
+                    (x, y), size=15, color=HIGHLIGHT,
+                )
+                y += 30
+            except ValueError:
+                pass
+
+        # Objectives
+        objs = objectives_for(mission.id)
+        queued_objs = [o for o in objs if o.id in self.queued_objectives]
+        if queued_objs:
+            y += 8
+            draw_text(self.screen, "Opt-in objectives", (x, y),
+                      size=20, color=HIGHLIGHT, bold=True)
+            y += 28
+            for obj in queued_objs:
+                risk = ""
+                if obj.fail_ship_loss_chance > 0:
+                    risk = f"  (fail: {int(obj.fail_ship_loss_chance*100)}% ship loss)"
+                elif obj.fail_crew_death_chance > 0:
+                    risk = f"  (fail: {int(obj.fail_crew_death_chance*100)}% crew death)"
+                else:
+                    risk = "  (fail: no casualties)"
+                risk_color = RED if risk.endswith("ship loss)") else (
+                    HIGHLIGHT if "crew death" in risk else DIM
+                )
+                line = f"  - {obj.name:<22} {obj.required_skill.value:<10} base {obj.base_success:.0%}  +{obj.prestige_bonus} prestige"
+                draw_text(self.screen, line, (x, y), size=15, color=FG)
+                draw_text(self.screen, risk, (x + 700, y), size=15, color=risk_color)
+                y += 22
+        elif mission.manned and objs:
+            y += 8
+            draw_text(
+                self.screen,
+                "(No opt-in objectives queued — nominal flight only.)",
+                (x, y), size=14, color=DIM,
+            )
+            y += 22
+
+        # Footer hint + buttons
+        draw_text(
+            self.screen,
+            "Abort to go back to the hub. LAUNCH commits the turn.",
+            (panel.x + 30, panel.bottom - 40), size=14, color=DIM,
+        )
+        for btn in self.briefing_buttons:
+            btn.draw(self.screen)
+
+    # --- launching scene (ascend + result) ------------------------------
+    def _render_launching(self) -> None:
+        if not self.report_queue:
+            return
+        report = self.report_queue[self.report_idx]
+        me = self._me()
+        is_own = bool(me and me.side and report.side == me.side.value)
+        # Solid deep background.
+        self.screen.fill((4, 6, 14))
+        if self.launch_phase == "ascend":
+            self._render_launch_ascend(report, is_own)
+        else:
+            self._render_launch_result(report, is_own)
+        # Progress indicator + continue hint
+        total = len(self.report_queue)
+        pos = self.report_idx + 1
+        draw_text(
+            self.screen,
+            f"Mission {pos} of {total}",
+            (24, 12), size=14, color=DIM,
+        )
+        hint = (
+            "Space / Enter to skip"
+            if self.launch_phase == "ascend"
+            else "Space / Enter for next"
+        )
+        draw_text_centered(
+            self.screen, hint, (WINDOW_SIZE[0] // 2, WINDOW_SIZE[1] - 30),
+            size=14, color=DIM,
+        )
+        for btn in self.launching_buttons:
+            btn.draw(self.screen)
+
+    def _render_launch_ascend(self, report: LaunchReport, is_own: bool) -> None:
+        cx = WINDOW_SIZE[0] // 2
+        elapsed = pygame.time.get_ticks() - self.launch_phase_start_ms
+        # Header
+        who = "YOUR LAUNCH" if is_own else f"OPPONENT ({report.side}) LAUNCH"
+        draw_text_centered(
+            self.screen, who, (cx, 80),
+            size=22, color=HIGHLIGHT if is_own else DIM, bold=True,
+        )
+        draw_text_centered(
+            self.screen, report.mission_name.upper(), (cx, 120),
+            size=42, color=FG, bold=True,
+        )
+        draw_text_centered(
+            self.screen, f"Rocket: {report.rocket}  —  {report.username}",
+            (cx, 170), size=18, color=DIM,
+        )
+
+        # Countdown sequence.
+        if elapsed < 600:
+            countdown = "T-3"
+        elif elapsed < 1200:
+            countdown = "T-2"
+        elif elapsed < 1800:
+            countdown = "T-1"
+        else:
+            countdown = "LIFTOFF"
+        text_color = HIGHLIGHT if countdown != "LIFTOFF" else GREEN
+        draw_text_centered(
+            self.screen, countdown, (cx, 260),
+            size=96, color=text_color, bold=True,
+        )
+
+        # Rocket position: sits on the pad through the countdown, rises
+        # during the LIFTOFF phase. Pad is chosen so the body + fins clear
+        # the Continue button at the bottom of the screen.
+        pad_y = 700
+        apex_y = 180
+        if elapsed < 1800:
+            rocket_y = pad_y
+            flame_on = False
+        else:
+            t = (elapsed - 1800) / max(1, ASCEND_DURATION_MS - 1800)
+            t = max(0.0, min(1.0, t))
+            rocket_y = int(pad_y + (apex_y - pad_y) * t)
+            flame_on = True
+        self._draw_launch_rocket(cx, rocket_y, flame_on)
+        # Ground line
+        pygame.draw.line(self.screen, (40, 50, 70),
+                         (0, pad_y + 64), (WINDOW_SIZE[0], pad_y + 64), 2)
+
+    def _draw_launch_rocket(self, cx: int, tip_y: int, flame: bool) -> None:
+        """Simple rocket silhouette. `tip_y` is the y-coordinate of the nose cone."""
+        body_w = 26
+        body_h = 90
+        # Body (rectangle)
+        body = pygame.Rect(cx - body_w // 2, tip_y + 22, body_w, body_h)
+        pygame.draw.rect(self.screen, (220, 220, 235), body)
+        pygame.draw.rect(self.screen, (120, 130, 150), body, 1)
+        # Nose cone
+        pygame.draw.polygon(self.screen, (220, 220, 235), [
+            (cx, tip_y),
+            (cx - body_w // 2, tip_y + 24),
+            (cx + body_w // 2, tip_y + 24),
+        ])
+        # Fins
+        pygame.draw.polygon(self.screen, (180, 60, 60), [
+            (cx - body_w // 2, body.bottom - 20),
+            (cx - body_w // 2 - 14, body.bottom),
+            (cx - body_w // 2, body.bottom),
+        ])
+        pygame.draw.polygon(self.screen, (180, 60, 60), [
+            (cx + body_w // 2, body.bottom - 20),
+            (cx + body_w // 2 + 14, body.bottom),
+            (cx + body_w // 2, body.bottom),
+        ])
+        # Window
+        pygame.draw.circle(self.screen, ACCENT_USA, (cx, tip_y + 40), 5)
+        pygame.draw.circle(self.screen, (60, 70, 100), (cx, tip_y + 40), 5, 1)
+        if flame:
+            now = pygame.time.get_ticks()
+            flick = (now // 70) % 2  # two-frame flicker
+            for color, h_off in (((240, 200, 90), 10), ((240, 120, 40), 22 + flick * 4)):
+                pygame.draw.polygon(self.screen, color, [
+                    (cx - body_w // 2 + 2, body.bottom + 1),
+                    (cx + body_w // 2 - 2, body.bottom + 1),
+                    (cx, body.bottom + h_off + 10),
+                ])
+
+    def _render_launch_result(self, report: LaunchReport, is_own: bool) -> None:
+        cx = WINDOW_SIZE[0] // 2
+        # Header
+        who = "YOUR MISSION" if is_own else f"OPPONENT ({report.side})"
+        draw_text_centered(self.screen, who, (cx, 70),
+                           size=20, color=HIGHLIGHT if is_own else DIM, bold=True)
+        draw_text_centered(self.screen, report.mission_name.upper(), (cx, 108),
+                           size=32, color=FG, bold=True)
+        draw_text_centered(
+            self.screen,
+            f"{report.username} [{report.side or '?'}]   Rocket: {report.rocket}",
+            (cx, 148), size=16, color=DIM,
+        )
+
+        # Outcome banner
+        if report.aborted:
+            banner = "MISSION ABORTED"
+            banner_color = DIM
+            sub = report.abort_reason or "—"
+        elif report.success:
+            if report.ended_game:
+                banner = "MOON LANDING"
+                banner_color = HIGHLIGHT
+            else:
+                banner = "SUCCESS"
+                banner_color = GREEN
+            sub = (
+                f"Effective {report.effective_success:.2f} — "
+                f"FIRST!" if report.first_claimed else
+                f"Effective {report.effective_success:.2f}"
+            )
+        else:
+            banner = "FAILURE"
+            banner_color = RED
+            sub = f"Effective {report.effective_success:.2f} — roll did not clear"
+
+        banner_rect = pygame.Rect(cx - 280, 190, 560, 90)
+        pygame.draw.rect(self.screen, PANEL, banner_rect, border_radius=10)
+        pygame.draw.rect(self.screen, banner_color, banner_rect, 3, border_radius=10)
+        draw_text_centered(self.screen, banner, banner_rect.center,
+                           size=56, color=banner_color, bold=True)
+        draw_text_centered(self.screen, sub, (cx, banner_rect.bottom + 16),
+                           size=16, color=DIM)
+
+        # Detail panel
+        panel = pygame.Rect(cx - 340, 310, 680, 500)
+        pygame.draw.rect(self.screen, (14, 20, 38), panel, border_radius=8)
+        pygame.draw.rect(self.screen, BORDER, panel, 1, border_radius=8)
+        x, y = panel.x + 30, panel.y + 26
+
+        if report.aborted:
+            draw_text(self.screen, f"Reason: {report.abort_reason}",
+                      (x, y), size=18, color=FG)
+            return
+
+        draw_text(self.screen, f"Prestige       {report.prestige_delta:+d}",
+                  (x, y), size=18, color=FG, bold=True)
+        y += 28
+        if report.first_claimed:
+            draw_text(self.screen, "  FIRST! bonus applied.",
+                      (x, y), size=14, color=HIGHLIGHT)
+            y += 22
+        draw_text(
+            self.screen,
+            f"Reliability    {report.reliability_before}% → {report.reliability_after}%",
+            (x, y), size=16, color=FG,
+        )
+        y += 26
+
+        if report.crew:
+            draw_text(self.screen, f"Crew           {', '.join(report.crew)}",
+                      (x, y), size=16, color=FG)
+            y += 26
+        if report.deaths:
+            draw_text(self.screen, f"KIA            {', '.join(report.deaths)}",
+                      (x, y), size=16, color=RED, bold=True)
+            y += 26
+        if report.budget_cut:
+            draw_text(self.screen, f"Funding cut    {report.budget_cut} MB",
+                      (x, y), size=16, color=RED)
+            y += 26
+
+        if report.objectives:
+            y += 8
+            draw_text(self.screen, "Objectives", (x, y), size=18,
+                      color=HIGHLIGHT, bold=True)
+            y += 26
+            for obj in report.objectives:
+                if obj.skipped:
+                    line = f"  - {obj.name}: skipped ({obj.skip_reason})"
+                    color = DIM
+                elif obj.ship_lost:
+                    line = (f"  - {obj.name}: CATASTROPHIC FAILURE — "
+                            f"KIA {', '.join(obj.deaths) or '?'}")
+                    color = RED
+                elif obj.success:
+                    line = (f"  - {obj.name}: {obj.performer} succeeded "
+                            f"({obj.prestige_delta:+d} prestige)")
+                    color = GREEN
+                elif obj.deaths:
+                    line = (f"  - {obj.name}: {', '.join(obj.deaths)} lost "
+                            f"({obj.prestige_delta:+d} prestige)")
+                    color = RED
+                else:
+                    line = f"  - {obj.name}: failed (no casualties)"
+                    color = DIM
+                draw_text(self.screen, line, (x, y), size=14, color=color)
+                y += 20
 
     # --- end ------------------------------------------------------------
     def _render_end(self) -> None:

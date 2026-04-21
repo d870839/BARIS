@@ -433,6 +433,10 @@ class GameState:
     winner: Side | None = None
     first_completed: dict[str, str] = field(default_factory=dict)
     # first_completed maps MissionId.value -> Side.value of the first player to succeed.
+    last_launches: list["LaunchReport"] = field(default_factory=list)
+    # Populated by resolve_turn(); cleared at the start of each resolution.
+    # Clients read this to animate the launch-sequence screens before returning
+    # to the hub. Entries are ordered as the launches were resolved.
 
     def to_dict(self) -> dict[str, Any]:
         return asdict(self)
@@ -440,6 +444,8 @@ class GameState:
     @classmethod
     def from_dict(cls, d: dict[str, Any]) -> GameState:
         players = [_player_from_dict(p) for p in d.get("players", [])]
+        raw_launches = d.get("last_launches") or []
+        last_launches = [_launch_report_from_dict(r) for r in raw_launches]
         return cls(
             phase=Phase(d["phase"]),
             season=Season(d["season"]),
@@ -448,6 +454,7 @@ class GameState:
             log=list(d.get("log", [])),
             winner=Side(d["winner"]) if d.get("winner") else None,
             first_completed=dict(d.get("first_completed", {})),
+            last_launches=last_launches,
         )
 
     def find_player(self, player_id: str) -> Player | None:
@@ -464,6 +471,59 @@ def _player_from_dict(d: dict[str, Any]) -> Player:
     raw_astronauts = data.get("astronauts") or []
     data["astronauts"] = [Astronaut(**a) for a in raw_astronauts]
     return Player(**data)
+
+
+@dataclass
+class ObjectiveReport:
+    """One opt-in objective's outcome within a LaunchReport."""
+    objective_id: str       # ObjectiveId.value
+    name: str
+    performer: str = ""     # astronaut name who attempted it
+    effective_success: float = 0.0
+    success: bool = False
+    prestige_delta: int = 0
+    deaths: list[str] = field(default_factory=list)
+    ship_lost: bool = False
+    skipped: bool = False
+    skip_reason: str = ""
+
+
+@dataclass
+class LaunchReport:
+    """Everything the client needs to animate a single mission resolution:
+    who, what, the pre-roll odds, the outcome, and all downstream effects
+    (prestige, crew deaths, budget cut, objective-by-objective details)."""
+    side: str               # Side.value, or "" if unassigned
+    username: str
+    mission_id: str         # MissionId.value
+    mission_name: str
+    rocket: str             # side-aware display name (e.g. "Saturn V")
+    rocket_class: str       # Rocket.value (e.g. "Heavy")
+    manned: bool = False
+    crew: list[str] = field(default_factory=list)
+    launch_cost: int = 0
+    base_success: float = 0.0
+    crew_bonus: float = 0.0
+    reliability_bonus: float = 0.0
+    effective_success: float = 0.0
+    aborted: bool = False
+    abort_reason: str = ""
+    success: bool = False
+    prestige_delta: int = 0   # total net prestige change from this launch
+    first_claimed: bool = False
+    reliability_before: int = 0
+    reliability_after: int = 0
+    deaths: list[str] = field(default_factory=list)
+    budget_cut: int = 0
+    ended_game: bool = False  # manned lunar landing success
+    objectives: list[ObjectiveReport] = field(default_factory=list)
+
+
+def _launch_report_from_dict(d: dict[str, Any]) -> LaunchReport:
+    data = dict(d)
+    raw_objs = data.get("objectives") or []
+    data["objectives"] = [ObjectiveReport(**o) for o in raw_objs]
+    return LaunchReport(**data)
 
 
 SEASON_ORDER = [Season.SPRING, Season.SUMMER, Season.FALL, Season.WINTER]

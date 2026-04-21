@@ -13,6 +13,7 @@ from baris.state import (
     DEATH_CHANCE_ON_FAIL,
     DEATH_PRESTIGE_PENALTY,
     GameState,
+    LaunchReport,
     MIN_RELIABILITY_TO_LAUNCH,
     MISSION_OBJECTIVES,
     MISSIONS_BY_ID,
@@ -21,6 +22,7 @@ from baris.state import (
     MissionObjective,
     Module,
     ObjectiveId,
+    ObjectiveReport,
     Phase,
     PRESTIGE_TO_WIN,
     Player,
@@ -41,6 +43,7 @@ from baris.state import (
     Side,
     Skill,
     next_season,
+    rocket_display_name,
 )
 
 
@@ -216,6 +219,7 @@ def resolve_turn(state: GameState, rng: random.Random | None = None) -> None:
     """Apply each player's pending actions, advance season, emit log lines."""
     rng = rng or random.Random()
     state.log.clear()
+    state.last_launches.clear()
 
     for player in state.players:
         _apply_rd(player, state, rng)
@@ -313,19 +317,44 @@ def _resolve_launch(player: Player, state: GameState, rng: random.Random) -> Non
         return
     eff_rocket = effective_rocket(player, mission)
     eff_cost = effective_launch_cost(player, mission)
+
+    # Build the report skeleton up-front so every exit path (abort, success,
+    # failure) produces exactly one entry and the client can animate it.
+    report = LaunchReport(
+        side=player.side.value if player.side else "",
+        username=player.username,
+        mission_id=mission.id.value,
+        mission_name=mission.name,
+        rocket=rocket_display_name(eff_rocket, player.side),
+        rocket_class=eff_rocket.value,
+        manned=mission.manned,
+        launch_cost=eff_cost,
+        reliability_before=player.rocket_reliability(eff_rocket),
+        reliability_after=player.rocket_reliability(eff_rocket),
+    )
+    state.last_launches.append(report)
+
+    def _abort(reason_log: str, reason_report: str) -> None:
+        report.aborted = True
+        report.abort_reason = reason_report
+        state.log.append(reason_log)
+
     if not player.rocket_built(eff_rocket) or player.budget < eff_cost:
-        state.log.append(
-            f"{player.username} aborts {mission.name} — prereqs no longer met."
+        _abort(
+            f"{player.username} aborts {mission.name} — prereqs no longer met.",
+            "prereqs no longer met",
         )
         return
     if not player.is_tier_unlocked(mission.tier):
-        state.log.append(
-            f"{player.username} aborts {mission.name} — program not unlocked."
+        _abort(
+            f"{player.username} aborts {mission.name} — program not unlocked.",
+            "program not unlocked",
         )
         return
     if not meets_architecture_prereqs(player, mission):
-        state.log.append(
-            f"{player.username} aborts {mission.name} — architecture prereqs not met."
+        _abort(
+            f"{player.username} aborts {mission.name} — architecture prereqs not met.",
+            "architecture prereqs not met",
         )
         return
 
@@ -333,27 +362,38 @@ def _resolve_launch(player: Player, state: GameState, rng: random.Random) -> Non
     if mission.manned:
         crew = _select_crew(player, mission) or []
         if not crew:
-            state.log.append(
-                f"{player.username} aborts {mission.name} — no available crew."
+            _abort(
+                f"{player.username} aborts {mission.name} — no available crew.",
+                "no available crew",
             )
             return
+        report.crew = [a.name for a in crew]
 
     player.budget -= eff_cost
-    reliability_bonus = (player.rocket_reliability(eff_rocket) - 50) * RELIABILITY_SWING_PER_POINT
-    success_chance = (
-        effective_base_success(player, mission)
-        + _crew_bonus(crew, mission)
-        + reliability_bonus
+    crew_bonus = _crew_bonus(crew, mission)
+    reliability_bonus = (
+        (player.rocket_reliability(eff_rocket) - 50) * RELIABILITY_SWING_PER_POINT
     )
+    base = effective_base_success(player, mission)
+    success_chance = base + crew_bonus + reliability_bonus
+    report.base_success = base
+    report.crew_bonus = crew_bonus
+    report.reliability_bonus = reliability_bonus
+    report.effective_success = success_chance
+
+    prestige_start = player.prestige
     roll = rng.random()
     if roll < success_chance:
+        report.success = True
         _bump_reliability(player, eff_rocket, RELIABILITY_GAIN_ON_SUCCESS)
-        _handle_mission_success(player, mission, crew, state)
+        _handle_mission_success(player, mission, crew, state, report)
         # Objectives only resolve if the primary mission succeeded — a main
         # mission failure means you never got the chance to try them.
-        _resolve_objectives(player, mission, crew, state, rng, eff_rocket)
+        _resolve_objectives(player, mission, crew, state, rng, eff_rocket, report)
     else:
-        _handle_mission_failure(player, mission, crew, state, rng, eff_rocket)
+        _handle_mission_failure(player, mission, crew, state, rng, eff_rocket, report)
+    report.reliability_after = player.rocket_reliability(eff_rocket)
+    report.prestige_delta = player.prestige - prestige_start
 
 
 def _resolve_objectives(
@@ -363,6 +403,7 @@ def _resolve_objectives(
     state: GameState,
     rng: random.Random,
     eff_rocket: Rocket,
+    report: LaunchReport,
 ) -> None:
     """Attempt each opt-in objective the player queued. Each objective rolls
     independently using a crew member's relevant skill. Successes grant extra
@@ -379,8 +420,13 @@ def _resolve_objectives(
         obj = catalog.get(obj_id)
         if obj is None:
             continue
+        obj_report = ObjectiveReport(objective_id=obj.id.value, name=obj.name)
+        report.objectives.append(obj_report)
+
         # Docking requires the module to still be available at launch time.
         if obj.requires_module and not player.module_built(obj.requires_module):
+            obj_report.skipped = True
+            obj_report.skip_reason = f"missing {obj.requires_module.value}"
             state.log.append(
                 f"  - {obj.name}: skipped (missing {obj.requires_module.value})."
             )
@@ -390,17 +436,24 @@ def _resolve_objectives(
         # relevant skill still alive after the main mission.
         performers = [a for a in crew if a.active]
         if not performers:
+            obj_report.skipped = True
+            obj_report.skip_reason = "no crew available"
             return  # whole crew already gone, can't do anything
         performers.sort(key=lambda a: a.skill(obj.required_skill), reverse=True)
         performer = performers[0]
+        obj_report.performer = performer.name
 
         # Effective success: base + performer's skill contribution (same
         # CREW_MAX_BONUS scaling as the main mission's primary_skill).
         skill_factor = performer.skill(obj.required_skill) / 100.0
         effective = obj.base_success + skill_factor * CREW_MAX_BONUS
+        obj_report.effective_success = effective
+        prestige_before_obj = player.prestige
         if rng.random() < effective:
             player.prestige += obj.prestige_bonus
             performer.bump_skill(obj.required_skill, 5)
+            obj_report.success = True
+            obj_report.prestige_delta = player.prestige - prestige_before_obj
             state.log.append(
                 f"  - {obj.name}: {performer.name} succeeded (+{obj.prestige_bonus} prestige)."
             )
@@ -418,6 +471,9 @@ def _resolve_objectives(
                     dead.append(astro.name)
             _bump_reliability(player, eff_rocket, -15)
             player.prestige = max(0, player.prestige - 10)
+            obj_report.ship_lost = True
+            obj_report.deaths = list(dead)
+            obj_report.prestige_delta = player.prestige - prestige_before_obj
             state.log.append(
                 f"  - {obj.name}: CATASTROPHIC FAILURE. Ship lost. "
                 f"KIA: {', '.join(dead) or 'crew'}. -15 reliability, -10 prestige."
@@ -426,11 +482,14 @@ def _resolve_objectives(
         if obj.fail_crew_death_chance > 0 and rng.random() < obj.fail_crew_death_chance:
             performer.status = AstronautStatus.KIA.value
             player.prestige = max(0, player.prestige - DEATH_PRESTIGE_PENALTY)
+            obj_report.deaths = [performer.name]
+            obj_report.prestige_delta = player.prestige - prestige_before_obj
             state.log.append(
                 f"  - {obj.name}: {performer.name} did not return. "
                 f"-{DEATH_PRESTIGE_PENALTY} prestige."
             )
             continue
+        obj_report.prestige_delta = player.prestige - prestige_before_obj
         state.log.append(f"  - {obj.name}: failed (no casualties).")
 
 
@@ -475,12 +534,14 @@ def _handle_mission_success(
     mission: Mission,
     crew: list[Astronaut],
     state: GameState,
+    report: LaunchReport,
 ) -> None:
     gain = mission.prestige_success
     bonus = 0
     if mission.id.value not in state.first_completed and player.side is not None:
         state.first_completed[mission.id.value] = player.side.value
         bonus = mission.first_bonus
+        report.first_claimed = True
     player.prestige += gain + bonus
     previously_locked_next_tier = not player.is_tier_unlocked(_next_tier(mission.tier))
     player.mission_successes[mission.id.value] = (
@@ -505,6 +566,7 @@ def _handle_mission_success(
     if mission.id == MissionId.MANNED_LUNAR_LANDING:
         state.phase = Phase.ENDED
         state.winner = player.side
+        report.ended_game = True
         state.log.append(f"{player.username} lands astronauts on the Moon — game over!")
 
 
@@ -515,6 +577,7 @@ def _handle_mission_failure(
     state: GameState,
     rng: random.Random,
     eff_rocket: Rocket,
+    report: LaunchReport,
 ) -> None:
     player.prestige = max(0, player.prestige - mission.prestige_fail)
 
@@ -533,12 +596,14 @@ def _handle_mission_failure(
     _bump_reliability(player, eff_rocket, -RELIABILITY_LOSS_ON_FAIL)
     budget_cut = min(player.budget, MANNED_FAILURE_BUDGET_CUT)
     player.budget -= budget_cut
+    report.budget_cut = budget_cut
 
     deaths: list[str] = []
     for astro in crew:
         if rng.random() < DEATH_CHANCE_ON_FAIL:
             astro.status = AstronautStatus.KIA.value
             deaths.append(astro.name)
+    report.deaths = list(deaths)
     kia_note = ""
     if deaths:
         player.prestige = max(0, player.prestige - DEATH_PRESTIGE_PENALTY * len(deaths))
