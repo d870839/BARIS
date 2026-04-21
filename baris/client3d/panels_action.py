@@ -90,13 +90,13 @@ def build_rd_panel(client: "BarisClient", parent: Entity) -> Entity:
 
     # Spend controls.
     minus = Button(
-        parent=root, text="-5 MB [←]",
+        parent=root, text="-5 MB [Left]",
         position=(-0.15, -0.18), scale=(0.18, 0.055),
         color=color.rgb32(60, 70, 100),
     )
     minus.on_click = lambda: client.rd_change_spend(-5)
     plus = Button(
-        parent=root, text="+5 MB [→]",
+        parent=root, text="+5 MB [Right]",
         position=(0.15, -0.18), scale=(0.18, 0.055),
         color=color.rgb32(60, 70, 100),
     )
@@ -353,7 +353,7 @@ def build_result_panel(
     if not report.aborted:
         details = []
         details.append(f"Prestige       {report.prestige_delta:+d}")
-        details.append(f"Reliability    {report.reliability_before}% → {report.reliability_after}%")
+        details.append(f"Reliability    {report.reliability_before}% -> {report.reliability_after}%")
         if report.crew:
             details.append(f"Crew           {', '.join(report.crew)}")
         if report.deaths:
