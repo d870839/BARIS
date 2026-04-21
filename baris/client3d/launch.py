@@ -27,14 +27,14 @@ def build_launch_pad() -> Entity:
         model="cube",
         position=(px, py, pz),
         scale=(5, PAD_HEIGHT, 5),
-        color=color.rgb(165, 165, 175),
+        color=color.rgb32(165, 165, 175),
     )
     # Pad edge trim (black-and-yellow caution stripe).
     Entity(
         model="cube",
         position=(px, py + PAD_HEIGHT / 2 + 0.01, pz),
         scale=(5.05, 0.02, 5.05),
-        color=color.rgb(40, 40, 45),
+        color=color.rgb32(40, 40, 45),
     )
     # Scaffold legs.
     for dx, dz in ((-2.2, -2.2), (2.2, -2.2), (-2.2, 2.2), (2.2, 2.2)):
@@ -42,14 +42,14 @@ def build_launch_pad() -> Entity:
             model="cube",
             position=(px + dx, py + 2.8, pz + dz),
             scale=(0.3, 6.0, 0.3),
-            color=color.rgb(210, 210, 215),
+            color=color.rgb32(210, 210, 215),
         )
         # Red hazard cap at the top of each leg.
         Entity(
             model="cube",
             position=(px + dx, py + 5.6, pz + dz),
             scale=(0.35, 0.3, 0.35),
-            color=color.rgb(210, 60, 60),
+            color=color.rgb32(210, 60, 60),
         )
     # Gantry crossbeams.
     for z in (pz - 2.2, pz + 2.2):
@@ -57,14 +57,14 @@ def build_launch_pad() -> Entity:
             model="cube",
             position=(px, py + 5.4, z),
             scale=(4.8, 0.2, 0.2),
-            color=color.rgb(210, 210, 215),
+            color=color.rgb32(210, 210, 215),
         )
     for x in (px - 2.2, px + 2.2):
         Entity(
             model="cube",
             position=(x, py + 5.4, pz),
             scale=(0.2, 0.2, 4.8),
-            color=color.rgb(210, 210, 215),
+            color=color.rgb32(210, 210, 215),
         )
     return pad
 
@@ -83,14 +83,14 @@ def build_rocket() -> Entity:
         parent=body, model="cube",
         scale=(0.7, 0.25, 0.7),
         y=0.62,
-        color=color.rgb(210, 70, 70),
+        color=color.rgb32(210, 70, 70),
     )
     # Small porthole window (slightly forward-facing)
     Entity(
         parent=body, model="sphere",
         scale=(0.28, 0.28, 0.28),
         y=0.2, z=0.48,
-        color=color.rgb(70, 130, 220),
+        color=color.rgb32(70, 130, 220),
     )
     # Side fins (along x-axis)
     for x in (-0.55, 0.55):
@@ -98,7 +98,7 @@ def build_rocket() -> Entity:
             parent=body, model="cube",
             scale=(0.05, 0.45, 0.5),
             position=(x, -0.3, 0),
-            color=color.rgb(180, 60, 60),
+            color=color.rgb32(180, 60, 60),
         )
     # Front/back fins (along z-axis)
     for z in (-0.55, 0.55):
@@ -106,7 +106,7 @@ def build_rocket() -> Entity:
             parent=body, model="cube",
             scale=(0.5, 0.45, 0.05),
             position=(0, -0.3, z),
-            color=color.rgb(180, 60, 60),
+            color=color.rgb32(180, 60, 60),
         )
     return body
 
@@ -118,7 +118,7 @@ def build_exhaust_flame(parent: Entity) -> Entity:
         parent=parent, model="cube",
         scale=(0.6, 0.7, 0.6),
         y=-0.85,
-        color=color.rgb(240, 160, 50),
+        color=color.rgb32(240, 160, 50),
     )
     flame.enabled = False
     return flame

@@ -44,20 +44,20 @@ def _panel_shell(
     Entity(
         parent=root, model="quad",
         scale=(width + 0.012, height + 0.012),
-        color=color.rgb(90, 100, 140),
+        color=color.rgb32(90, 100, 140),
     )
     # Background
     Entity(
         parent=root, model="quad",
         scale=(width, height),
-        color=color.rgb(18, 26, 44),
+        color=color.rgb32(18, 26, 44),
     )
     # Title
     Text(
         text=title, parent=root,
         position=(0, height / 2 - 0.05),
         origin=(0, 0),
-        scale=1.8, color=color.rgb(*title_color),
+        scale=1.8, color=color.rgb32(*title_color),
     )
     return root, width, height
 
@@ -66,7 +66,7 @@ def _close_button(client: "BarisClient", parent: Entity, y: float) -> Button:
     btn = Button(
         parent=parent, text="Close [Esc]",
         position=(0, y), scale=(0.22, 0.05),
-        color=color.rgb(60, 70, 100),
+        color=color.rgb32(60, 70, 100),
     )
     btn.on_click = lambda: client.close_current_panel()
     return btn
@@ -90,8 +90,8 @@ def build_lobby_panel(client: "BarisClient", parent: Entity) -> Entity:
             side = p.side.value if p.side else "?"
             ready = "READY" if p.ready else "not ready"
             tag = "  (you)" if me is not None and p.player_id == me.player_id else ""
-            tint = color.rgb(80, 140, 220) if p.side == Side.USA else (
-                color.rgb(220, 90, 90) if p.side == Side.USSR else color.rgb(180, 180, 180)
+            tint = color.rgb32(80, 140, 220) if p.side == Side.USA else (
+                color.rgb32(220, 90, 90) if p.side == Side.USSR else color.rgb32(180, 180, 180)
             )
             Text(
                 text=f"{p.username} [{side}]  —  {ready}{tag}",
@@ -105,22 +105,22 @@ def build_lobby_panel(client: "BarisClient", parent: Entity) -> Entity:
                 text="Waiting for opponent to join…",
                 parent=root, position=(0, y),
                 origin=(0, 0), scale=1.0,
-                color=color.rgb(180, 180, 180),
+                color=color.rgb32(180, 180, 180),
             )
 
     # Side buttons
     usa_btn = Button(
         parent=root, text="Pick USA [1]",
         position=(-0.17, -0.05), scale=(0.22, 0.055),
-        color=color.rgb(40, 60, 110),
-        highlight_color=color.rgb(70, 100, 160),
+        color=color.rgb32(40, 60, 110),
+        highlight_color=color.rgb32(70, 100, 160),
     )
     usa_btn.on_click = lambda: client.lobby_pick_side("USA")
     ussr_btn = Button(
         parent=root, text="Pick USSR [2]",
         position=(0.17, -0.05), scale=(0.22, 0.055),
-        color=color.rgb(100, 40, 40),
-        highlight_color=color.rgb(160, 70, 70),
+        color=color.rgb32(100, 40, 40),
+        highlight_color=color.rgb32(160, 70, 70),
     )
     ussr_btn.on_click = lambda: client.lobby_pick_side("USSR")
 
@@ -129,8 +129,8 @@ def build_lobby_panel(client: "BarisClient", parent: Entity) -> Entity:
     ready_btn = Button(
         parent=root, text=f"{ready_label} [Enter]",
         position=(0, -0.15), scale=(0.3, 0.06),
-        color=color.rgb(50, 100, 60),
-        highlight_color=color.rgb(80, 150, 90),
+        color=color.rgb32(50, 100, 60),
+        highlight_color=color.rgb32(80, 150, 90),
     )
     ready_btn.on_click = lambda: client.lobby_toggle_ready()
 
@@ -138,7 +138,7 @@ def build_lobby_panel(client: "BarisClient", parent: Entity) -> Entity:
         text="The game starts the moment both players are READY on opposite sides.",
         parent=root, position=(0, -0.24),
         origin=(0, 0), scale=0.9,
-        color=color.rgb(140, 150, 170),
+        color=color.rgb32(140, 150, 170),
     )
     return root
 
@@ -162,7 +162,7 @@ def build_astro_panel(client: "BarisClient", parent: Entity) -> Entity:
     Text(
         text=header, parent=root,
         position=(-0.4, 0.3), origin=(-0.5, 0.5),
-        scale=0.9, color=color.rgb(160, 170, 195),
+        scale=0.9, color=color.rgb32(160, 170, 195),
     )
     y = 0.25
     for astro in me.astronauts:
@@ -174,7 +174,7 @@ def build_astro_panel(client: "BarisClient", parent: Entity) -> Entity:
             text=row, parent=root,
             position=(-0.4, y), origin=(-0.5, 0.5),
             scale=0.9,
-            color=color.rgb(220, 225, 235) if astro.active else color.rgb(220, 90, 90),
+            color=color.rgb32(220, 225, 235) if astro.active else color.rgb32(220, 90, 90),
         )
         y -= 0.04
 
@@ -182,7 +182,7 @@ def build_astro_panel(client: "BarisClient", parent: Entity) -> Entity:
         text="Top-skilled active astronauts are auto-selected for manned missions.",
         parent=root, position=(0, -0.3),
         origin=(0, 0), scale=0.9,
-        color=color.rgb(140, 150, 170),
+        color=color.rgb32(140, 150, 170),
     )
     _close_button(client, root, -0.37)
     return root
@@ -204,14 +204,14 @@ def build_library_panel(client: "BarisClient", parent: Entity) -> Entity:
             text="(No events yet.)",
             parent=root, position=(0, 0),
             origin=(0, 0), scale=1.0,
-            color=color.rgb(180, 180, 180),
+            color=color.rgb32(180, 180, 180),
         )
     else:
         for line in lines:
             Text(
                 text=line, parent=root,
                 position=(-0.42, y), origin=(-0.5, 0.5),
-                scale=0.85, color=color.rgb(220, 225, 235),
+                scale=0.85, color=color.rgb32(220, 225, 235),
             )
             y -= 0.033
 
@@ -231,7 +231,7 @@ def build_library_panel(client: "BarisClient", parent: Entity) -> Entity:
             text=label, parent=root,
             position=(-0.42, firsts_y), origin=(-0.5, 0.5),
             scale=0.9,
-            color=color.rgb(240, 200, 90) if mine else color.rgb(140, 150, 170),
+            color=color.rgb32(240, 200, 90) if mine else color.rgb32(140, 150, 170),
         )
         firsts_y -= 0.035
 

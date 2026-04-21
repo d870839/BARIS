@@ -47,10 +47,10 @@ log = logging.getLogger("baris.client3d")
 # (id, label, (x, z), roof color, interactive)
 # NASA-era roof accents: saturated Space-Race palette against white bodies.
 BUILDINGS: tuple[tuple[str, str, tuple[float, float], Any, bool], ...] = (
-    ("mc",      "Mission Control",   (0.0,   20.0), color.rgb(240, 130,  50), True),   # NASA orange
-    ("rd",      "R&D Complex",       (0.0,  -20.0), color.rgb( 60, 150,  90), True),   # lab green
-    ("astro",   "Astronaut Complex", (20.0,   0.0), color.rgb( 40, 100, 200), True),   # sky blue
-    ("library", "Library",           (-20.0,  0.0), color.rgb(200, 170, 110), True),   # archive tan
+    ("mc",      "Mission Control",   (0.0,   20.0), color.rgb32(240, 130,  50), True),   # NASA orange
+    ("rd",      "R&D Complex",       (0.0,  -20.0), color.rgb32( 60, 150,  90), True),   # lab green
+    ("astro",   "Astronaut Complex", (20.0,   0.0), color.rgb32( 40, 100, 200), True),   # sky blue
+    ("library", "Library",           (-20.0,  0.0), color.rgb32(200, 170, 110), True),   # archive tan
 )
 
 INTERACT_RANGE = 8.0
@@ -96,10 +96,10 @@ class BarisClient(Entity):
         # Sky via the window clear color — more reliable than Sky(color=...)
         # across Ursina versions, which sometimes ignores the color arg and
         # draws a default texture.
-        window.color = color.rgb(130, 180, 225)
+        window.color = color.rgb32(130, 180, 225)
         # Soft ambient so facades don't blow out against the sky; a single
         # directional sun adds side-lit shading without full shadows.
-        AmbientLight(color=color.rgba(70, 75, 85, 255))
+        AmbientLight(color=color.rgba32(70, 75, 85, 255))
         sun = DirectionalLight(shadows=False)
         sun.look_at((0.3, -0.8, 0.4))
 
@@ -108,14 +108,14 @@ class BarisClient(Entity):
         # the eye can pick up movement across the apron.
         Entity(
             model="plane", scale=(160, 1, 160),
-            color=color.rgb(180, 180, 190),
+            color=color.rgb32(180, 180, 190),
             texture="white_cube", texture_scale=(80, 80),
             collider="box",
         )
         # Central plaza — slightly warmer concrete with a ring of paving.
         Entity(
             model="plane", scale=(26, 1, 26), y=0.02,
-            color=color.rgb(210, 205, 195),
+            color=color.rgb32(210, 205, 195),
             texture="white_cube", texture_scale=(13, 13),
         )
         # Painted taxi lines from the plaza out to each building (thin
@@ -125,7 +125,7 @@ class BarisClient(Entity):
                 model="cube",
                 position=(x * 0.5, 0.03, z * 0.5),
                 scale=(1.0 if z == 0 else 0.5, 0.02, 1.0 if x == 0 else 0.5),
-                color=color.rgb(240, 225, 120),
+                color=color.rgb32(240, 225, 120),
             )
 
         self.buildings: dict[str, Entity] = {}
@@ -133,7 +133,7 @@ class BarisClient(Entity):
             # White NASA-facility body.
             body = Entity(
                 model="cube", position=(x, 3, z),
-                scale=(7, 6, 7), color=color.rgb(245, 245, 248),
+                scale=(7, 6, 7), color=color.rgb32(245, 245, 248),
             )
             body._bid = bid
             body._interactive = interactive
@@ -149,14 +149,14 @@ class BarisClient(Entity):
             Entity(
                 parent=body, model="cube",
                 scale=(1.02, 0.03, 1.02),
-                y=0.4, color=color.rgb(180, 185, 200),
+                y=0.4, color=color.rgb32(180, 185, 200),
             )
             # Tiny ground-level doorway stripe on the player-facing side.
             Entity(
                 parent=body, model="cube",
                 scale=(0.25, 0.4, 0.01),
                 y=-0.35, z=-0.505,
-                color=color.rgb(60, 70, 90),
+                color=color.rgb32(60, 70, 90),
             )
             # Floating sign. In Ursina's world-space, text scale is meters,
             # so we keep it small — a tiny plate above the roof instead of
@@ -166,7 +166,7 @@ class BarisClient(Entity):
                 text=label, parent=body,
                 y=0.75, scale=1.8,
                 origin=(0, 0), billboard=True,
-                color=color.rgb(30, 35, 45),
+                color=color.rgb32(30, 35, 45),
             )
         # Launch pad + rocket
         self.pad = launch_scene.build_launch_pad()
@@ -181,7 +181,7 @@ class BarisClient(Entity):
             position=(-0.88, 0.47), scale=1.05,
             parent=camera.ui, color=color.white,
             background=True,
-            background_color=color.rgba(0, 0, 0, 130),
+            background_color=color.rgba32(0, 0, 0, 130),
         )
         self.prompt_text = Text(
             text="", position=(0, -0.32),

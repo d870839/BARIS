@@ -51,7 +51,7 @@ def build_rd_panel(client: "BarisClient", parent: Entity) -> Entity:
     Text(
         text=f"Budget: {me.budget} MB      Queued spend: {client.rd_spend} MB",
         parent=root, position=(0, 0.3),
-        origin=(0, 0), scale=1.1, color=color.rgb(220, 225, 235),
+        origin=(0, 0), scale=1.1, color=color.rgb32(220, 225, 235),
     )
 
     # Target buttons: Light / Medium / Heavy / Docking Module.
@@ -67,8 +67,8 @@ def build_rd_panel(client: "BarisClient", parent: Entity) -> Entity:
         btn = Button(
             parent=root, text=f"{tlabel} [{hint}]",
             position=(x, 0.19), scale=(0.19, 0.06),
-            color=color.rgb(50, 80, 60) if selected else color.rgb(34, 44, 70),
-            highlight_color=color.rgb(80, 130, 100),
+            color=color.rgb32(50, 80, 60) if selected else color.rgb32(34, 44, 70),
+            highlight_color=color.rgb32(80, 130, 100),
         )
         btn.on_click = (lambda v=tvalue: client.rd_set_target(v))
 
@@ -84,7 +84,7 @@ def build_rd_panel(client: "BarisClient", parent: Entity) -> Entity:
         Text(
             text=f"{tlabel:<16} {rel:>3}%   {tag}",
             parent=root, position=(-0.4, y), origin=(-0.5, 0.5),
-            scale=1.0, color=color.rgb(*tag_color),
+            scale=1.0, color=color.rgb32(*tag_color),
         )
         y -= 0.05
 
@@ -92,13 +92,13 @@ def build_rd_panel(client: "BarisClient", parent: Entity) -> Entity:
     minus = Button(
         parent=root, text="-5 MB [←]",
         position=(-0.15, -0.18), scale=(0.18, 0.055),
-        color=color.rgb(60, 70, 100),
+        color=color.rgb32(60, 70, 100),
     )
     minus.on_click = lambda: client.rd_change_spend(-5)
     plus = Button(
         parent=root, text="+5 MB [→]",
         position=(0.15, -0.18), scale=(0.18, 0.055),
-        color=color.rgb(60, 70, 100),
+        color=color.rgb32(60, 70, 100),
     )
     plus.on_click = lambda: client.rd_change_spend(5)
 
@@ -108,7 +108,7 @@ def build_rd_panel(client: "BarisClient", parent: Entity) -> Entity:
             "Each 3 MB buys one stochastic R&D roll against the target."
         ),
         parent=root, position=(0, -0.28),
-        origin=(0, 0), scale=0.9, color=color.rgb(140, 150, 170),
+        origin=(0, 0), scale=0.9, color=color.rgb32(140, 150, 170),
     )
     _close_button(client, root, -0.37)
     return root
@@ -136,12 +136,12 @@ def build_mc_panel(client: "BarisClient", parent: Entity) -> Entity:
             f"Prestige {me.prestige}   Programs: {format_programs(me)}"
         ),
         parent=root, position=(-0.42, 0.31),
-        origin=(-0.5, 0.5), scale=0.95, color=color.rgb(220, 225, 235),
+        origin=(-0.5, 0.5), scale=0.95, color=color.rgb32(220, 225, 235),
     )
     Text(
         text=rd_summary, parent=root,
         position=(-0.42, 0.27), origin=(-0.5, 0.5),
-        scale=0.95, color=color.rgb(160, 200, 160),
+        scale=0.95, color=color.rgb32(160, 200, 160),
     )
 
     # ---- Mission list (left column) --------------------------------
@@ -149,7 +149,7 @@ def build_mc_panel(client: "BarisClient", parent: Entity) -> Entity:
     Text(
         text="Available missions (click to queue):",
         parent=root, position=(-0.42, 0.22),
-        origin=(-0.5, 0.5), scale=0.95, color=color.rgb(160, 170, 195),
+        origin=(-0.5, 0.5), scale=0.95, color=color.rgb32(160, 170, 195),
     )
     y = 0.175
     for m in visible[:10]:
@@ -167,8 +167,8 @@ def build_mc_panel(client: "BarisClient", parent: Entity) -> Entity:
             parent=root, text=label,
             position=(-0.22, y), scale=(0.4, 0.032),
             color=(
-                color.rgb(80, 100, 60) if queued
-                else (color.rgb(34, 44, 70) if built else color.rgb(55, 40, 40))
+                color.rgb32(80, 100, 60) if queued
+                else (color.rgb32(34, 44, 70) if built else color.rgb32(55, 40, 40))
             ),
         )
         btn.on_click = (lambda mid=m.id: client.mc_select_mission(mid))
@@ -178,13 +178,13 @@ def build_mc_panel(client: "BarisClient", parent: Entity) -> Entity:
     Text(
         text="QUEUED", parent=root,
         position=(0.22, 0.22), origin=(0, 0),
-        scale=1.05, color=color.rgb(240, 200, 90),
+        scale=1.05, color=color.rgb32(240, 200, 90),
     )
     if client.queued_mission is None:
         Text(
             text="(no mission queued)",
             parent=root, position=(0.22, 0.16),
-            origin=(0, 0), scale=0.95, color=color.rgb(140, 150, 170),
+            origin=(0, 0), scale=0.95, color=color.rgb32(140, 150, 170),
         )
     else:
         m = MISSIONS_BY_ID[client.queued_mission]
@@ -203,7 +203,7 @@ def build_mc_panel(client: "BarisClient", parent: Entity) -> Entity:
         Text(
             text=f"{m.name}", parent=root,
             position=(0.22, 0.16), origin=(0, 0),
-            scale=1.0, color=color.rgb(240, 220, 180),
+            scale=1.0, color=color.rgb32(240, 220, 180),
         )
         brief = (
             f"Rocket:  {rocket_display_name(eff_rocket, me.side)}\n"
@@ -216,7 +216,7 @@ def build_mc_panel(client: "BarisClient", parent: Entity) -> Entity:
         Text(
             text=brief, parent=root,
             position=(0.03, 0.1), origin=(-0.5, 0.5),
-            scale=0.9, color=color.rgb(220, 225, 235),
+            scale=0.9, color=color.rgb32(220, 225, 235),
         )
 
         # Objective toggles.
@@ -225,7 +225,7 @@ def build_mc_panel(client: "BarisClient", parent: Entity) -> Entity:
             Text(
                 text="Objectives (click to toggle):",
                 parent=root, position=(0.22, -0.08),
-                origin=(0, 0), scale=0.9, color=color.rgb(160, 170, 195),
+                origin=(0, 0), scale=0.9, color=color.rgb32(160, 170, 195),
             )
             oy = -0.13
             for obj in obj_list:
@@ -241,7 +241,7 @@ def build_mc_panel(client: "BarisClient", parent: Entity) -> Entity:
                     text=f"{marker} {obj.name} {risk}",
                     position=(0.22, oy), scale=(0.4, 0.036),
                     color=(
-                        color.rgb(80, 100, 60) if queued else color.rgb(34, 44, 70)
+                        color.rgb32(80, 100, 60) if queued else color.rgb32(34, 44, 70)
                     ),
                 )
                 btn.on_click = (lambda oid=obj.id: client.mc_toggle_objective(oid))
@@ -252,14 +252,14 @@ def build_mc_panel(client: "BarisClient", parent: Entity) -> Entity:
         Text(
             text="Lunar architecture (one-way choice):",
             parent=root, position=(-0.42, -0.22),
-            origin=(-0.5, 0.5), scale=0.95, color=color.rgb(240, 200, 90),
+            origin=(-0.5, 0.5), scale=0.95, color=color.rgb32(240, 200, 90),
         )
         ax = -0.32
         for arch in (Architecture.LOR, Architecture.DA, Architecture.EOR, Architecture.LSR):
             btn = Button(
                 parent=root, text=arch.value,
                 position=(ax, -0.27), scale=(0.085, 0.05),
-                color=color.rgb(70, 80, 100),
+                color=color.rgb32(70, 80, 100),
             )
             btn.on_click = (lambda a=arch: client.mc_choose_architecture(a))
             ax += 0.11
@@ -268,14 +268,14 @@ def build_mc_panel(client: "BarisClient", parent: Entity) -> Entity:
     submit = Button(
         parent=root, text="SUBMIT TURN [Enter]",
         position=(0.25, -0.37), scale=(0.3, 0.058),
-        color=color.rgb(60, 120, 80),
-        highlight_color=color.rgb(90, 170, 110),
+        color=color.rgb32(60, 120, 80),
+        highlight_color=color.rgb32(90, 170, 110),
     )
     submit.on_click = lambda: client.mc_submit_turn()
     cancel = Button(
         parent=root, text="Close [Esc]",
         position=(-0.25, -0.37), scale=(0.2, 0.05),
-        color=color.rgb(60, 70, 100),
+        color=color.rgb32(60, 70, 100),
     )
     cancel.on_click = lambda: client.close_current_panel()
     return root
@@ -310,12 +310,12 @@ def build_result_panel(
         text=report.mission_name.upper(),
         parent=root, position=(0, 0.27),
         origin=(0, 0), scale=1.8,
-        color=color.rgb(220, 225, 235),
+        color=color.rgb32(220, 225, 235),
     )
     Text(
         text=f"{report.username} [{report.side or '?'}]   Rocket: {report.rocket}",
         parent=root, position=(0, 0.22),
-        origin=(0, 0), scale=0.9, color=color.rgb(140, 150, 170),
+        origin=(0, 0), scale=0.9, color=color.rgb32(140, 150, 170),
     )
 
     if report.aborted:
@@ -336,18 +336,18 @@ def build_result_panel(
 
     Entity(
         parent=root, model="quad",
-        color=color.rgb(20, 28, 48),
+        color=color.rgb32(20, 28, 48),
         scale=(0.55, 0.1), y=0.1,
     )
     Text(
         text=banner, parent=root,
         position=(0, 0.1), origin=(0, 0),
-        scale=2.4, color=color.rgb(*bcolor),
+        scale=2.4, color=color.rgb32(*bcolor),
     )
     Text(
         text=sub, parent=root,
         position=(0, 0.02), origin=(0, 0),
-        scale=0.9, color=color.rgb(140, 150, 170),
+        scale=0.9, color=color.rgb32(140, 150, 170),
     )
 
     if not report.aborted:
@@ -363,14 +363,14 @@ def build_result_panel(
         Text(
             text="\n".join(details), parent=root,
             position=(-0.3, -0.07), origin=(-0.5, 0.5),
-            scale=0.95, color=color.rgb(220, 225, 235),
+            scale=0.95, color=color.rgb32(220, 225, 235),
         )
         if report.objectives:
             obj_y = -0.22
             Text(
                 text="Objectives:", parent=root,
                 position=(-0.3, obj_y), origin=(-0.5, 0.5),
-                scale=0.9, color=color.rgb(240, 200, 90),
+                scale=0.9, color=color.rgb32(240, 200, 90),
             )
             obj_y -= 0.04
             for obj in report.objectives:
@@ -392,14 +392,14 @@ def build_result_panel(
                 Text(
                     text=line, parent=root,
                     position=(-0.3, obj_y), origin=(-0.5, 0.5),
-                    scale=0.85, color=color.rgb(*col),
+                    scale=0.85, color=color.rgb32(*col),
                 )
                 obj_y -= 0.035
 
     cont = Button(
         parent=root, text="Continue [Space]",
         position=(0, -0.32), scale=(0.3, 0.055),
-        color=color.rgb(60, 80, 120),
+        color=color.rgb32(60, 80, 120),
     )
     cont.on_click = lambda: client.advance_result_panel()
     return root
