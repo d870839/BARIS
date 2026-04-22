@@ -27,6 +27,9 @@ from baris import protocol
 from baris.client.net import NetClient
 from baris.client3d import launch as launch_scene
 from baris.client3d import panels_action, panels_info
+from baris.client3d.interior_astro import AstroInterior
+from baris.client3d.interior_library import LibraryInterior
+from baris.client3d.interior_mc import MCInterior
 from baris.client3d.interior_rd import RDInterior
 from baris.state import (
     Architecture,
@@ -99,9 +102,18 @@ class BarisClient(Entity):
         self._build_scene()
         self._build_hud()
 
-        # Pre-build the R&D interior off to the side. It's hidden until
-        # the player walks into the outdoor R&D Complex and presses E.
-        self.rd_interior = RDInterior(origin=(100.0, 0.0, 0.0))
+        # Pre-build each building's interior off to the side. They start
+        # hidden; walking into the outdoor building + pressing E swaps
+        # the player into the matching room.
+        self.interiors: dict[str, Any] = {
+            "rd":      RDInterior(origin=(100.0, 0.0, 0.0)),
+            "mc":      MCInterior(origin=(200.0, 0.0, 0.0)),
+            "astro":   AstroInterior(origin=(100.0, 0.0, 100.0)),
+            "library": LibraryInterior(origin=(200.0, 0.0, 100.0)),
+        }
+        # Back-compat shim: existing code that references self.rd_interior
+        # continues to work without a big rename.
+        self.rd_interior = self.interiors["rd"]
 
     # ------------------------------------------------------------------
     # Scene
@@ -249,15 +261,20 @@ class BarisClient(Entity):
         self._update_pad_rocket()
         self._tick_submit_button()
         # Once the player has committed the turn, there's nothing useful
-        # to do inside the R&D room — kick them back out so they see the
-        # rocket + submit lamp and can't tap the physical R&D buttons.
+        # to do inside a room — kick them back out so they see the rocket
+        # + submit lamp and can't tap the physical buttons.
         me = self.me()
         if me is not None and me.turn_submitted and self.in_interior is not None:
             self._exit_interior()
-        # Keep the R&D interior's wall TVs + spend display live so they
-        # reflect the most recent state / queued selections every frame.
-        if self.in_interior == "rd":
-            self.rd_interior.sync_state(self.me(), self.rd_target, self.rd_spend)
+        # Live-sync whichever interior is currently visible.
+        if self.in_interior is not None:
+            interior = self.interiors[self.in_interior]
+            if self.in_interior == "rd":
+                interior.sync_state(self.me(), self.rd_target, self.rd_spend)
+            elif self.in_interior == "mc":
+                interior.sync_state(self.me(), self.state, self)
+            else:
+                interior.sync_state(self.me(), self.state)
 
     _SUBMIT_RANGE = 3.0
 
@@ -320,6 +337,9 @@ class BarisClient(Entity):
         if key == "escape":
             if self.panel_id not in (None, "lobby"):
                 self.close_current_panel()
+                return
+            if self.in_interior is not None:
+                self._exit_interior()
             return
         if key == "1" and self.panel_id == "lobby":
             self.lobby_pick_side("USA")
@@ -335,8 +355,8 @@ class BarisClient(Entity):
             return
         if key == "e" and self.panel is None:
             # Inside an interior: press physical buttons or walk out.
-            if self.in_interior == "rd":
-                self._press_rd_interior_button()
+            if self.in_interior is not None:
+                self._press_interior_button()
                 return
             # Outside: check the big central submit pedestal first so it
             # always wins proximity even if you're near the plaza edge of
@@ -344,15 +364,11 @@ class BarisClient(Entity):
             if self._near_submit_button():
                 self._press_submit_button()
                 return
-            # Approaching a building either enters its interior (R&D) or
-            # opens its 2D panel (everything else for now).
+            # Approaching a building enters its walk-in interior.
             nearby = self._nearby_interactive_building()
             if nearby is None:
                 return
-            if nearby._bid == "rd":
-                self._enter_rd_interior()
-            else:
-                self._open_panel(nearby._bid)
+            self._enter_interior(nearby._bid)
 
     # ------------------------------------------------------------------
     # Network
@@ -418,6 +434,42 @@ class BarisClient(Entity):
             return True
         return me.turn_submitted
 
+    _INTERIOR_LABELS = {
+        "rd":      "R&D Complex",
+        "mc":      "Mission Control",
+        "astro":   "Astronaut Complex",
+        "library": "Library",
+    }
+
+    def _prompt_for_interior_button(self, bid: str | None) -> str:
+        """Human-readable hint for the currently-closest interior button."""
+        room_label = self._INTERIOR_LABELS.get(self.in_interior or "", "")
+        if bid is None:
+            if self.in_interior in ("astro", "library"):
+                return f"Inside the {room_label} — [Esc] walks out"
+            return "Walk up to a button and press E"
+        if bid == "exit":
+            return f"[E] Exit {room_label}"
+        if bid.startswith("target:"):
+            return f"[E] Set R&D target: {bid.split(':', 1)[1]}"
+        if bid == "spend_plus":
+            return "[E] +5 MB"
+        if bid == "spend_minus":
+            return "[E] -5 MB"
+        if bid.startswith("mission:"):
+            mid = bid.split(":", 1)[1]
+            try:
+                name = MISSIONS_BY_ID[MissionId(mid)].name
+            except (ValueError, KeyError):
+                name = mid
+            return f"[E] Queue mission: {name}"
+        if bid.startswith("objective:"):
+            pretty = bid.split(":", 1)[1].replace("_", " ").title()
+            return f"[E] Toggle objective: {pretty}"
+        if bid.startswith("arch:"):
+            return f"[E] Commit architecture: {bid.split(':', 1)[1]}"
+        return ""
+
     # ------------------------------------------------------------------
     # Proximity / prompts
     # ------------------------------------------------------------------
@@ -453,22 +505,11 @@ class BarisClient(Entity):
             return
         # Interior prompts override the outdoor proximity prompt — inside a
         # walk-in building, we surface the nearest physical button instead.
-        if self.in_interior == "rd":
+        if self.in_interior is not None:
+            interior = self.interiors[self.in_interior]
             px, _, pz = self.player.position
-            bid = self.rd_interior.nearby_button((px, pz))
-            if bid is None:
-                self.prompt_text.text = "Walk up to a button and press E"
-            elif bid == "exit":
-                self.prompt_text.text = "[E] Exit R&D Complex"
-            elif bid.startswith("target:"):
-                pretty = bid.split(":", 1)[1]
-                self.prompt_text.text = f"[E] Set R&D target: {pretty}"
-            elif bid == "spend_plus":
-                self.prompt_text.text = "[E] +5 MB"
-            elif bid == "spend_minus":
-                self.prompt_text.text = "[E] -5 MB"
-            else:
-                self.prompt_text.text = ""
+            bid = interior.nearby_button((px, pz))
+            self.prompt_text.text = self._prompt_for_interior_button(bid)
             return
         if self._near_submit_button():
             self.prompt_text.text = "[E] SUBMIT TURN"
@@ -534,46 +575,87 @@ class BarisClient(Entity):
         self._open_panel(current)
 
     # ------------------------------------------------------------------
-    # R&D interior — walkable room, not a panel
+    # Building interiors — walkable rooms, not panels
     # ------------------------------------------------------------------
-    def _enter_rd_interior(self) -> None:
+    def _enter_interior(self, bid: str) -> None:
+        interior = self.interiors.get(bid)
+        if interior is None:
+            return
         # Remember where the player was so exit can drop them back there.
         self._exit_return_pos = tuple(self.player.position)
-        self.in_interior = "rd"
-        self.rd_interior.show()
-        self.rd_interior.sync_state(self.me(), self.rd_target, self.rd_spend)
-        self.player.position = self.rd_interior.entry_world_pos
-        # Keep the FPS controller active — pointer stays locked for mouselook.
+        self.in_interior = bid
+        interior.show()
+        # Prime the displays so they don't flash empty on first frame.
+        if bid == "rd":
+            interior.sync_state(self.me(), self.rd_target, self.rd_spend)
+        elif bid == "mc":
+            interior.sync_state(self.me(), self.state, self)
+        else:
+            interior.sync_state(self.me(), self.state)
+        self.player.position = interior.entry_world_pos
         mouse.locked = True
         mouse.visible = False
 
+    # Legacy alias so earlier code paths keep working.
+    def _enter_rd_interior(self) -> None:
+        self._enter_interior("rd")
+
     def _exit_interior(self) -> None:
-        if self.in_interior == "rd":
-            self.rd_interior.hide()
+        if self.in_interior is not None:
+            self.interiors[self.in_interior].hide()
         self.in_interior = None
         if self._exit_return_pos is not None:
             self.player.position = self._exit_return_pos
             self._exit_return_pos = None
 
-    def _press_rd_interior_button(self) -> None:
-        """Dispatch an E press while inside the R&D interior."""
+    def _press_interior_button(self) -> None:
+        """Dispatch an E press while inside any interior. The set of valid
+        button ids is per-room; everything else is a no-op."""
+        if self.in_interior is None:
+            return
+        interior = self.interiors[self.in_interior]
         px, _, pz = self.player.position
-        bid = self.rd_interior.nearby_button((px, pz))
+        bid = interior.nearby_button((px, pz))
         if bid is None:
             return
-        self.rd_interior.press_feedback(bid)
+        interior.press_feedback(bid)
         if bid == "exit":
             self._exit_interior()
             return
-        if bid.startswith("target:"):
-            self.rd_set_target(bid.split(":", 1)[1])
+        # R&D room buttons
+        if self.in_interior == "rd":
+            if bid.startswith("target:"):
+                self.rd_set_target(bid.split(":", 1)[1])
+            elif bid == "spend_plus":
+                self.rd_change_spend(5)
+            elif bid == "spend_minus":
+                self.rd_change_spend(-5)
             return
-        if bid == "spend_plus":
-            self.rd_change_spend(5)
+        # Mission Control buttons
+        if self.in_interior == "mc":
+            if bid.startswith("mission:"):
+                try:
+                    mid = MissionId(bid.split(":", 1)[1])
+                except ValueError:
+                    return
+                self.mc_select_mission(mid)
+            elif bid.startswith("objective:"):
+                try:
+                    oid = ObjectiveId(bid.split(":", 1)[1])
+                except ValueError:
+                    return
+                self.mc_toggle_objective(oid)
+            elif bid.startswith("arch:"):
+                try:
+                    arch = Architecture(bid.split(":", 1)[1])
+                except ValueError:
+                    return
+                self.mc_choose_architecture(arch)
             return
-        if bid == "spend_minus":
-            self.rd_change_spend(-5)
-            return
+
+    # Legacy alias so existing input dispatch keeps working.
+    def _press_rd_interior_button(self) -> None:
+        self._press_interior_button()
 
     # ------------------------------------------------------------------
     # Lobby actions
