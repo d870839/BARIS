@@ -356,13 +356,14 @@ def build_result_panel(
     Text(
         text=report.mission_name.upper(),
         parent=root, position=(0, 0.27),
-        origin=(0, 0), scale=1.8,
+        origin=(0, 0), scale=1.8, z=-0.01,
         color=color.rgb32(220, 225, 235),
     )
     Text(
         text=f"{report.username} [{report.side or '?'}]   Rocket: {report.rocket}",
         parent=root, position=(0, 0.22),
-        origin=(0, 0), scale=0.9, color=color.rgb32(140, 150, 170),
+        origin=(0, 0), scale=0.9, z=-0.01,
+        color=color.rgb32(140, 150, 170),
     )
 
     if report.aborted:
@@ -381,20 +382,22 @@ def build_result_panel(
         bcolor = (220, 90, 90)
         sub = f"Effective {report.effective_success:.2f} — roll did not clear"
 
-    Entity(
-        parent=root, model="quad",
-        color=color.rgb32(20, 28, 48),
-        scale=(0.55, 0.1), y=0.1,
-    )
+    # Drop any previous-panel's quad backdrop here — an overlapping
+    # Entity(model="quad") at the same z as the shell background z-fights
+    # and sometimes wins, covering the banner text. The banner color alone
+    # is enough to read against the panel's dark blue. All content-text
+    # entities below also carry z=-0.01 so they render a hair in front of
+    # the shell background (which sits at z=0) regardless of creation-
+    # order quirks.
     Text(
         text=banner, parent=root,
         position=(0, 0.1), origin=(0, 0),
-        scale=2.4, color=color.rgb32(*bcolor),
+        scale=2.4, z=-0.01, color=color.rgb32(*bcolor),
     )
     Text(
         text=sub, parent=root,
         position=(0, 0.02), origin=(0, 0),
-        scale=0.9, color=color.rgb32(140, 150, 170),
+        scale=0.9, z=-0.01, color=color.rgb32(140, 150, 170),
     )
 
     if not report.aborted:
@@ -410,14 +413,14 @@ def build_result_panel(
         Text(
             text="\n".join(details), parent=root,
             position=(-0.3, -0.07), origin=(-0.5, 0.5),
-            scale=0.95, color=color.rgb32(220, 225, 235),
+            scale=0.95, z=-0.01, color=color.rgb32(220, 225, 235),
         )
         if report.objectives:
             obj_y = -0.22
             Text(
                 text="Objectives:", parent=root,
                 position=(-0.3, obj_y), origin=(-0.5, 0.5),
-                scale=0.9, color=color.rgb32(240, 200, 90),
+                scale=0.9, z=-0.01, color=color.rgb32(240, 200, 90),
             )
             obj_y -= 0.04
             for obj in report.objectives:
@@ -439,7 +442,7 @@ def build_result_panel(
                 Text(
                     text=line, parent=root,
                     position=(-0.3, obj_y), origin=(-0.5, 0.5),
-                    scale=0.85, color=color.rgb32(*col),
+                    scale=0.85, z=-0.01, color=color.rgb32(*col),
                 )
                 obj_y -= 0.035
 
