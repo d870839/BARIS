@@ -153,8 +153,8 @@ def build_astro_panel(client: "BarisClient", parent: Entity) -> Entity:
     root, w, h = _panel_shell(parent, f"ASTRONAUT COMPLEX  —  {side}")
 
     # Header row
-    header = "{:<14}{:>8}{:>6}{:>9}{:>9}   {}".format(
-        "Name", "Capsule", "EVA", "Endure", "Command", "Status"
+    header = "{:<14}{:>8}{:>5}{:>5}{:>6}{:>8}   {}".format(
+        "Name", "Capsule", "LM", "EVA", "Dock", "Endure", "Status"
     )
     Text(
         text=header, parent=root,
@@ -163,9 +163,10 @@ def build_astro_panel(client: "BarisClient", parent: Entity) -> Entity:
     )
     y = 0.25
     for astro in me.astronauts:
-        row = "{:<14}{:>8}{:>6}{:>9}{:>9}   {}".format(
-            astro.name, astro.capsule, astro.eva, astro.endurance,
-            astro.command, "active" if astro.active else "KIA",
+        row = "{:<14}{:>8}{:>5}{:>5}{:>6}{:>8}   {}".format(
+            astro.name, astro.capsule, astro.lm_pilot, astro.eva,
+            astro.docking, astro.endurance,
+            "active" if astro.active else "KIA",
         )
         Text(
             text=row, parent=root,

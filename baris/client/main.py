@@ -1245,14 +1245,17 @@ class Client:
         side_label = me.side.value if me.side else "?"
         draw_text(self.screen, f"YOUR ROSTER — {side_label}", (cx, cy), size=18,
                   color=side_color(me.side), bold=True)
-        header = f"{'Name':<14}{'Capsule':<10}{'EVA':<8}{'Endure':<9}{'Command':<10}Status"
+        header = (
+            f"{'Name':<14}{'Capsule':<9}{'LM':<6}{'EVA':<6}{'Dock':<6}{'Endure':<8}Status"
+        )
         draw_text(self.screen, header, (cx, cy + 32), size=14, color=DIM)
         y = cy + 58
         for astro in me.astronauts:
             color = FG if astro.active else RED
             row = (
                 f"{astro.name:<14}"
-                f"{astro.capsule:<10}{astro.eva:<8}{astro.endurance:<9}{astro.command:<10}"
+                f"{astro.capsule:<9}{astro.lm_pilot:<6}"
+                f"{astro.eva:<6}{astro.docking:<6}{astro.endurance:<8}"
                 f"{'active' if astro.active else 'KIA'}"
             )
             draw_text(self.screen, row, (cx, y), size=15, color=color)
@@ -1454,7 +1457,7 @@ class Client:
         active = player.active_astronauts()
         if len(active) < mission.crew_size:
             return []
-        skill_key: Skill = mission.primary_skill or Skill.COMMAND
+        skill_key: Skill = mission.primary_skill or Skill.CAPSULE
         ranked = sorted(active, key=lambda a: a.skill(skill_key), reverse=True)
         return ranked[:mission.crew_size]
 

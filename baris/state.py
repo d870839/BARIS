@@ -36,10 +36,19 @@ class Module(str, Enum):
 
 
 class Skill(str, Enum):
+    """Crew skill categories, aligned with the BARIS manual's five tracks.
+
+    CAPSULE — Capsule Pilot (CA): applies to all capsule / shuttle steps.
+    LM_PILOT — Lunar Module Pilot (LM): applies to lunar-module steps.
+    EVA     — Extra-Vehicular Activity: spacewalks and lunar surface work.
+    DOCKING — Docking (DO): applies to orbital docking attempts.
+    ENDURANCE — (EN): long-duration missions, hospital recovery.
+    """
     CAPSULE = "capsule"
+    LM_PILOT = "lm_pilot"
     EVA = "eva"
+    DOCKING = "docking"
     ENDURANCE = "endurance"
-    COMMAND = "command"
 
 
 class AstronautStatus(str, Enum):
@@ -157,9 +166,9 @@ MISSIONS: tuple[Mission, ...] = (
     Mission(MissionId.LUNAR_LANDING,        "Lunar landing",        Rocket.HEAVY, 25, 0.35, 20, 5, 10,
             tier=ProgramTier.THREE),
     Mission(MissionId.MANNED_LUNAR_ORBIT,   "Manned lunar orbit",   Rocket.HEAVY, 25, 0.40, 20, 6,  9,
-            tier=ProgramTier.THREE, manned=True, crew_size=2, primary_skill=Skill.COMMAND),
+            tier=ProgramTier.THREE, manned=True, crew_size=2, primary_skill=Skill.CAPSULE),
     Mission(MissionId.MANNED_LUNAR_LANDING, "Manned lunar landing", Rocket.HEAVY, 35, 0.25, 35, 8, 15,
-            tier=ProgramTier.THREE, manned=True, crew_size=3, primary_skill=Skill.COMMAND),
+            tier=ProgramTier.THREE, manned=True, crew_size=3, primary_skill=Skill.LM_PILOT),
 )
 
 MISSIONS_BY_ID: dict[MissionId, Mission] = {m.id: m for m in MISSIONS}
@@ -197,7 +206,7 @@ MISSION_OBJECTIVES: dict[MissionId, tuple[MissionObjective, ...]] = {
     ),
     MissionId.MULTI_CREW_ORBITAL: (
         MissionObjective(
-            ObjectiveId.DOCKING, "Orbital docking", Skill.COMMAND,
+            ObjectiveId.DOCKING, "Orbital docking", Skill.DOCKING,
             base_success=0.55, prestige_bonus=6,
             fail_ship_loss_chance=0.25,
             requires_module=Module.DOCKING,
@@ -330,9 +339,10 @@ class Astronaut:
     id: str
     name: str
     capsule: int = 0
+    lm_pilot: int = 0
     eva: int = 0
+    docking: int = 0
     endurance: int = 0
-    command: int = 0
     status: str = AstronautStatus.ACTIVE.value  # stored as string for JSON safety
 
     def skill(self, kind: Skill) -> int:
@@ -469,8 +479,22 @@ def _player_from_dict(d: dict[str, Any]) -> Player:
     side = data.get("side")
     data["side"] = Side(side) if side else None
     raw_astronauts = data.get("astronauts") or []
-    data["astronauts"] = [Astronaut(**a) for a in raw_astronauts]
+    data["astronauts"] = [_astronaut_from_dict(a) for a in raw_astronauts]
     return Player(**data)
+
+
+def _astronaut_from_dict(d: dict[str, Any]) -> Astronaut:
+    """Tolerant parser: legacy state dicts stored a single 'command' skill;
+    the 5-skill model splits that into lm_pilot + docking. Map the old
+    value onto docking (closest analogue — orbital-ops commander) and
+    default lm_pilot to 0 when it's missing."""
+    data = dict(d)
+    legacy_command = data.pop("command", None)
+    if legacy_command is not None and "docking" not in data:
+        data["docking"] = legacy_command
+    data.setdefault("lm_pilot", 0)
+    data.setdefault("docking", 0)
+    return Astronaut(**data)
 
 
 @dataclass

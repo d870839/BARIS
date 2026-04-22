@@ -80,13 +80,17 @@ def _two_player_state() -> GameState:
 
 
 def _make_astronaut(name: str, **skills: int) -> Astronaut:
+    # Legacy tests that set command= get their value mapped to docking so
+    # the old intent (good at docking/CM ops) is preserved.
+    legacy_command = skills.pop("command", 0)
     return Astronaut(
         id=name,
         name=name,
         capsule=skills.get("capsule", 0),
+        lm_pilot=skills.get("lm_pilot", 0),
         eva=skills.get("eva", 0),
+        docking=skills.get("docking", legacy_command),
         endurance=skills.get("endurance", 0),
-        command=skills.get("command", 0),
     )
 
 
@@ -346,7 +350,7 @@ def test_eor_lets_player_attempt_landing_with_only_medium() -> None:
     me.reliability[Rocket.MEDIUM.value] = 70  # Heavy NOT built
     me.budget = 500
     for a in me.astronauts:
-        a.command = 100
+        a.lm_pilot = 100
     choose_architecture(me, Architecture.EOR)
 
     submit_turn(me, rd_rocket=None, rd_spend=0, launch=MissionId.MANNED_LUNAR_LANDING)
@@ -506,12 +510,12 @@ def test_manned_mission_rejected_without_enough_crew() -> None:
 def test_select_crew_picks_top_skilled_by_primary() -> None:
     me = Player(player_id="a", username="Alice", side=Side.USA)
     me.astronauts = [
-        _make_astronaut("A", command=10),
-        _make_astronaut("B", command=90),
-        _make_astronaut("C", command=50),
-        _make_astronaut("D", command=70),
+        _make_astronaut("A", capsule=10),
+        _make_astronaut("B", capsule=90),
+        _make_astronaut("C", capsule=50),
+        _make_astronaut("D", capsule=70),
     ]
-    mission = MISSIONS_BY_ID[MissionId.MANNED_LUNAR_ORBIT]  # crew_size=2, primary=Command
+    mission = MISSIONS_BY_ID[MissionId.MANNED_LUNAR_ORBIT]  # crew_size=2, primary=Capsule
     crew = _select_crew(me, mission)
     assert crew is not None
     assert [a.name for a in crew] == ["B", "D"]
@@ -519,9 +523,9 @@ def test_select_crew_picks_top_skilled_by_primary() -> None:
 
 def test_crew_bonus_scales_with_primary_skill() -> None:
     mission = MISSIONS_BY_ID[MissionId.MANNED_LUNAR_LANDING]
-    crew_max = [_make_astronaut(f"X{i}", command=100) for i in range(mission.crew_size)]
-    crew_zero = [_make_astronaut(f"Y{i}", command=0) for i in range(mission.crew_size)]
-    crew_half = [_make_astronaut(f"Z{i}", command=50) for i in range(mission.crew_size)]
+    crew_max = [_make_astronaut(f"X{i}", lm_pilot=100) for i in range(mission.crew_size)]
+    crew_zero = [_make_astronaut(f"Y{i}", lm_pilot=0) for i in range(mission.crew_size)]
+    crew_half = [_make_astronaut(f"Z{i}", lm_pilot=50) for i in range(mission.crew_size)]
 
     assert _crew_bonus(crew_zero, mission) == 0.0
     assert abs(_crew_bonus(crew_max, mission) - CREW_MAX_BONUS) < 1e-9
@@ -538,7 +542,7 @@ def test_manned_landing_success_ends_game() -> None:
     me.mission_successes[MissionId.MULTI_CREW_ORBITAL.value] = 1
     choose_architecture(me, Architecture.LOR)
     for a in me.astronauts:
-        a.command = 100
+        a.lm_pilot = 100
 
     submit_turn(me, rd_rocket=None, rd_spend=0, launch=MissionId.MANNED_LUNAR_LANDING)
     submit_turn(state.players[1], rd_rocket=None, rd_spend=0, launch=None)
@@ -636,19 +640,23 @@ def test_passive_training_raises_skills_each_turn() -> None:
     state = _two_player_state()
     start_game(state, rng=random.Random(7))
     me = state.players[0]
-    before = [(a.capsule, a.eva, a.endurance, a.command) for a in me.astronauts]
+    before = [
+        (a.capsule, a.lm_pilot, a.eva, a.docking, a.endurance)
+        for a in me.astronauts
+    ]
 
     submit_turn(me, rd_rocket=None, rd_spend=0, launch=None)
     submit_turn(state.players[1], rd_rocket=None, rd_spend=0, launch=None)
     resolve_turn(state, rng=random.Random(7))
 
-    after = [(a.capsule, a.eva, a.endurance, a.command) for a in me.astronauts]
+    after = [
+        (a.capsule, a.lm_pilot, a.eva, a.docking, a.endurance)
+        for a in me.astronauts
+    ]
     # every skill should have risen by at least 1 per astronaut
-    for (c0, e0, n0, m0), (c1, e1, n1, m1) in zip(before, after):
-        assert c1 >= c0 + 1
-        assert e1 >= e0 + 1
-        assert n1 >= n0 + 1
-        assert m1 >= m0 + 1
+    for b, a in zip(before, after):
+        for b_val, a_val in zip(b, a):
+            assert a_val >= b_val + 1
 
 
 # ----------------------------------------------------------------------
@@ -872,7 +880,7 @@ def test_docking_objective_dropped_without_module() -> None:
     me.reliability[Rocket.MEDIUM.value] = 70
     me.budget = 200
     for a in me.astronauts:
-        a.command = 80
+        a.docking = 80
 
     submit_turn(
         me, rd_spend=0, launch=MissionId.MULTI_CREW_ORBITAL,
@@ -892,7 +900,7 @@ def test_docking_objective_accepted_when_module_built() -> None:
     me.reliability[Module.DOCKING.value] = 70
     me.budget = 200
     for a in me.astronauts:
-        a.command = 80
+        a.docking = 80
 
     submit_turn(
         me, rd_spend=0, launch=MissionId.MULTI_CREW_ORBITAL,
@@ -988,7 +996,7 @@ def test_failed_docking_can_destroy_ship() -> None:
     me.reliability[Module.DOCKING.value] = 70
     me.budget = 200
     for a in me.astronauts:
-        a.command = 30  # make docking objective likely to fail
+        a.docking = 30  # make docking objective likely to fail
 
     submit_turn(
         me, rd_spend=0, launch=MissionId.MULTI_CREW_ORBITAL,
@@ -1135,7 +1143,7 @@ def test_manned_lunar_landing_success_marks_ended_game() -> None:
     me.mission_successes[MissionId.MULTI_CREW_ORBITAL.value] = 1
     choose_architecture(me, Architecture.LOR)
     for a in me.astronauts:
-        a.command = 100
+        a.lm_pilot = 100
 
     submit_turn(me, rd_rocket=None, rd_spend=0, launch=MissionId.MANNED_LUNAR_LANDING)
     submit_turn(state.players[1], rd_rocket=None, rd_spend=0, launch=None)

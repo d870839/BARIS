@@ -141,13 +141,13 @@ class AstroInterior:
                 position=(text_x, y + 0.45, z), rotation=text_rot,
                 scale=4, origin=(0, 0), color=color.rgb32(140, 150, 170),
             )
-            # Four skill rows
+            # Five skill rows — one per manual skill category.
             skill_texts: list[Text] = []
-            for i, label in enumerate(("Capsule", "EVA", "Endure", "Command")):
+            for i, label in enumerate(("Capsule", "LM", "EVA", "Docking", "Endure")):
                 skill = Text(
                     text=f"{label:<8} 0", parent=self.root,
-                    position=(text_x, y + 0.1 - i * 0.22, z), rotation=text_rot,
-                    scale=4.5, origin=(0, 0),
+                    position=(text_x, y + 0.15 - i * 0.19, z), rotation=text_rot,
+                    scale=4.2, origin=(0, 0),
                     color=color.rgb32(220, 225, 235),
                 )
                 skill_texts.append(skill)
@@ -207,8 +207,8 @@ class AstroInterior:
                 slot["status"].color = color.rgb32(220, 90, 90)
             for s, label, val in zip(
                 slot["skills"],
-                ("Capsule", "EVA", "Endure", "Command"),
-                (astro.capsule, astro.eva, astro.endurance, astro.command),
+                ("Capsule", "LM", "EVA", "Docking", "Endure"),
+                (astro.capsule, astro.lm_pilot, astro.eva, astro.docking, astro.endurance),
             ):
                 s.text = f"{label:<8} {val:>3}"
                 s.color = (

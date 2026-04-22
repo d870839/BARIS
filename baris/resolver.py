@@ -145,9 +145,10 @@ def _apply_debug_preseed(player: Player) -> None:
     player.mission_successes[MissionId.MULTI_CREW_ORBITAL.value] = 1
     for a in player.astronauts:
         a.capsule = max(a.capsule, 70)
+        a.lm_pilot = max(a.lm_pilot, 70)
         a.eva = max(a.eva, 70)
+        a.docking = max(a.docking, 70)
         a.endurance = max(a.endurance, 70)
-        a.command = max(a.command, 70)
 
 
 def _generate_starting_roster(player: Player, rng: random.Random) -> list[Astronaut]:
@@ -162,9 +163,10 @@ def _generate_starting_roster(player: Player, rng: random.Random) -> list[Astron
             id=uuid.uuid4().hex[:6],
             name=name,
             capsule=rng.randint(20, 50),
+            lm_pilot=rng.randint(20, 50),
             eva=rng.randint(20, 50),
+            docking=rng.randint(20, 50),
             endurance=rng.randint(20, 50),
-            command=rng.randint(20, 50),
         ))
     return roster
 
@@ -517,7 +519,7 @@ def _select_crew(player: Player, mission: Mission) -> list[Astronaut] | None:
     active = player.active_astronauts()
     if len(active) < mission.crew_size:
         return None
-    skill_key = mission.primary_skill or Skill.COMMAND
+    skill_key = mission.primary_skill or Skill.CAPSULE
     ranked = sorted(active, key=lambda a: a.skill(skill_key), reverse=True)
     return ranked[:mission.crew_size]
 
