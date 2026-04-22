@@ -94,6 +94,7 @@ class MCInterior:
         self._build_objective_wall()
         self._build_arch_wall()
         self._build_exit()
+        self._build_scrub_station()
 
     # ------------------------------------------------------------------
     # Geometry
@@ -331,6 +332,35 @@ class MCInterior:
                 color=color.rgb32(220, 225, 235),
             )
 
+    def _build_scrub_station(self) -> None:
+        """A dedicated SCRUB pedestal just south of the console slab so
+        the player can void a scheduled launch without having to swing
+        over to the panel."""
+        x = 4.0
+        z = -3.6
+        Entity(
+            parent=self.root, model="cube",
+            position=(x, 0.45, z), scale=(0.9, 0.9, 0.9),
+            color=color.rgb32(90, 55, 55),
+            collider="box",
+        )
+        cap = Entity(
+            parent=self.root, model="cube",
+            position=(x, 1.0, z), scale=(0.55, 0.15, 0.55),
+            color=color.rgb32(90, 55, 55),
+        )
+        cap._rest_y = cap.y
+        self.buttons["scrub"] = cap
+        self._scrub_cap = cap
+        Text(
+            text="SCRUB\nSCHEDULED",
+            parent=self.root,
+            position=(x, 1.5, z),
+            scale=4.2, origin=(0, 0),
+            billboard=True,
+            color=color.rgb32(240, 200, 200),
+        )
+
     def _build_exit(self) -> None:
         z = -ROOM_DEPTH / 2 + 0.8
         Entity(
@@ -363,10 +393,29 @@ class MCInterior:
     def sync_state(self, me: Any, state: Any, client: Any = None) -> None:
         if me is None or state is None:
             return
-        # Mission pedestals: recolor based on visibility / queued state.
-        visible_ids = {m.id.value for m in visible_missions(me)}
+        scheduled = getattr(me, "scheduled_launch", None)
+        scheduled_id = scheduled.mission_id if scheduled is not None else None
         queued = client.queued_mission.value if (client and client.queued_mission) else None
+
+        # Scrub pedestal cap: hot red when something's scheduled, dim red otherwise.
+        scrub_cap = getattr(self, "_scrub_cap", None)
+        if scrub_cap is not None:
+            scrub_cap.color = (
+                color.rgb32(220, 70, 70) if scheduled is not None
+                else color.rgb32(80, 55, 55)
+            )
+
+        # Mission pedestals: if something is on the manifest, light only
+        # that cap (amber for "scheduled, not green-queued"); every other
+        # cap goes dim red since nothing else can be queued.
+        visible_ids = {m.id.value for m in visible_missions(me)}
         for mid, cap in self._mission_caps.items():
+            if scheduled_id is not None:
+                if mid == scheduled_id:
+                    cap.color = color.rgb32(240, 170, 60)
+                else:
+                    cap.color = color.rgb32(55, 40, 45)
+                continue
             if mid == queued:
                 cap.color = color.rgb32(70, 170, 90)
             elif mid in visible_ids:
@@ -374,9 +423,21 @@ class MCInterior:
             else:
                 cap.color = color.rgb32(70, 40, 40)  # unavailable
 
-        # Briefing TV.
-        if client and client.queued_mission is not None:
-            m = MISSIONS_BY_ID[client.queued_mission]
+        # Briefing TV — prefer the scheduled mission (next to fly) over
+        # whatever the player may have been previewing with pending clicks.
+        display_mid: str | None = None
+        if scheduled_id is not None:
+            display_mid = scheduled_id
+        elif client and client.queued_mission is not None:
+            display_mid = client.queued_mission.value
+        if display_mid is not None:
+            try:
+                m = MISSIONS_BY_ID[MissionId(display_mid)]
+            except (ValueError, KeyError):
+                m = None
+        else:
+            m = None
+        if m is not None:
             eff_rocket = effective_rocket(me, m)
             eff_cost = effective_launch_cost(me, m)
             base_s = effective_base_success(me, m)
@@ -387,7 +448,8 @@ class MCInterior:
             if m.manned:
                 crew_b = _crew_bonus_preview(me.active_astronauts(), m)
             eff = base_s + crew_b + rel_bonus
-            self.briefing_title.text = m.name.upper()
+            prefix = "SCHEDULED: " if scheduled_id is not None else ""
+            self.briefing_title.text = prefix + m.name.upper()
             self.briefing_rocket.text = f"Rocket:  {rocket_display_name(eff_rocket, me.side)}"
             self.briefing_cost.text = f"Cost:    {eff_cost} MB"
             self.briefing_base.text = f"Base:    {base_s:+.2f}"

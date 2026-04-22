@@ -329,6 +329,14 @@ RELIABILITY_GAIN_ON_SUCCESS = 5
 RELIABILITY_LOSS_ON_FAIL    = 10   # manned failures only
 UNMANNED_FAILURE_RD_GAIN    = 2    # a crashed unmanned probe still teaches you something
 MANNED_FAILURE_BUDGET_CUT   = 30   # lost crew → public/political funding pullback
+
+# Phase B — Vehicle-Assembly costs. A submitted launch reserves
+# ASSEMBLY_COST_FRACTION of its launch_cost immediately; the remainder
+# is paid the following turn when the vehicle actually flies. Scrubbing
+# a scheduled launch refunds SCRUB_REFUND_FRACTION of the assembly
+# portion (the rest has already been spent on hardware integration).
+ASSEMBLY_COST_FRACTION   = 0.3
+SCRUB_REFUND_FRACTION    = 0.5
 # Reliability contributes ±10% to success around a neutral value of 50.
 # effective = base + crew_bonus + (reliability - 50) * RELIABILITY_SWING_PER_POINT
 RELIABILITY_SWING_PER_POINT = 0.002
@@ -379,6 +387,12 @@ class Player:
     pending_rd_spend: int = 0
     pending_launch: str | None = None      # MissionId.value or None
     pending_objectives: list[str] = field(default_factory=list)  # ObjectiveId.value list
+    # Phase B — multi-turn scheduling. When a turn resolves, a newly-
+    # submitted launch is promoted into `scheduled_launch` (paying the
+    # assembly cost) instead of being fired immediately. On the FOLLOWING
+    # resolve, that scheduled launch actually flies. None if nothing is
+    # on the manifest.
+    scheduled_launch: "ScheduledLaunch | None" = None
 
     def rocket_reliability(self, rocket: Rocket) -> int:
         return self.reliability.get(rocket.value, 0)
@@ -480,6 +494,7 @@ def _player_from_dict(d: dict[str, Any]) -> Player:
     data["side"] = Side(side) if side else None
     raw_astronauts = data.get("astronauts") or []
     data["astronauts"] = [_astronaut_from_dict(a) for a in raw_astronauts]
+    data["scheduled_launch"] = _scheduled_launch_from_dict(data.get("scheduled_launch"))
     return Player(**data)
 
 
@@ -548,6 +563,32 @@ def _launch_report_from_dict(d: dict[str, Any]) -> LaunchReport:
     raw_objs = data.get("objectives") or []
     data["objectives"] = [ObjectiveReport(**o) for o in raw_objs]
     return LaunchReport(**data)
+
+
+@dataclass
+class ScheduledLaunch:
+    """A mission the player committed to last turn; it's in the VAB,
+    partially paid for (assembly_cost already deducted), and will actually
+    fly on the NEXT resolve. `architecture` and `objectives` are snapshots
+    at schedule time — changing them after scheduling has no effect on the
+    imminent flight."""
+    mission_id: str          # MissionId.value
+    rocket_class: str        # Rocket.value at schedule time (pre-arch override)
+    launch_cost_total: int   # full cost this mission will need across both turns
+    assembly_cost_paid: int  # portion already deducted at schedule time
+    launch_cost_remaining: int  # portion still due at launch-resolve time
+    objectives: list[str]    # ObjectiveId.values frozen at schedule time
+    architecture: str | None = None
+    scheduled_year: int = 0
+    scheduled_season: str = ""
+
+
+def _scheduled_launch_from_dict(d: dict[str, Any] | None) -> ScheduledLaunch | None:
+    if d is None:
+        return None
+    data = dict(d)
+    data.setdefault("objectives", [])
+    return ScheduledLaunch(**data)
 
 
 SEASON_ORDER = [Season.SPRING, Season.SUMMER, Season.FALL, Season.WINTER]

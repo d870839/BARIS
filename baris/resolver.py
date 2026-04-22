@@ -6,6 +6,7 @@ import uuid
 from baris.state import (
     ARCHITECTURE_COST_DELTA,
     ARCHITECTURE_SUCCESS_DELTA,
+    ASSEMBLY_COST_FRACTION,
     Architecture,
     Astronaut,
     AstronautStatus,
@@ -29,6 +30,8 @@ from baris.state import (
     ProgramTier,
     RD_BATCH_COST,
     RD_SPEED,
+    SCRUB_REFUND_FRACTION,
+    ScheduledLaunch,
     objectives_for,
     RELIABILITY_CAP,
     RELIABILITY_FLOOR,
@@ -190,11 +193,19 @@ def submit_turn(
 
     player.pending_launch = None
     player.pending_objectives = []
-    if launch is not None:
+    # With VAB scheduling, only one mission can be on the manifest at a
+    # time. Attempting to queue a new launch while one is already
+    # scheduled is silently dropped — the player must resolve or scrub
+    # the existing commitment first.
+    if launch is not None and player.scheduled_launch is None:
         mission = MISSIONS_BY_ID[launch]
         eff_rocket = effective_rocket(player, mission)
         eff_cost = effective_launch_cost(player, mission)
-        can_afford = player.budget >= eff_cost + player.pending_rd_spend
+        assembly_due = int(eff_cost * ASSEMBLY_COST_FRACTION)
+        # Only need the assembly slice up front; the remainder is due at
+        # actual launch (next turn). If the player's budget can't cover
+        # even assembly + R&D this turn, reject the schedule.
+        can_afford = player.budget >= assembly_due + player.pending_rd_spend
         crew_ok = not mission.manned or _select_crew(player, mission) is not None
         tier_ok = player.is_tier_unlocked(mission.tier)
         arch_ok = meets_architecture_prereqs(player, mission)
@@ -213,6 +224,18 @@ def submit_turn(
     player.turn_submitted = True
 
 
+def scrub_scheduled(player: Player) -> bool:
+    """Cancel a scheduled launch. Refunds SCRUB_REFUND_FRACTION of the
+    assembly cost already paid; the rest is sunk (hardware already built /
+    integrated). Returns True if a scheduled launch was cleared."""
+    if player.scheduled_launch is None:
+        return False
+    refund = int(player.scheduled_launch.assembly_cost_paid * SCRUB_REFUND_FRACTION)
+    player.budget += refund
+    player.scheduled_launch = None
+    return True
+
+
 def all_turns_in(state: GameState) -> bool:
     return state.phase == Phase.PLAYING and all(p.turn_submitted for p in state.players)
 
@@ -225,7 +248,11 @@ def resolve_turn(state: GameState, rng: random.Random | None = None) -> None:
 
     for player in state.players:
         _apply_rd(player, state, rng)
-        _resolve_launch(player, state, rng)
+        # Fire any launch that was committed last turn first — it's the
+        # one players are expecting results on — then promote a newly-
+        # submitted launch into the VAB for NEXT turn's resolve.
+        _resolve_scheduled_launch(player, state, rng)
+        _promote_pending_to_scheduled(player, state)
         _apply_passive_training(player, rng)
         player.pending_rd_target = None
         player.pending_rd_spend = 0
@@ -310,8 +337,14 @@ def _roll_rd_batch(target: str, current: int, rng: random.Random) -> int:
 # ----------------------------------------------------------------------
 
 
-def _resolve_launch(player: Player, state: GameState, rng: random.Random) -> None:
-    if not player.pending_launch:
+def _promote_pending_to_scheduled(player: Player, state: GameState) -> None:
+    """Take a freshly-submitted launch (player.pending_launch) and move it
+    into player.scheduled_launch for NEXT turn's resolve. Deducts the
+    assembly portion of the cost now (simulating VAB integration work).
+
+    No-op if the player isn't trying to schedule, already has a schedule,
+    or the mission is unresolvable."""
+    if not player.pending_launch or player.scheduled_launch is not None:
         return
     try:
         mission = MISSIONS_BY_ID[MissionId(player.pending_launch)]
@@ -319,9 +352,51 @@ def _resolve_launch(player: Player, state: GameState, rng: random.Random) -> Non
         return
     eff_rocket = effective_rocket(player, mission)
     eff_cost = effective_launch_cost(player, mission)
+    assembly = int(eff_cost * ASSEMBLY_COST_FRACTION)
+    remaining = eff_cost - assembly
+    if player.budget < assembly:
+        state.log.append(
+            f"{player.username} — {mission.name}: assembly cancelled "
+            f"({assembly} MB needed, budget short)."
+        )
+        return
+    player.budget -= assembly
+    player.scheduled_launch = ScheduledLaunch(
+        mission_id=mission.id.value,
+        rocket_class=eff_rocket.value,
+        launch_cost_total=eff_cost,
+        assembly_cost_paid=assembly,
+        launch_cost_remaining=remaining,
+        objectives=list(player.pending_objectives),
+        architecture=player.architecture,
+        scheduled_year=state.year,
+        scheduled_season=state.season.value,
+    )
+    state.log.append(
+        f"{player.username} — {mission.name}: scheduled for next launch "
+        f"window (assembly paid: {assembly} MB, launch due: {remaining} MB)."
+    )
 
-    # Build the report skeleton up-front so every exit path (abort, success,
-    # failure) produces exactly one entry and the client can animate it.
+
+def _resolve_scheduled_launch(
+    player: Player, state: GameState, rng: random.Random,
+) -> None:
+    """Fire the mission that was committed to the VAB on the previous turn.
+    Pays the remaining launch cost, rolls success/failure, emits a
+    LaunchReport. Clears player.scheduled_launch unconditionally so the
+    next promotion is free to use the slot."""
+    if player.scheduled_launch is None:
+        return
+    sl = player.scheduled_launch
+    # Consume the slot up-front; every exit path leaves it cleared.
+    player.scheduled_launch = None
+    try:
+        mission = MISSIONS_BY_ID[MissionId(sl.mission_id)]
+        eff_rocket = Rocket(sl.rocket_class)
+    except (ValueError, KeyError):
+        return
+    eff_cost = sl.launch_cost_total
+
     report = LaunchReport(
         side=player.side.value if player.side else "",
         username=player.username,
@@ -341,10 +416,17 @@ def _resolve_launch(player: Player, state: GameState, rng: random.Random) -> Non
         report.abort_reason = reason_report
         state.log.append(reason_log)
 
-    if not player.rocket_built(eff_rocket) or player.budget < eff_cost:
+    if not player.rocket_built(eff_rocket):
         _abort(
-            f"{player.username} aborts {mission.name} — prereqs no longer met.",
-            "prereqs no longer met",
+            f"{player.username} aborts {mission.name} — rocket not launch-ready.",
+            "rocket not launch-ready",
+        )
+        return
+    if player.budget < sl.launch_cost_remaining:
+        _abort(
+            f"{player.username} aborts {mission.name} — budget short "
+            f"({sl.launch_cost_remaining} MB needed for launch).",
+            "budget short at launch",
         )
         return
     if not player.is_tier_unlocked(mission.tier):
@@ -371,7 +453,7 @@ def _resolve_launch(player: Player, state: GameState, rng: random.Random) -> Non
             return
         report.crew = [a.name for a in crew]
 
-    player.budget -= eff_cost
+    player.budget -= sl.launch_cost_remaining
     crew_bonus = _crew_bonus(crew, mission)
     reliability_bonus = (
         (player.rocket_reliability(eff_rocket) - 50) * RELIABILITY_SWING_PER_POINT
@@ -389,9 +471,10 @@ def _resolve_launch(player: Player, state: GameState, rng: random.Random) -> Non
         report.success = True
         _bump_reliability(player, eff_rocket, RELIABILITY_GAIN_ON_SUCCESS)
         _handle_mission_success(player, mission, crew, state, report)
-        # Objectives only resolve if the primary mission succeeded — a main
-        # mission failure means you never got the chance to try them.
-        _resolve_objectives(player, mission, crew, state, rng, eff_rocket, report)
+        _resolve_objectives(
+            player, mission, crew, state, rng, eff_rocket, report,
+            objectives_raw=sl.objectives,
+        )
     else:
         _handle_mission_failure(player, mission, crew, state, rng, eff_rocket, report)
     report.reliability_after = player.rocket_reliability(eff_rocket)
@@ -406,15 +489,23 @@ def _resolve_objectives(
     rng: random.Random,
     eff_rocket: Rocket,
     report: LaunchReport,
+    objectives_raw: list[str] | None = None,
 ) -> None:
     """Attempt each opt-in objective the player queued. Each objective rolls
     independently using a crew member's relevant skill. Successes grant extra
     prestige and a skill bump; failures can kill the astronaut performing it
-    (EVA) or destroy the ship entirely (docking), depending on the objective."""
-    if not mission.manned or not player.pending_objectives:
+    (EVA) or destroy the ship entirely (docking), depending on the objective.
+
+    If `objectives_raw` is None (the default), read from `player.pending_objectives`.
+    The VAB path passes the list snapshotted at schedule time so mid-turn
+    objective toggles don't retroactively affect an in-flight launch."""
+    raw_list = (
+        objectives_raw if objectives_raw is not None else player.pending_objectives
+    )
+    if not mission.manned or not raw_list:
         return
     catalog = {o.id: o for o in objectives_for(mission.id)}
-    for raw in player.pending_objectives:
+    for raw in raw_list:
         try:
             obj_id = ObjectiveId(raw)
         except ValueError:

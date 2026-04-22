@@ -602,10 +602,11 @@ class Client:
             # Mission rows — only those mapping to a currently-visible mission.
             from baris.resolver import visible_missions
             visible = visible_missions(me)
+            already_scheduled = me.scheduled_launch is not None
             for idx, btn in enumerate(self.mission_buttons):
                 if idx < len(visible):
-                    btn.enabled = editable
-                    if btn.handle_event(event) and editable:
+                    btn.enabled = editable and not already_scheduled
+                    if btn.handle_event(event) and editable and not already_scheduled:
                         self.queued_mission = visible[idx].id
                 else:
                     btn.enabled = False
@@ -626,6 +627,15 @@ class Client:
 
         # Keyboard fallbacks
         if event.type == pygame.KEYDOWN:
+            # Shift+Esc scrubs an already-scheduled launch. Checked before
+            # plain Esc so the player doesn't also clear a queued one.
+            if (
+                event.key == pygame.K_ESCAPE
+                and (event.mod & pygame.KMOD_SHIFT)
+                and me.scheduled_launch is not None
+            ):
+                self.net.send(protocol.SCRUB_SCHEDULED)
+                return True
             if event.key == pygame.K_ESCAPE and self.queued_mission is not None:
                 self.queued_mission = None
                 return True
@@ -656,7 +666,7 @@ class Client:
                 from baris.resolver import visible_missions
                 visible = visible_missions(me)
                 idx = MISSION_KEYS[event.key]
-                if idx < len(visible):
+                if idx < len(visible) and me.scheduled_launch is None:
                     self.queued_mission = visible[idx].id
                     self.queued_objectives.clear()
             elif self.active_tab == TAB_MISSIONS and event.key in OBJECTIVE_KEYS and self.queued_mission:
@@ -891,7 +901,20 @@ class Client:
             rd_label = "(none)"
         rd_line = f"R&D:    {rd_label}  spend {min(self.rd_spend, me.budget)} MB"
         draw_text(self.screen, rd_line, (20, 872), size=16, color=FG)
-        if self.queued_mission is not None:
+        # A mission already in the VAB takes precedence in the display —
+        # the player can't queue another until it resolves or is scrubbed.
+        if me.scheduled_launch is not None:
+            sl = me.scheduled_launch
+            try:
+                m_name = MISSIONS_BY_ID[MissionId(sl.mission_id)].name
+            except (ValueError, KeyError):
+                m_name = sl.mission_id
+            draw_text(
+                self.screen,
+                f"Scheduled: {m_name}  launch due {sl.launch_cost_remaining} MB  [Shift+Esc to scrub]",
+                (20, 898), size=16, color=HIGHLIGHT,
+            )
+        elif self.queued_mission is not None:
             m = MISSIONS_BY_ID[self.queued_mission]
             from baris.resolver import (
                 _crew_bonus,
@@ -899,9 +922,10 @@ class Client:
                 effective_launch_cost,
                 effective_rocket,
             )
-            from baris.state import RELIABILITY_SWING_PER_POINT
+            from baris.state import ASSEMBLY_COST_FRACTION, RELIABILITY_SWING_PER_POINT
             eff_rocket = effective_rocket(me, m)
             eff_cost = effective_launch_cost(me, m)
+            assembly_due = int(eff_cost * ASSEMBLY_COST_FRACTION)
             reliability_bonus = (me.rocket_reliability(eff_rocket) - 50) * RELIABILITY_SWING_PER_POINT
             effective = effective_base_success(me, m) + reliability_bonus
             if m.manned:
@@ -910,7 +934,8 @@ class Client:
                     effective += _crew_bonus(crew, m)
             draw_text(
                 self.screen,
-                f"Launch: {m.name}  cost {eff_cost} MB, ~{int(effective * 100)}% success",
+                f"Schedule: {m.name}  assembly {assembly_due} MB now + "
+                f"{eff_cost - assembly_due} MB on launch,  ~{int(effective * 100)}% success",
                 (20, 898), size=16, color=GREEN,
             )
         else:

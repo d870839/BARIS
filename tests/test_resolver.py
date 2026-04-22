@@ -14,6 +14,7 @@ from baris.resolver import (
     effective_rocket,
     meets_architecture_prereqs,
     resolve_turn,
+    scrub_scheduled,
     start_game,
     submit_turn,
     visible_missions,
@@ -22,6 +23,7 @@ from baris.resolver import (
 from baris.state import (
     ARCHITECTURE_COST_DELTA,
     ARCHITECTURE_SUCCESS_DELTA,
+    ASSEMBLY_COST_FRACTION,
     Architecture,
     Astronaut,
     AstronautStatus,
@@ -36,6 +38,8 @@ from baris.state import (
     MissionId,
     Module,
     ObjectiveId,
+    SCRUB_REFUND_FRACTION,
+    ScheduledLaunch,
     Phase,
     Player,
     ProgramTier,
@@ -92,6 +96,16 @@ def _make_astronaut(name: str, **skills: int) -> Astronaut:
         docking=skills.get("docking", legacy_command),
         endurance=skills.get("endurance", 0),
     )
+
+
+def _fire_scheduled_launch(state: GameState, rng) -> None:
+    """Phase B helper: after a player submits a launch and the turn resolves,
+    the mission goes into scheduled_launch (assembly paid). Call this to
+    submit empty turns + resolve again so the mission actually fires.
+    Used by older single-turn-resolve tests."""
+    for p in state.players:
+        submit_turn(p, rd_rocket=None, rd_spend=0, launch=None)
+    resolve_turn(state, rng=rng)
 
 
 # ----------------------------------------------------------------------
@@ -206,6 +220,7 @@ def test_tier_two_unlocks_after_tier_one_success() -> None:
     submit_turn(me, rd_rocket=None, rd_spend=0, launch=MissionId.SUBORBITAL)
     submit_turn(state.players[1], rd_rocket=None, rd_spend=0, launch=None)
     resolve_turn(state, rng=_FixedRng(0.0))
+    _fire_scheduled_launch(state, _FixedRng(0.0))
 
     assert me.is_tier_unlocked(ProgramTier.TWO)
     assert me.mission_successes[MissionId.SUBORBITAL.value] == 1
@@ -241,6 +256,7 @@ def test_tier_three_unlocks_after_tier_two_success() -> None:
     submit_turn(me, rd_rocket=None, rd_spend=0, launch=MissionId.MULTI_CREW_ORBITAL)
     submit_turn(state.players[1], rd_rocket=None, rd_spend=0, launch=None)
     resolve_turn(state, rng=_FixedRng(0.0))
+    _fire_scheduled_launch(state, _FixedRng(0.0))
 
     assert me.is_tier_unlocked(ProgramTier.THREE)
     # Log should mention the Apollo unlock.
@@ -358,6 +374,7 @@ def test_eor_lets_player_attempt_landing_with_only_medium() -> None:
 
     submit_turn(state.players[1], rd_rocket=None, rd_spend=0, launch=None)
     resolve_turn(state, rng=_FixedRng(0.0))
+    _fire_scheduled_launch(state, _FixedRng(0.0))
 
     assert state.phase == Phase.ENDED
     assert state.winner == Side.USA
@@ -462,6 +479,7 @@ def test_suborbital_success_awards_first_bonus() -> None:
     submit_turn(me, rd_rocket=None, rd_spend=0, launch=MissionId.SUBORBITAL)
     submit_turn(state.players[1], rd_rocket=None, rd_spend=0, launch=None)
     resolve_turn(state, rng=_FixedRng(0.0))
+    _fire_scheduled_launch(state, _FixedRng(0.0))
 
     assert me.prestige == 5  # 3 base + 2 first
     assert state.first_completed[MissionId.SUBORBITAL.value] == Side.USA.value
@@ -478,6 +496,7 @@ def test_second_suborbital_does_not_regrant_first_bonus() -> None:
     submit_turn(me, rd_rocket=None, rd_spend=0, launch=MissionId.SUBORBITAL)
     submit_turn(opp, rd_rocket=None, rd_spend=0, launch=MissionId.SUBORBITAL)
     resolve_turn(state, rng=_FixedRng(0.0))
+    _fire_scheduled_launch(state, _FixedRng(0.0))
 
     assert me.prestige == 5
     assert opp.prestige == 3
@@ -547,6 +566,7 @@ def test_manned_landing_success_ends_game() -> None:
     submit_turn(me, rd_rocket=None, rd_spend=0, launch=MissionId.MANNED_LUNAR_LANDING)
     submit_turn(state.players[1], rd_rocket=None, rd_spend=0, launch=None)
     resolve_turn(state, rng=_FixedRng(0.0))
+    _fire_scheduled_launch(state, _FixedRng(0.0))
 
     assert state.phase == Phase.ENDED
     assert state.winner == Side.USA
@@ -564,6 +584,7 @@ def test_unmanned_landing_only_awards_prestige() -> None:
     submit_turn(me, rd_rocket=None, rd_spend=0, launch=MissionId.LUNAR_LANDING)
     submit_turn(state.players[1], rd_rocket=None, rd_spend=0, launch=None)
     resolve_turn(state, rng=_FixedRng(0.0))
+    _fire_scheduled_launch(state, _FixedRng(0.0))
 
     # unmanned landing: 20 + 10 first bonus = 30 (game does NOT end on unmanned)
     assert me.prestige == 30
@@ -588,6 +609,7 @@ def test_manned_failure_can_kill_crew() -> None:
     # which returns the same 0.99 → crew survives. So this test just verifies failure path
     # without death.
     resolve_turn(state, rng=_FixedRng(0.99))
+    _fire_scheduled_launch(state, _FixedRng(0.99))
 
     assert me.prestige == 16  # 20 - 4 (manned_orbital prestige_fail)
     # Crew all survive at roll 0.99 > 0.25.
@@ -625,6 +647,7 @@ def test_manned_failure_with_low_death_roll_kills_crew() -> None:
 
     # manned_orbital: crew_size=1. Sequence: success roll high (fail), death roll low (dies).
     resolve_turn(state, rng=_SeqRng([0.99, 0.01]))
+    _fire_scheduled_launch(state, _SeqRng([0.99, 0.01]))
 
     # 20 - 4 (fail) - 3 (KIA) = 13
     assert me.prestige == 13
@@ -674,6 +697,7 @@ def test_prestige_cap_can_win() -> None:
     submit_turn(me, rd_rocket=None, rd_spend=0, launch=MissionId.SUBORBITAL)
     submit_turn(state.players[1], rd_rocket=None, rd_spend=0, launch=None)
     resolve_turn(state, rng=_FixedRng(0.0))
+    _fire_scheduled_launch(state, _FixedRng(0.0))
 
     assert state.phase == Phase.ENDED
     assert state.winner == Side.USA
@@ -712,6 +736,7 @@ def test_successful_launch_bumps_reliability() -> None:
     submit_turn(me, rd_rocket=None, rd_spend=0, launch=MissionId.SUBORBITAL)
     submit_turn(state.players[1], rd_rocket=None, rd_spend=0, launch=None)
     resolve_turn(state, rng=_FixedRng(0.0))
+    _fire_scheduled_launch(state, _FixedRng(0.0))
 
     assert me.rocket_reliability(Rocket.LIGHT) == 50 + RELIABILITY_GAIN_ON_SUCCESS
 
@@ -729,6 +754,7 @@ def test_failed_unmanned_launch_still_gains_reliability() -> None:
     submit_turn(me, rd_rocket=None, rd_spend=0, launch=MissionId.SUBORBITAL)
     submit_turn(state.players[1], rd_rocket=None, rd_spend=0, launch=None)
     resolve_turn(state, rng=_FixedRng(0.99))  # forced failure
+    _fire_scheduled_launch(state, _FixedRng(0.99))
 
     assert me.rocket_reliability(Rocket.LIGHT) == 50 + UNMANNED_FAILURE_RD_GAIN
 
@@ -747,6 +773,7 @@ def test_failed_manned_launch_drops_reliability_but_not_below_floor() -> None:
     submit_turn(state.players[1], rd_rocket=None, rd_spend=0, launch=None)
     # High success roll → failure; high death roll → no deaths (isolates reliability clamp).
     resolve_turn(state, rng=_FixedRng(0.99))
+    _fire_scheduled_launch(state, _FixedRng(0.99))
 
     assert me.rocket_reliability(Rocket.MEDIUM) == RELIABILITY_FLOOR
 
@@ -768,9 +795,13 @@ def test_failed_manned_launch_cuts_program_funding() -> None:
     submit_turn(me, rd_rocket=None, rd_spend=0, launch=MissionId.MANNED_ORBITAL)
     submit_turn(state.players[1], rd_rocket=None, rd_spend=0, launch=None)
     resolve_turn(state, rng=_FixedRng(0.99))  # forced failure, no deaths
+    _fire_scheduled_launch(state, _FixedRng(0.99))
 
     from baris.state import SEASON_REFILL
-    expected = 200 - mission.launch_cost - MANNED_FAILURE_BUDGET_CUT + SEASON_REFILL
+    # Two resolves under VAB scheduling → two SEASON_REFILLs.
+    expected = (
+        200 - mission.launch_cost - MANNED_FAILURE_BUDGET_CUT + 2 * SEASON_REFILL
+    )
     assert me.budget == expected
 
 
@@ -788,6 +819,7 @@ def test_failed_manned_launch_budget_cut_floors_at_zero() -> None:
     submit_turn(me, rd_rocket=None, rd_spend=0, launch=MissionId.MANNED_ORBITAL)
     submit_turn(state.players[1], rd_rocket=None, rd_spend=0, launch=None)
     resolve_turn(state, rng=_FixedRng(0.99))
+    _fire_scheduled_launch(state, _FixedRng(0.99))
 
     # Budget after launch cost (0) - clamped cut (0) + SEASON_REFILL.
     from baris.state import SEASON_REFILL
@@ -814,6 +846,7 @@ def test_high_reliability_improves_effective_success() -> None:
     submit_turn(state.players[1], rd_rocket=None, rd_spend=0, launch=None)
     # base suborbital success 0.85; with reliability +0.098 → 0.948. Roll 0.9 should succeed.
     resolve_turn(state, rng=_FixedRng(0.90))
+    _fire_scheduled_launch(state, _FixedRng(0.90))
 
     # base 3 + first bonus 2
     assert me.prestige == 5
@@ -830,6 +863,7 @@ def test_low_reliability_worsens_effective_success() -> None:
     submit_turn(state.players[1], rd_rocket=None, rd_spend=0, launch=None)
     # base 0.85 - 0.06 = 0.79. Roll 0.80 should fail.
     resolve_turn(state, rng=_FixedRng(0.80))
+    _fire_scheduled_launch(state, _FixedRng(0.80))
 
     # suborbital prestige_fail = 1
     assert me.prestige == 4
@@ -926,6 +960,7 @@ def test_objective_success_awards_bonus_prestige() -> None:
     submit_turn(state.players[1], rd_spend=0, launch=None)
     # Force both main mission and EVA roll to succeed (0.0 << any threshold).
     resolve_turn(state, rng=_FixedRng(0.0))
+    _fire_scheduled_launch(state, _FixedRng(0.0))
 
     # manned_orbital: 12 base + 6 first bonus + 4 EVA bonus = 22
     assert me.prestige == 22
@@ -965,6 +1000,7 @@ def test_failed_eva_can_kill_astronaut() -> None:
     submit_turn(state.players[1], rd_spend=0, launch=None)
     # Sequence: main success (0.0), EVA objective fail (0.99), death roll low (0.05).
     resolve_turn(state, rng=_SeqRng([0.0, 0.99, 0.05]))
+    _fire_scheduled_launch(state, _SeqRng([0.0, 0.99, 0.05]))
 
     # one crew member died
     assert len(me.active_astronauts()) == STARTING_ASTRONAUTS - 1
@@ -1005,6 +1041,7 @@ def test_failed_docking_can_destroy_ship() -> None:
     submit_turn(state.players[1], rd_spend=0, launch=None)
     # Sequence: main success (0.0), docking fail (0.99), ship-loss roll low (0.01).
     resolve_turn(state, rng=_SeqRng([0.0, 0.99, 0.01]))
+    _fire_scheduled_launch(state, _SeqRng([0.0, 0.99, 0.01]))
 
     # crew of 2 both dead from ship loss
     assert len(me.active_astronauts()) == STARTING_ASTRONAUTS - 2
@@ -1054,6 +1091,7 @@ def test_successful_unmanned_launch_produces_report() -> None:
     submit_turn(me, rd_rocket=None, rd_spend=0, launch=MissionId.SUBORBITAL)
     submit_turn(state.players[1], rd_rocket=None, rd_spend=0, launch=None)
     resolve_turn(state, rng=_FixedRng(0.0))
+    _fire_scheduled_launch(state, _FixedRng(0.0))
 
     assert len(state.last_launches) == 1
     r = state.last_launches[0]
@@ -1084,6 +1122,7 @@ def test_failed_unmanned_launch_report() -> None:
     submit_turn(me, rd_rocket=None, rd_spend=0, launch=MissionId.SUBORBITAL)
     submit_turn(state.players[1], rd_rocket=None, rd_spend=0, launch=None)
     resolve_turn(state, rng=_FixedRng(0.99))  # forced failure
+    _fire_scheduled_launch(state, _FixedRng(0.99))
 
     r = state.last_launches[0]
     assert r.success is False
@@ -1124,6 +1163,7 @@ def test_failed_manned_launch_captures_deaths_and_budget_cut() -> None:
     submit_turn(state.players[1], rd_rocket=None, rd_spend=0, launch=None)
     # success roll high (fail), death roll low (crew dies).
     resolve_turn(state, rng=_SeqRng([0.99, 0.01]))
+    _fire_scheduled_launch(state, _SeqRng([0.99, 0.01]))
 
     r = state.last_launches[0]
     assert r.success is False
@@ -1148,6 +1188,7 @@ def test_manned_lunar_landing_success_marks_ended_game() -> None:
     submit_turn(me, rd_rocket=None, rd_spend=0, launch=MissionId.MANNED_LUNAR_LANDING)
     submit_turn(state.players[1], rd_rocket=None, rd_spend=0, launch=None)
     resolve_turn(state, rng=_FixedRng(0.0))
+    _fire_scheduled_launch(state, _FixedRng(0.0))
 
     r = state.last_launches[0]
     assert r.success is True
@@ -1169,6 +1210,7 @@ def test_objective_success_recorded_in_report() -> None:
                 launch=MissionId.MANNED_ORBITAL, objectives=[ObjectiveId.EVA])
     submit_turn(state.players[1], rd_rocket=None, rd_spend=0, launch=None)
     resolve_turn(state, rng=_FixedRng(0.0))
+    _fire_scheduled_launch(state, _FixedRng(0.0))
 
     r = state.last_launches[0]
     assert r.success is True
@@ -1188,12 +1230,14 @@ def test_resolve_turn_clears_previous_last_launches() -> None:
     submit_turn(me, rd_rocket=None, rd_spend=0, launch=MissionId.SUBORBITAL)
     submit_turn(state.players[1], rd_rocket=None, rd_spend=0, launch=None)
     resolve_turn(state, rng=_FixedRng(0.0))
+    _fire_scheduled_launch(state, _FixedRng(0.0))
     assert len(state.last_launches) == 1
 
     # Second turn: nobody launches. last_launches should be cleared.
     submit_turn(me, rd_rocket=None, rd_spend=0, launch=None)
     submit_turn(state.players[1], rd_rocket=None, rd_spend=0, launch=None)
     resolve_turn(state, rng=_FixedRng(0.0))
+    _fire_scheduled_launch(state, _FixedRng(0.0))
     assert state.last_launches == []
 
 
@@ -1205,9 +1249,171 @@ def test_launch_report_roundtrip_through_state_dict() -> None:
     submit_turn(me, rd_rocket=None, rd_spend=0, launch=MissionId.SUBORBITAL)
     submit_turn(state.players[1], rd_rocket=None, rd_spend=0, launch=None)
     resolve_turn(state, rng=_FixedRng(0.0))
+    _fire_scheduled_launch(state, _FixedRng(0.0))
 
     restored = GameState.from_dict(state.to_dict())
     assert len(restored.last_launches) == 1
     assert isinstance(restored.last_launches[0], LaunchReport)
     assert restored.last_launches[0].mission_id == MissionId.SUBORBITAL.value
     assert restored.last_launches[0].success is True
+
+
+# ----------------------------------------------------------------------
+# Phase B — Vehicle Assembly Building (multi-turn scheduling)
+# ----------------------------------------------------------------------
+
+
+def test_submit_schedules_but_does_not_resolve_this_turn() -> None:
+    state = _two_player_state()
+    start_game(state, rng=random.Random(1))
+    me = state.players[0]
+    me.reliability[Rocket.LIGHT.value] = 70
+
+    submit_turn(me, rd_rocket=None, rd_spend=0, launch=MissionId.SUBORBITAL)
+    submit_turn(state.players[1], rd_rocket=None, rd_spend=0, launch=None)
+    resolve_turn(state, rng=_FixedRng(0.0))
+
+    # Nothing flew; the mission is on the manifest waiting for next turn.
+    assert state.last_launches == []
+    assert me.scheduled_launch is not None
+    assert me.scheduled_launch.mission_id == MissionId.SUBORBITAL.value
+    # Assembly cost was 30% of launch_cost=3 → int(0.9) = 0, so budget
+    # stays intact for this cheap mission. Check a pricier mission too.
+
+
+def test_assembly_cost_is_reserved_on_schedule() -> None:
+    state = _two_player_state()
+    start_game(state, rng=random.Random(1))
+    me = state.players[0]
+    me.reliability[Rocket.HEAVY.value] = 70
+    me.mission_successes[MissionId.SUBORBITAL.value] = 1
+    me.mission_successes[MissionId.MULTI_CREW_ORBITAL.value] = 1
+    me.budget = 200
+    budget_before = me.budget
+
+    lunar = MISSIONS_BY_ID[MissionId.LUNAR_LANDING]   # 25 MB total, Heavy
+    expected_assembly = int(lunar.launch_cost * ASSEMBLY_COST_FRACTION)
+
+    submit_turn(me, rd_rocket=None, rd_spend=0, launch=MissionId.LUNAR_LANDING)
+    submit_turn(state.players[1], rd_rocket=None, rd_spend=0, launch=None)
+    resolve_turn(state, rng=_FixedRng(0.0))
+
+    # SEASON_REFILL lands at end of resolve, so budget has moved by
+    # (-assembly + SEASON_REFILL).
+    from baris.state import SEASON_REFILL
+    assert me.budget == budget_before - expected_assembly + SEASON_REFILL
+    assert me.scheduled_launch.assembly_cost_paid == expected_assembly
+    assert (
+        me.scheduled_launch.launch_cost_remaining
+        == lunar.launch_cost - expected_assembly
+    )
+
+
+def test_scheduled_launch_fires_next_turn() -> None:
+    state = _two_player_state()
+    start_game(state, rng=random.Random(1))
+    me = state.players[0]
+    me.reliability[Rocket.LIGHT.value] = 70
+
+    submit_turn(me, rd_rocket=None, rd_spend=0, launch=MissionId.SUBORBITAL)
+    submit_turn(state.players[1], rd_rocket=None, rd_spend=0, launch=None)
+    resolve_turn(state, rng=_FixedRng(0.0))
+    assert me.scheduled_launch is not None
+
+    # Next turn: empty submits → the scheduled mission actually fires.
+    submit_turn(me, rd_rocket=None, rd_spend=0, launch=None)
+    submit_turn(state.players[1], rd_rocket=None, rd_spend=0, launch=None)
+    resolve_turn(state, rng=_FixedRng(0.0))
+
+    assert me.scheduled_launch is None
+    assert len(state.last_launches) == 1
+    r = state.last_launches[0]
+    assert r.mission_id == MissionId.SUBORBITAL.value
+    assert r.success is True
+
+
+def test_second_launch_queue_is_blocked_while_scheduled() -> None:
+    state = _two_player_state()
+    start_game(state, rng=random.Random(1))
+    me = state.players[0]
+    me.reliability[Rocket.LIGHT.value] = 70
+
+    # First queue goes through.
+    submit_turn(me, rd_rocket=None, rd_spend=0, launch=MissionId.SUBORBITAL)
+    submit_turn(state.players[1], rd_rocket=None, rd_spend=0, launch=None)
+    resolve_turn(state, rng=_FixedRng(0.0))
+    assert me.scheduled_launch is not None
+
+    # Now try to queue a second mission while one is already assembled.
+    submit_turn(me, rd_rocket=None, rd_spend=0, launch=MissionId.SATELLITE)
+    # pending_launch should have been dropped by submit_turn's guard.
+    assert me.pending_launch is None
+
+
+def test_scrub_scheduled_refunds_half_of_assembly_and_clears_slot() -> None:
+    state = _two_player_state()
+    start_game(state, rng=random.Random(1))
+    me = state.players[0]
+    me.reliability[Rocket.HEAVY.value] = 70
+    me.mission_successes[MissionId.SUBORBITAL.value] = 1
+    me.mission_successes[MissionId.MULTI_CREW_ORBITAL.value] = 1
+    me.budget = 200
+
+    submit_turn(me, rd_rocket=None, rd_spend=0, launch=MissionId.LUNAR_LANDING)
+    submit_turn(state.players[1], rd_rocket=None, rd_spend=0, launch=None)
+    resolve_turn(state, rng=_FixedRng(0.0))
+
+    assert me.scheduled_launch is not None
+    assembly = me.scheduled_launch.assembly_cost_paid
+    budget_pre_scrub = me.budget
+
+    assert scrub_scheduled(me) is True
+    assert me.scheduled_launch is None
+    assert me.budget == budget_pre_scrub + int(assembly * SCRUB_REFUND_FRACTION)
+
+
+def test_scrub_with_nothing_scheduled_is_noop() -> None:
+    me = Player(player_id="a", username="Alice", side=Side.USA)
+    me.budget = 50
+    assert scrub_scheduled(me) is False
+    assert me.budget == 50
+
+
+def test_insufficient_budget_blocks_assembly() -> None:
+    state = _two_player_state()
+    start_game(state, rng=random.Random(1))
+    me = state.players[0]
+    me.reliability[Rocket.HEAVY.value] = 70
+    me.mission_successes[MissionId.SUBORBITAL.value] = 1
+    me.mission_successes[MissionId.MULTI_CREW_ORBITAL.value] = 1
+    # Lunar landing launch_cost = 25, assembly = 7 MB.
+    me.budget = 6  # not enough to even assemble.
+
+    # submit_turn's own affordability check will actually reject this
+    # too, since it compares budget against assembly_cost + rd_spend.
+    submit_turn(me, rd_rocket=None, rd_spend=0, launch=MissionId.LUNAR_LANDING)
+    assert me.pending_launch is None
+    submit_turn(state.players[1], rd_rocket=None, rd_spend=0, launch=None)
+    resolve_turn(state, rng=_FixedRng(0.0))
+
+    assert me.scheduled_launch is None
+    assert state.last_launches == []
+
+
+def test_scheduled_launch_roundtrips_through_state_dict() -> None:
+    state = _two_player_state()
+    start_game(state, rng=random.Random(1))
+    me = state.players[0]
+    me.reliability[Rocket.LIGHT.value] = 70
+
+    submit_turn(me, rd_rocket=None, rd_spend=0, launch=MissionId.SUBORBITAL)
+    submit_turn(state.players[1], rd_rocket=None, rd_spend=0, launch=None)
+    resolve_turn(state, rng=_FixedRng(0.0))
+    assert me.scheduled_launch is not None
+
+    restored = GameState.from_dict(state.to_dict())
+    r_me = restored.find_player("a")
+    assert r_me.scheduled_launch is not None
+    assert isinstance(r_me.scheduled_launch, ScheduledLaunch)
+    assert r_me.scheduled_launch.mission_id == MissionId.SUBORBITAL.value
+    assert r_me.scheduled_launch.assembly_cost_paid == me.scheduled_launch.assembly_cost_paid

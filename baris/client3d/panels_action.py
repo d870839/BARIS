@@ -154,6 +154,21 @@ def build_mc_panel(client: "BarisClient", parent: Entity) -> Entity:
         scale=0.95, color=color.rgb32(160, 200, 160),
     )
 
+    # Scheduled-launch banner — a mission in the VAB blocks queueing a new one.
+    scheduled = me.scheduled_launch
+    if scheduled is not None:
+        try:
+            sched_name = MISSIONS_BY_ID[MissionId(scheduled.mission_id)].name
+        except (ValueError, KeyError):
+            sched_name = scheduled.mission_id
+        Text(
+            text=(
+                f"SCHEDULED: {sched_name}  —  launch due {scheduled.launch_cost_remaining} MB next turn"
+            ),
+            parent=root, position=(-0.42, 0.235), origin=(-0.5, 0.5),
+            scale=0.95, color=color.rgb32(240, 200, 90),
+        )
+
     # ---- Mission list (left column) --------------------------------
     visible = visible_missions(me)
     Text(
@@ -282,17 +297,31 @@ def build_mc_panel(client: "BarisClient", parent: Entity) -> Entity:
             btn.on_click = (lambda a=arch: client.mc_choose_architecture(a))
             ax += 0.11
 
-    # Submit / close
+    # Submit / scrub / close
     submit = Button(
         parent=root, text="SUBMIT TURN [Enter]",
-        position=(0.25, -0.37), scale=(0.3, 0.058),
+        position=(0.28, -0.37), scale=(0.28, 0.058),
         color=color.rgb32(60, 120, 80),
         highlight_color=color.rgb32(90, 170, 110),
     )
     submit.on_click = lambda: client.mc_submit_turn()
+    # SCRUB is only meaningful when a scheduled launch exists; otherwise
+    # render it dim so the player knows what state it controls.
+    if scheduled is not None:
+        scrub_color = color.rgb32(170, 60, 60)
+        scrub_hl = color.rgb32(220, 90, 90)
+    else:
+        scrub_color = color.rgb32(70, 55, 55)
+        scrub_hl = color.rgb32(100, 80, 80)
+    scrub = Button(
+        parent=root, text="SCRUB",
+        position=(0.00, -0.37), scale=(0.18, 0.058),
+        color=scrub_color, highlight_color=scrub_hl,
+    )
+    scrub.on_click = lambda: client.mc_scrub_scheduled()
     cancel = Button(
         parent=root, text="Close [Esc]",
-        position=(-0.25, -0.37), scale=(0.2, 0.05),
+        position=(-0.28, -0.37), scale=(0.2, 0.05),
         color=color.rgb32(60, 70, 100),
     )
     cancel.on_click = lambda: client.close_current_panel()

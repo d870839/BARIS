@@ -14,6 +14,7 @@ from baris.resolver import (
     can_start,
     choose_architecture,
     resolve_turn,
+    scrub_scheduled,
     start_game,
     submit_turn,
 )
@@ -185,6 +186,17 @@ async def handle_choose_architecture(player: Player, msg: dict[str, Any]) -> Non
     choose_architecture(player, arch)
 
 
+async def handle_scrub_scheduled(player: Player, msg: dict[str, Any]) -> None:
+    """Cancel the player's scheduled launch and refund a fraction of the
+    assembly cost. No-op if nothing is scheduled. Safe to call any time
+    during PLAYING phase, including after the player has already
+    submitted this turn — scrubbing just voids the upcoming launch."""
+    if room.state.phase != Phase.PLAYING:
+        return
+    if scrub_scheduled(player):
+        log.info("%s scrubbed scheduled launch", player.username)
+
+
 async def client_handler(ws: Any) -> None:
     player: Player | None = None
     try:
@@ -216,6 +228,8 @@ async def client_handler(ws: Any) -> None:
                 await handle_end_turn(player, msg)
             elif mtype == protocol.CHOOSE_ARCHITECTURE:
                 await handle_choose_architecture(player, msg)
+            elif mtype == protocol.SCRUB_SCHEDULED:
+                await handle_scrub_scheduled(player, msg)
             else:
                 await ws.send(protocol.encode(protocol.ERROR, message=f"Unknown type {mtype}"))
                 continue

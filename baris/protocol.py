@@ -10,6 +10,7 @@ READY = "ready"
 UNREADY = "unready"
 END_TURN = "end_turn"
 CHOOSE_ARCHITECTURE = "choose_architecture"
+SCRUB_SCHEDULED = "scrub_scheduled"
 
 # Server -> Client message types
 JOINED = "joined"

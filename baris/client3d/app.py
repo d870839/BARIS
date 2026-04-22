@@ -450,6 +450,11 @@ class BarisClient(Entity):
             return "Walk up to a button and press E"
         if bid == "exit":
             return f"[E] Exit {room_label}"
+        if bid == "scrub":
+            me = self.me()
+            if me is not None and me.scheduled_launch is not None:
+                return "[E] SCRUB scheduled launch (refund ~half assembly)"
+            return "Nothing to scrub"
         if bid.startswith("target:"):
             return f"[E] Set R&D target: {bid.split(':', 1)[1]}"
         if bid == "spend_plus":
@@ -633,6 +638,9 @@ class BarisClient(Entity):
             return
         # Mission Control buttons
         if self.in_interior == "mc":
+            if bid == "scrub":
+                self.mc_scrub_scheduled()
+                return
             if bid.startswith("mission:"):
                 try:
                     mid = MissionId(bid.split(":", 1)[1])
@@ -710,7 +718,7 @@ class BarisClient(Entity):
     # Mission Control actions
     # ------------------------------------------------------------------
     def mc_select_mission(self, mission_id: MissionId) -> None:
-        if self._turn_locked():
+        if self._turn_locked() or self._has_scheduled_launch():
             return
         if self.queued_mission == mission_id:
             self.queued_mission = None
@@ -723,13 +731,24 @@ class BarisClient(Entity):
         self._refresh_current_panel()
 
     def mc_toggle_objective(self, obj_id: ObjectiveId) -> None:
-        if self._turn_locked():
+        if self._turn_locked() or self._has_scheduled_launch():
             return
         if obj_id in self.queued_objectives:
             self.queued_objectives.discard(obj_id)
         else:
             self.queued_objectives.add(obj_id)
         self._refresh_current_panel()
+
+    def _has_scheduled_launch(self) -> bool:
+        me = self.me()
+        return me is not None and me.scheduled_launch is not None
+
+    def mc_scrub_scheduled(self) -> None:
+        """Send the SCRUB_SCHEDULED message to void the upcoming launch.
+        Server refunds a fraction of the assembly cost and clears the
+        manifest slot. Safe to call even if nothing is scheduled — the
+        server guards against no-ops."""
+        self.net.send(protocol.SCRUB_SCHEDULED)
 
     def mc_choose_architecture(self, arch: Architecture) -> None:
         if self._turn_locked():
