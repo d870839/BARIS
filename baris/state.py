@@ -356,6 +356,34 @@ HOSPITAL_STAY_TURNS          = 2
 HOSPITAL_CHANCE_ON_FAIL      = 0.4
 # Cancelling a training block early refunds this fraction of the cost.
 TRAINING_CANCEL_REFUND_FRACTION = 0.5
+
+# Phase D — Lunar reconnaissance + LM (Lunar Module) points.
+#
+# Lunar recon tracks how thoroughly the moon has been surveyed before
+# you attempt a manned landing. It starts at LUNAR_RECON_BASE (55%, the
+# 'ground-based astronomy already knows this much' baseline in the
+# original game) and climbs as unmanned + manned lunar missions come
+# back — capped at LUNAR_RECON_CAP. Each point above the baseline adds
+# LUNAR_RECON_PER_POINT to the manned lunar landing's effective success.
+LUNAR_RECON_BASE                   = 55
+LUNAR_RECON_CAP                    = 99
+LUNAR_RECON_PER_POINT              = 0.004
+RECON_FROM_LUNAR_PASS              = 5    # unmanned flyby success
+RECON_FROM_LUNAR_ORBIT             = 5    # unmanned lunar orbit success
+RECON_FROM_MANNED_LUNAR_ORBIT      = 5    # manned lunar orbit success
+RECON_FROM_UNMANNED_LANDING_OK     = 15   # Surveyor-style success
+RECON_FROM_UNMANNED_LANDING_FAIL   = 5    # even a crash teaches you something
+
+# LM points: partial-credit system representing LM hardware validation.
+# Three points are needed before the manned landing flies without a
+# penalty; each missing point applies LM_POINTS_PENALTY_PER_MISSING.
+LM_POINTS_REQUIRED                 = 3
+LM_POINTS_PENALTY_PER_MISSING      = 0.03
+LM_POINTS_FROM_MANNED_ORBITAL      = 1
+LM_POINTS_FROM_MULTI_CREW          = 1
+LM_POINTS_FROM_ORBITAL_EVA         = 1
+LM_POINTS_FROM_UNMANNED_LANDING    = 1
+LM_POINTS_FROM_MANNED_LUNAR_ORBIT  = 2
 # Reliability contributes ±10% to success around a neutral value of 50.
 # effective = base + crew_bonus + (reliability - 50) * RELIABILITY_SWING_PER_POINT
 RELIABILITY_SWING_PER_POINT = 0.002
@@ -444,6 +472,9 @@ class Player:
     # resolve, that scheduled launch actually flies. None if nothing is
     # on the manifest.
     scheduled_launch: "ScheduledLaunch | None" = None
+    # Phase D — cumulative lunar reconnaissance % and LM points.
+    lunar_recon: int = LUNAR_RECON_BASE
+    lm_points: int = 0
 
     def rocket_reliability(self, rocket: Rocket) -> int:
         return self.reliability.get(rocket.value, 0)
@@ -551,6 +582,10 @@ def _player_from_dict(d: dict[str, Any]) -> Player:
     raw_astronauts = data.get("astronauts") or []
     data["astronauts"] = [_astronaut_from_dict(a) for a in raw_astronauts]
     data["scheduled_launch"] = _scheduled_launch_from_dict(data.get("scheduled_launch"))
+    # Phase D — older state dicts didn't carry these yet. Default recon
+    # to the LUNAR_RECON_BASE so mid-game saves keep making sense.
+    data.setdefault("lunar_recon", LUNAR_RECON_BASE)
+    data.setdefault("lm_points", 0)
     return Player(**data)
 
 
@@ -616,6 +651,9 @@ class LaunchReport:
     deaths: list[str] = field(default_factory=list)
     budget_cut: int = 0
     ended_game: bool = False  # manned lunar landing success
+    # Phase D — manned-lunar-landing only; 0 for everything else.
+    lunar_recon_bonus: float = 0.0
+    lm_points_penalty: float = 0.0
     objectives: list[ObjectiveReport] = field(default_factory=list)
 
 

@@ -31,6 +31,7 @@ from baris.state import (
     ARCHITECTURE_COST_DELTA,
     ARCHITECTURE_FULL_NAMES,
     ARCHITECTURE_SUCCESS_DELTA,
+    LM_POINTS_REQUIRED,
     MIN_RELIABILITY_TO_LAUNCH,
     MISSIONS,
     MISSIONS_BY_ID,
@@ -920,6 +921,7 @@ class Client:
                 _crew_bonus,
                 effective_base_success,
                 effective_launch_cost,
+                effective_lunar_modifier,
                 effective_rocket,
             )
             from baris.state import ASSEMBLY_COST_FRACTION, RELIABILITY_SWING_PER_POINT
@@ -927,7 +929,11 @@ class Client:
             eff_cost = effective_launch_cost(me, m)
             assembly_due = int(eff_cost * ASSEMBLY_COST_FRACTION)
             reliability_bonus = (me.rocket_reliability(eff_rocket) - 50) * RELIABILITY_SWING_PER_POINT
-            effective = effective_base_success(me, m) + reliability_bonus
+            recon_bonus, lm_penalty = effective_lunar_modifier(me, m)
+            effective = (
+                effective_base_success(me, m) + reliability_bonus
+                + recon_bonus - lm_penalty
+            )
             if m.manned:
                 crew = self._preview_crew(me, m)
                 if crew:
@@ -999,7 +1005,9 @@ class Client:
                 f"Budget {player.budget:>3} MB   "
                 f"Prestige {player.prestige:>3}   "
                 f"Firsts {firsts}   "
-                f"Arch {arch}"
+                f"Arch {arch}   "
+                f"Recon {player.lunar_recon:>2}%   "
+                f"LM {player.lm_points}/{LM_POINTS_REQUIRED}"
             )
             draw_text(self.screen, line, (36, y), size=14, color=side_color(player.side))
 

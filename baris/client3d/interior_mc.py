@@ -21,6 +21,7 @@ from ursina import Entity, Text, color, invoke
 
 from baris.resolver import (
     effective_base_success,
+    effective_lunar_modifier,
     effective_launch_cost,
     effective_rocket,
     visible_missions,
@@ -447,13 +448,26 @@ class MCInterior:
             crew_b = 0.0
             if m.manned:
                 crew_b = _crew_bonus_preview(me.active_astronauts(), m)
-            eff = base_s + crew_b + rel_bonus
+            recon_bonus, lm_penalty = effective_lunar_modifier(me, m)
+            eff = base_s + crew_b + rel_bonus + recon_bonus - lm_penalty
             prefix = "SCHEDULED: " if scheduled_id is not None else ""
             self.briefing_title.text = prefix + m.name.upper()
             self.briefing_rocket.text = f"Rocket:  {rocket_display_name(eff_rocket, me.side)}"
             self.briefing_cost.text = f"Cost:    {eff_cost} MB"
-            self.briefing_base.text = f"Base:    {base_s:+.2f}"
-            self.briefing_crew.text = f"Crew:    {crew_b:+.2f}" if m.manned else "Crew:    —"
+            if recon_bonus > 0 or lm_penalty > 0:
+                # Stash the base modifier line into the 'base' row for
+                # the lunar landing so recon + LM penalty are visible.
+                self.briefing_base.text = (
+                    f"Base:    {base_s:+.2f}   Recon {recon_bonus:+.3f}"
+                )
+                self.briefing_crew.text = (
+                    f"Crew:    {crew_b:+.2f}   LM {-lm_penalty:+.3f}"
+                )
+            else:
+                self.briefing_base.text = f"Base:    {base_s:+.2f}"
+                self.briefing_crew.text = (
+                    f"Crew:    {crew_b:+.2f}" if m.manned else "Crew:    —"
+                )
             self.briefing_rel.text = f"Rel'ty:  {rel_bonus:+.3f}"
             self.briefing_effective.text = (
                 f"EFFECTIVE  {eff:.2f}  (~{int(max(0, min(1, eff)) * 100)}%)"

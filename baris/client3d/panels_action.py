@@ -9,6 +9,7 @@ from ursina import Button, Entity, Text, color
 from baris.resolver import (
     effective_base_success,
     effective_launch_cost,
+    effective_lunar_modifier,
     effective_rocket,
     meets_architecture_prereqs,
     visible_missions,
@@ -231,19 +232,27 @@ def build_mc_panel(client: "BarisClient", parent: Entity) -> Entity:
         if m.manned:
             active = me.active_astronauts()
             crew_b = _preview_crew_bonus(active, m)
-        effective = base + crew_b + rel_bonus
+        recon_bonus, lm_penalty = effective_lunar_modifier(me, m)
+        effective = base + crew_b + rel_bonus + recon_bonus - lm_penalty
 
         Text(
             text=f"{m.name}", parent=root,
             position=(0.22, 0.16), origin=(0, 0),
             scale=1.0, color=color.rgb32(240, 220, 180),
         )
+        lunar_line = ""
+        if recon_bonus > 0 or lm_penalty > 0:
+            lunar_line = (
+                f"Recon:   {recon_bonus:+.3f}\n"
+                f"LM:      {-lm_penalty:+.3f}\n"
+            )
         brief = (
             f"Rocket:  {rocket_display_name(eff_rocket, me.side)}\n"
             f"Cost:    {eff_cost} MB\n"
             f"Base:    {base:+.2f}\n"
             f"Crew:    {crew_b:+.2f}\n"
             f"Rel'ty:  {rel_bonus:+.3f}\n"
+            f"{lunar_line}"
             f"Eff:     {effective:.2f}  (~{int(max(0, min(1, effective)) * 100)}%)"
         )
         Text(
@@ -404,6 +413,10 @@ def build_result_panel(
         details = []
         details.append(f"Prestige       {report.prestige_delta:+d}")
         details.append(f"Reliability    {report.reliability_before}% -> {report.reliability_after}%")
+        if report.lunar_recon_bonus > 0:
+            details.append(f"Recon bonus    +{report.lunar_recon_bonus:.3f}")
+        if report.lm_points_penalty > 0:
+            details.append(f"LM penalty     -{report.lm_points_penalty:.3f}")
         if report.crew:
             details.append(f"Crew           {', '.join(report.crew)}")
         if report.deaths:

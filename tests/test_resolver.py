@@ -12,6 +12,7 @@ from baris.resolver import (
     choose_architecture,
     effective_base_success,
     effective_launch_cost,
+    effective_lunar_modifier,
     effective_rocket,
     meets_architecture_prereqs,
     resolve_turn,
@@ -31,6 +32,14 @@ from baris.state import (
     ASSEMBLY_COST_FRACTION,
     BASIC_TRAINING_TURNS,
     HOSPITAL_STAY_TURNS,
+    LM_POINTS_PENALTY_PER_MISSING,
+    LM_POINTS_REQUIRED,
+    LUNAR_RECON_BASE,
+    LUNAR_RECON_CAP,
+    LUNAR_RECON_PER_POINT,
+    RECON_FROM_LUNAR_PASS,
+    RECON_FROM_UNMANNED_LANDING_FAIL,
+    RECON_FROM_UNMANNED_LANDING_OK,
     TRAINING_CANCEL_REFUND_FRACTION,
     Architecture,
     Astronaut,
@@ -1621,3 +1630,145 @@ def test_legacy_astronaut_dict_without_training_fields_still_loads() -> None:
     assert a.flight_ready is True
     # Legacy 'command' maps onto 'docking'.
     assert a.docking == 8
+
+
+# ----------------------------------------------------------------------
+# Phase D — lunar reconnaissance + LM points
+# ----------------------------------------------------------------------
+
+
+def test_starting_player_has_baseline_recon_and_no_lm_points() -> None:
+    p = Player(player_id="a", username="A", side=Side.USA)
+    assert p.lunar_recon == LUNAR_RECON_BASE
+    assert p.lm_points == 0
+
+
+def test_successful_lunar_flyby_bumps_recon() -> None:
+    state = _two_player_state()
+    start_game(state, rng=random.Random(1))
+    me = state.players[0]
+    me.mission_successes[MissionId.SUBORBITAL.value] = 1  # unlock Tier 2
+    me.reliability[Rocket.MEDIUM.value] = 70
+    me.budget = 200
+
+    submit_turn(me, rd_rocket=None, rd_spend=0, launch=MissionId.LUNAR_PASS)
+    submit_turn(state.players[1], rd_rocket=None, rd_spend=0, launch=None)
+    resolve_turn(state, rng=_FixedRng(0.0))
+    _fire_scheduled_launch(state, _FixedRng(0.0))
+
+    assert me.lunar_recon == LUNAR_RECON_BASE + RECON_FROM_LUNAR_PASS
+
+
+def test_successful_unmanned_landing_bumps_recon_and_lm() -> None:
+    state = _two_player_state()
+    start_game(state, rng=random.Random(1))
+    me = state.players[0]
+    me.reliability[Rocket.HEAVY.value] = 70
+    me.budget = 200
+    me.mission_successes[MissionId.SUBORBITAL.value] = 1
+    me.mission_successes[MissionId.MULTI_CREW_ORBITAL.value] = 1
+
+    submit_turn(me, rd_rocket=None, rd_spend=0, launch=MissionId.LUNAR_LANDING)
+    submit_turn(state.players[1], rd_rocket=None, rd_spend=0, launch=None)
+    resolve_turn(state, rng=_FixedRng(0.0))
+    _fire_scheduled_launch(state, _FixedRng(0.0))
+
+    assert me.lunar_recon == LUNAR_RECON_BASE + RECON_FROM_UNMANNED_LANDING_OK
+    assert me.lm_points == 1
+
+
+def test_failed_unmanned_landing_still_bumps_recon() -> None:
+    state = _two_player_state()
+    start_game(state, rng=random.Random(1))
+    me = state.players[0]
+    me.reliability[Rocket.HEAVY.value] = 70
+    me.budget = 200
+    me.mission_successes[MissionId.SUBORBITAL.value] = 1
+    me.mission_successes[MissionId.MULTI_CREW_ORBITAL.value] = 1
+
+    submit_turn(me, rd_rocket=None, rd_spend=0, launch=MissionId.LUNAR_LANDING)
+    submit_turn(state.players[1], rd_rocket=None, rd_spend=0, launch=None)
+    resolve_turn(state, rng=_FixedRng(0.99))
+    _fire_scheduled_launch(state, _FixedRng(0.99))
+
+    # Failed landing → smaller recon bump, no LM points.
+    assert me.lunar_recon == LUNAR_RECON_BASE + RECON_FROM_UNMANNED_LANDING_FAIL
+    assert me.lm_points == 0
+
+
+def test_manned_orbital_success_grants_one_lm_point() -> None:
+    state = _two_player_state()
+    start_game(state, rng=random.Random(1))
+    me = state.players[0]
+    me.reliability[Rocket.MEDIUM.value] = 70
+    me.budget = 200
+    for a in me.astronauts:
+        a.capsule = 60
+
+    submit_turn(me, rd_rocket=None, rd_spend=0, launch=MissionId.MANNED_ORBITAL)
+    submit_turn(state.players[1], rd_rocket=None, rd_spend=0, launch=None)
+    resolve_turn(state, rng=_FixedRng(0.0))
+    _fire_scheduled_launch(state, _FixedRng(0.0))
+
+    assert me.lm_points == 1
+
+
+def test_effective_lunar_modifier_zero_for_non_lunar_landing_mission() -> None:
+    me = Player(player_id="a", username="A", side=Side.USA)
+    me.lunar_recon = LUNAR_RECON_CAP  # max recon
+    me.lm_points = 10                 # way over required
+    m = MISSIONS_BY_ID[MissionId.SUBORBITAL]
+    assert effective_lunar_modifier(me, m) == (0.0, 0.0)
+
+
+def test_effective_lunar_modifier_applies_recon_bonus_and_lm_penalty() -> None:
+    me = Player(player_id="a", username="A", side=Side.USA)
+    me.lunar_recon = LUNAR_RECON_BASE + 20   # 20% above baseline
+    me.lm_points = 1                         # 2 points short of required
+    m = MISSIONS_BY_ID[MissionId.MANNED_LUNAR_LANDING]
+    recon_bonus, lm_penalty = effective_lunar_modifier(me, m)
+    assert abs(recon_bonus - 20 * LUNAR_RECON_PER_POINT) < 1e-9
+    missing = LM_POINTS_REQUIRED - 1
+    assert abs(lm_penalty - missing * LM_POINTS_PENALTY_PER_MISSING) < 1e-9
+
+
+def test_manned_landing_report_carries_recon_and_lm_modifiers() -> None:
+    state = _two_player_state()
+    start_game(state, rng=random.Random(1))
+    me = state.players[0]
+    me.reliability[Rocket.HEAVY.value] = 70
+    me.budget = 100
+    me.mission_successes[MissionId.SUBORBITAL.value] = 1
+    me.mission_successes[MissionId.MULTI_CREW_ORBITAL.value] = 1
+    me.lunar_recon = LUNAR_RECON_BASE + 10
+    me.lm_points = LM_POINTS_REQUIRED  # no penalty
+    choose_architecture(me, Architecture.LOR)
+    for a in me.astronauts:
+        a.lm_pilot = 100
+
+    submit_turn(me, rd_rocket=None, rd_spend=0, launch=MissionId.MANNED_LUNAR_LANDING)
+    submit_turn(state.players[1], rd_rocket=None, rd_spend=0, launch=None)
+    resolve_turn(state, rng=_FixedRng(0.0))
+    _fire_scheduled_launch(state, _FixedRng(0.0))
+
+    assert len(state.last_launches) == 1
+    r = state.last_launches[0]
+    assert abs(r.lunar_recon_bonus - 10 * LUNAR_RECON_PER_POINT) < 1e-9
+    assert r.lm_points_penalty == 0.0
+
+
+def test_recon_caps_at_LUNAR_RECON_CAP() -> None:
+    state = _two_player_state()
+    start_game(state, rng=random.Random(1))
+    me = state.players[0]
+    me.lunar_recon = LUNAR_RECON_CAP - 1   # near the cap
+    me.mission_successes[MissionId.SUBORBITAL.value] = 1
+    me.reliability[Rocket.MEDIUM.value] = 70
+    me.budget = 200
+
+    submit_turn(me, rd_rocket=None, rd_spend=0, launch=MissionId.LUNAR_PASS)
+    submit_turn(state.players[1], rd_rocket=None, rd_spend=0, launch=None)
+    resolve_turn(state, rng=_FixedRng(0.0))
+    _fire_scheduled_launch(state, _FixedRng(0.0))
+
+    assert me.lunar_recon == LUNAR_RECON_CAP

@@ -10,6 +10,21 @@ from baris.state import (
     ARCHITECTURE_COST_DELTA,
     ARCHITECTURE_SUCCESS_DELTA,
     ASSEMBLY_COST_FRACTION,
+    LM_POINTS_FROM_MANNED_LUNAR_ORBIT,
+    LM_POINTS_FROM_MANNED_ORBITAL,
+    LM_POINTS_FROM_MULTI_CREW,
+    LM_POINTS_FROM_ORBITAL_EVA,
+    LM_POINTS_FROM_UNMANNED_LANDING,
+    LM_POINTS_PENALTY_PER_MISSING,
+    LM_POINTS_REQUIRED,
+    LUNAR_RECON_BASE,
+    LUNAR_RECON_CAP,
+    LUNAR_RECON_PER_POINT,
+    RECON_FROM_LUNAR_ORBIT,
+    RECON_FROM_LUNAR_PASS,
+    RECON_FROM_MANNED_LUNAR_ORBIT,
+    RECON_FROM_UNMANNED_LANDING_FAIL,
+    RECON_FROM_UNMANNED_LANDING_OK,
     Architecture,
     Astronaut,
     AstronautStatus,
@@ -88,6 +103,19 @@ def effective_base_success(player: Player, mission: Mission) -> float:
         if arch is not None:
             return mission.base_success + ARCHITECTURE_SUCCESS_DELTA[arch]
     return mission.base_success
+
+
+def effective_lunar_modifier(player: Player, mission: Mission) -> tuple[float, float]:
+    """Returns (recon_bonus, lm_penalty) for the manned lunar landing.
+    Both are 0.0 for any other mission. Used by the resolver when rolling
+    the mission and by the UI for pre-flight briefings so the numbers
+    the player sees match what actually gets rolled."""
+    if mission.id != MissionId.MANNED_LUNAR_LANDING:
+        return (0.0, 0.0)
+    recon_bonus = max(0, player.lunar_recon - LUNAR_RECON_BASE) * LUNAR_RECON_PER_POINT
+    missing = max(0, LM_POINTS_REQUIRED - player.lm_points)
+    lm_penalty = missing * LM_POINTS_PENALTY_PER_MISSING
+    return (recon_bonus, lm_penalty)
 
 
 def meets_architecture_prereqs(player: Player, mission: Mission) -> bool:
@@ -518,10 +546,13 @@ def _resolve_scheduled_launch(
         (player.rocket_reliability(eff_rocket) - 50) * RELIABILITY_SWING_PER_POINT
     )
     base = effective_base_success(player, mission)
-    success_chance = base + crew_bonus + reliability_bonus
+    recon_bonus, lm_penalty = effective_lunar_modifier(player, mission)
+    success_chance = base + crew_bonus + reliability_bonus + recon_bonus - lm_penalty
     report.base_success = base
     report.crew_bonus = crew_bonus
     report.reliability_bonus = reliability_bonus
+    report.lunar_recon_bonus = recon_bonus
+    report.lm_points_penalty = lm_penalty
     report.effective_success = success_chance
 
     prestige_start = player.prestige
@@ -530,12 +561,14 @@ def _resolve_scheduled_launch(
         report.success = True
         _bump_reliability(player, eff_rocket, RELIABILITY_GAIN_ON_SUCCESS)
         _handle_mission_success(player, mission, crew, state, report)
+        _grant_lunar_progress(player, mission, success=True, state=state)
         _resolve_objectives(
             player, mission, crew, state, rng, eff_rocket, report,
             objectives_raw=sl.objectives,
         )
     else:
         _handle_mission_failure(player, mission, crew, state, rng, eff_rocket, report)
+        _grant_lunar_progress(player, mission, success=False, state=state)
     report.reliability_after = player.rocket_reliability(eff_rocket)
     report.prestige_delta = player.prestige - prestige_start
 
@@ -654,6 +687,58 @@ def _bump_reliability(player: Player, rocket: Rocket, delta: int) -> None:
         new_value = max(RELIABILITY_FLOOR, new_value)
     new_value = min(RELIABILITY_CAP, max(0, new_value))
     player.reliability[rocket.value] = new_value
+
+
+def _bump_recon(player: Player, delta: int, state: GameState) -> None:
+    """Clamp-and-log helper for lunar reconnaissance bumps."""
+    if delta <= 0:
+        return
+    new_recon = min(LUNAR_RECON_CAP, player.lunar_recon + delta)
+    if new_recon == player.lunar_recon:
+        return
+    player.lunar_recon = new_recon
+    state.log.append(f"{player.username}: lunar recon → {new_recon}%.")
+
+
+def _grant_lunar_progress(
+    player: Player,
+    mission: Mission,
+    success: bool,
+    state: GameState,
+) -> None:
+    """Apply recon and LM-point rewards based on which mission just
+    resolved. Only a handful of missions are relevant; everything else
+    is a no-op."""
+    mid = mission.id
+    if success:
+        lm_gain = 0
+        if mid == MissionId.LUNAR_PASS:
+            _bump_recon(player, RECON_FROM_LUNAR_PASS, state)
+        elif mid == MissionId.LUNAR_ORBIT:
+            _bump_recon(player, RECON_FROM_LUNAR_ORBIT, state)
+        elif mid == MissionId.LUNAR_LANDING:
+            _bump_recon(player, RECON_FROM_UNMANNED_LANDING_OK, state)
+            lm_gain = LM_POINTS_FROM_UNMANNED_LANDING
+        elif mid == MissionId.MANNED_LUNAR_ORBIT:
+            _bump_recon(player, RECON_FROM_MANNED_LUNAR_ORBIT, state)
+            lm_gain = LM_POINTS_FROM_MANNED_LUNAR_ORBIT
+        elif mid == MissionId.MANNED_ORBITAL:
+            lm_gain = LM_POINTS_FROM_MANNED_ORBITAL
+        elif mid == MissionId.MULTI_CREW_ORBITAL:
+            lm_gain = LM_POINTS_FROM_MULTI_CREW
+        elif mid == MissionId.ORBITAL_EVA:
+            lm_gain = LM_POINTS_FROM_ORBITAL_EVA
+        if lm_gain > 0:
+            player.lm_points += lm_gain
+            state.log.append(
+                f"{player.username}: LM programme +{lm_gain} (now "
+                f"{player.lm_points}/{LM_POINTS_REQUIRED})."
+            )
+    else:
+        # Only the unmanned lunar landing failure feeds recon back — a
+        # crashed Surveyor still beams photos home before impact.
+        if mid == MissionId.LUNAR_LANDING:
+            _bump_recon(player, RECON_FROM_UNMANNED_LANDING_FAIL, state)
 
 
 def _next_tier(tier: ProgramTier) -> ProgramTier:
