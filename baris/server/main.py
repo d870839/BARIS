@@ -12,10 +12,12 @@ from baris import protocol
 from baris.resolver import (
     all_turns_in,
     can_start,
+    cancel_training,
     choose_architecture,
     resolve_turn,
     scrub_scheduled,
     start_game,
+    start_training,
     submit_turn,
 )
 from baris.state import (
@@ -28,6 +30,7 @@ from baris.state import (
     Player,
     Rocket,
     Side,
+    Skill,
 )
 
 log = logging.getLogger("baris.server")
@@ -197,6 +200,27 @@ async def handle_scrub_scheduled(player: Player, msg: dict[str, Any]) -> None:
         log.info("%s scrubbed scheduled launch", player.username)
 
 
+async def handle_start_training(player: Player, msg: dict[str, Any]) -> None:
+    if room.state.phase != Phase.PLAYING:
+        return
+    astronaut_id = str(msg.get("astronaut_id") or "")
+    try:
+        skill = Skill(msg.get("skill"))
+    except ValueError:
+        return
+    if start_training(player, astronaut_id, skill):
+        log.info("%s started %s training for %s",
+                 player.username, skill.value, astronaut_id)
+
+
+async def handle_cancel_training(player: Player, msg: dict[str, Any]) -> None:
+    if room.state.phase != Phase.PLAYING:
+        return
+    astronaut_id = str(msg.get("astronaut_id") or "")
+    if cancel_training(player, astronaut_id):
+        log.info("%s cancelled training for %s", player.username, astronaut_id)
+
+
 async def client_handler(ws: Any) -> None:
     player: Player | None = None
     try:
@@ -230,6 +254,10 @@ async def client_handler(ws: Any) -> None:
                 await handle_choose_architecture(player, msg)
             elif mtype == protocol.SCRUB_SCHEDULED:
                 await handle_scrub_scheduled(player, msg)
+            elif mtype == protocol.START_TRAINING:
+                await handle_start_training(player, msg)
+            elif mtype == protocol.CANCEL_TRAINING:
+                await handle_cancel_training(player, msg)
             else:
                 await ws.send(protocol.encode(protocol.ERROR, message=f"Unknown type {mtype}"))
                 continue

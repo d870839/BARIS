@@ -1276,12 +1276,20 @@ class Client:
         draw_text(self.screen, header, (cx, cy + 32), size=14, color=DIM)
         y = cy + 58
         for astro in me.astronauts:
-            color = FG if astro.active else RED
+            if not astro.active:
+                status = "KIA"
+                color = RED
+            elif not astro.flight_ready:
+                status = astro.busy_reason or "training"
+                color = HIGHLIGHT
+            else:
+                status = "ready"
+                color = FG
             row = (
                 f"{astro.name:<14}"
                 f"{astro.capsule:<9}{astro.lm_pilot:<6}"
                 f"{astro.eva:<6}{astro.docking:<6}{astro.endurance:<8}"
-                f"{'active' if astro.active else 'KIA'}"
+                f"{status}"
             )
             draw_text(self.screen, row, (cx, y), size=15, color=color)
             y += 28
@@ -1350,7 +1358,7 @@ class Client:
             tier_unlocked = me.is_tier_unlocked(m.tier)
             built = me.rocket_built(eff_rocket)
             affordable = me.budget >= eff_cost
-            crew_ok = not m.manned or len(me.active_astronauts()) >= m.crew_size
+            crew_ok = not m.manned or len(me.flight_ready_astronauts()) >= m.crew_size
             arch_ok = meets_architecture_prereqs(me, m)
             status_parts: list[str] = []
             status_color = DIM
@@ -1479,11 +1487,11 @@ class Client:
             cy += 20
 
     def _preview_crew(self, player: Player, mission) -> list[Astronaut]:
-        active = player.active_astronauts()
-        if len(active) < mission.crew_size:
+        pool = player.flight_ready_astronauts()
+        if len(pool) < mission.crew_size:
             return []
         skill_key: Skill = mission.primary_skill or Skill.CAPSULE
-        ranked = sorted(active, key=lambda a: a.skill(skill_key), reverse=True)
+        ranked = sorted(pool, key=lambda a: a.skill(skill_key), reverse=True)
         return ranked[:mission.crew_size]
 
     # --- briefing scene -------------------------------------------------

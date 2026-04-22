@@ -11,6 +11,8 @@ UNREADY = "unready"
 END_TURN = "end_turn"
 CHOOSE_ARCHITECTURE = "choose_architecture"
 SCRUB_SCHEDULED = "scrub_scheduled"
+START_TRAINING = "start_training"
+CANCEL_TRAINING = "cancel_training"
 
 # Server -> Client message types
 JOINED = "joined"

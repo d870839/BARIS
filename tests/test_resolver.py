@@ -8,6 +8,7 @@ from baris.resolver import (
     all_turns_in,
     available_missions,
     can_start,
+    cancel_training,
     choose_architecture,
     effective_base_success,
     effective_launch_cost,
@@ -16,14 +17,21 @@ from baris.resolver import (
     resolve_turn,
     scrub_scheduled,
     start_game,
+    start_training,
     submit_turn,
     visible_missions,
     visible_to,
 )
 from baris.state import (
+    ADVANCED_TRAINING_COST,
+    ADVANCED_TRAINING_SKILL_GAIN,
+    ADVANCED_TRAINING_TURNS,
     ARCHITECTURE_COST_DELTA,
     ARCHITECTURE_SUCCESS_DELTA,
     ASSEMBLY_COST_FRACTION,
+    BASIC_TRAINING_TURNS,
+    HOSPITAL_STAY_TURNS,
+    TRAINING_CANCEL_REFUND_FRACTION,
     Architecture,
     Astronaut,
     AstronautStatus,
@@ -1417,3 +1425,199 @@ def test_scheduled_launch_roundtrips_through_state_dict() -> None:
     assert isinstance(r_me.scheduled_launch, ScheduledLaunch)
     assert r_me.scheduled_launch.mission_id == MissionId.SUBORBITAL.value
     assert r_me.scheduled_launch.assembly_cost_paid == me.scheduled_launch.assembly_cost_paid
+
+
+# ----------------------------------------------------------------------
+# Phase C — crew training + hospital recovery
+# ----------------------------------------------------------------------
+
+
+def test_astronaut_in_basic_training_is_not_flight_ready() -> None:
+    a = Astronaut(id="a", name="A")
+    assert a.flight_ready is True
+    a.basic_training_remaining = 2
+    assert a.flight_ready is False
+    assert "basic training" in a.busy_reason
+
+
+def test_astronaut_in_hospital_is_not_flight_ready() -> None:
+    a = Astronaut(id="a", name="A")
+    a.hospital_remaining = 1
+    assert a.flight_ready is False
+    assert "hospital" in a.busy_reason
+
+
+def test_kia_astronaut_is_not_flight_ready() -> None:
+    a = Astronaut(id="a", name="A", status=AstronautStatus.KIA.value)
+    assert a.flight_ready is False
+    assert a.busy_reason == "KIA"
+
+
+def test_start_training_deducts_cost_and_sets_counter() -> None:
+    me = Player(player_id="a", username="Alice", side=Side.USA, budget=50)
+    me.astronauts = [Astronaut(id="x", name="X", capsule=40)]
+    assert start_training(me, "x", Skill.CAPSULE)
+    assert me.budget == 50 - ADVANCED_TRAINING_COST
+    assert me.astronauts[0].advanced_training_remaining == ADVANCED_TRAINING_TURNS
+    assert me.astronauts[0].advanced_training_skill == Skill.CAPSULE.value
+    # Flight-blocked while training.
+    assert me.astronauts[0].flight_ready is False
+
+
+def test_start_training_rejects_if_already_training() -> None:
+    me = Player(player_id="a", username="Alice", side=Side.USA, budget=50)
+    a = Astronaut(
+        id="x", name="X",
+        advanced_training_remaining=1, advanced_training_skill=Skill.EVA.value,
+    )
+    me.astronauts = [a]
+    assert not start_training(me, "x", Skill.CAPSULE)
+    assert me.budget == 50  # not charged
+
+
+def test_start_training_rejects_when_broke() -> None:
+    me = Player(player_id="a", username="Alice", side=Side.USA, budget=1)
+    me.astronauts = [Astronaut(id="x", name="X")]
+    assert not start_training(me, "x", Skill.CAPSULE)
+    assert me.astronauts[0].advanced_training_remaining == 0
+
+
+def test_cancel_training_refunds_half_and_clears_slot() -> None:
+    me = Player(player_id="a", username="Alice", side=Side.USA, budget=50)
+    me.astronauts = [Astronaut(id="x", name="X")]
+    start_training(me, "x", Skill.EVA)
+    budget_after_start = me.budget
+    assert cancel_training(me, "x")
+    expected_refund = int(ADVANCED_TRAINING_COST * TRAINING_CANCEL_REFUND_FRACTION)
+    assert me.budget == budget_after_start + expected_refund
+    assert me.astronauts[0].advanced_training_remaining == 0
+    assert me.astronauts[0].advanced_training_skill == ""
+
+
+def test_advanced_training_completes_and_bumps_skill() -> None:
+    state = _two_player_state()
+    start_game(state, rng=random.Random(1))
+    me = state.players[0]
+    me.budget = 100
+    target = me.astronauts[0]
+    target.capsule = 20
+    assert start_training(me, target.id, Skill.CAPSULE)
+    # Two turns must pass for the block to complete.
+    for _ in range(ADVANCED_TRAINING_TURNS):
+        submit_turn(me, rd_rocket=None, rd_spend=0, launch=None)
+        submit_turn(state.players[1], rd_rocket=None, rd_spend=0, launch=None)
+        resolve_turn(state, rng=random.Random(0))
+    assert target.advanced_training_remaining == 0
+    assert target.advanced_training_skill == ""
+    # Skill bumped by training (plus passive bumps, so >=).
+    assert target.capsule >= 20 + ADVANCED_TRAINING_SKILL_GAIN
+
+
+def test_hospital_countdown_ticks_down_each_turn() -> None:
+    state = _two_player_state()
+    start_game(state, rng=random.Random(1))
+    me = state.players[0]
+    me.astronauts[0].hospital_remaining = 2
+
+    submit_turn(me, rd_rocket=None, rd_spend=0, launch=None)
+    submit_turn(state.players[1], rd_rocket=None, rd_spend=0, launch=None)
+    resolve_turn(state, rng=random.Random(0))
+    assert me.astronauts[0].hospital_remaining == 1
+
+    submit_turn(me, rd_rocket=None, rd_spend=0, launch=None)
+    submit_turn(state.players[1], rd_rocket=None, rd_spend=0, launch=None)
+    resolve_turn(state, rng=random.Random(0))
+    assert me.astronauts[0].hospital_remaining == 0
+    assert me.astronauts[0].flight_ready is True
+
+
+def test_select_crew_skips_trainees() -> None:
+    me = Player(player_id="a", username="Alice", side=Side.USA)
+    me.astronauts = [
+        _make_astronaut("Hi", capsule=90),
+        _make_astronaut("Lo", capsule=30),
+    ]
+    # Star astronaut is in basic training → must fall back to the backup.
+    me.astronauts[0].basic_training_remaining = 2
+    mission = MISSIONS_BY_ID[MissionId.MANNED_ORBITAL]
+    crew = _select_crew(me, mission)
+    assert crew is not None
+    assert [a.name for a in crew] == ["Lo"]
+
+
+def test_manned_failure_can_send_survivor_to_hospital() -> None:
+    """Fixed RNG where the success/death/hospital rolls all trip the
+    hospital threshold but miss the death threshold."""
+
+    class _SeqRng:
+        def __init__(self, values):
+            self.values = list(values)
+            self._r = random.Random(1)
+        def random(self) -> float:
+            return self.values.pop(0)
+        def randint(self, a, b):
+            return self._r.randint(a, b)
+        def choice(self, seq):
+            return self._r.choice(seq)
+
+    state = _two_player_state()
+    start_game(state, rng=random.Random(1))
+    me = state.players[0]
+    me.reliability[Rocket.MEDIUM.value] = 70
+    me.budget = 200
+    for a in me.astronauts:
+        a.capsule = 50
+
+    submit_turn(me, rd_rocket=None, rd_spend=0, launch=MissionId.MANNED_ORBITAL)
+    submit_turn(state.players[1], rd_rocket=None, rd_spend=0, launch=None)
+    # Success roll (0.99 → fail), death roll (0.99 → survive),
+    # hospital roll (0.01 → yes) for the single crew member.
+    resolve_turn(state, rng=_SeqRng([0.99]))
+    _fire_scheduled_launch(state, _SeqRng([0.99, 0.99, 0.01]))
+
+    # Nobody died, but the pilot is in the hospital.
+    assert len(me.active_astronauts()) == STARTING_ASTRONAUTS
+    hospitalised = [a for a in me.astronauts if a.hospital_remaining > 0]
+    assert len(hospitalised) == 1
+    assert hospitalised[0].hospital_remaining == HOSPITAL_STAY_TURNS
+
+
+def test_training_state_roundtrips_through_dict() -> None:
+    me = Player(player_id="a", username="Alice", side=Side.USA)
+    me.astronauts = [
+        Astronaut(
+            id="x", name="X", capsule=30,
+            basic_training_remaining=2,
+            advanced_training_skill=Skill.EVA.value,
+            advanced_training_remaining=1,
+            hospital_remaining=3,
+        ),
+    ]
+    state = GameState(players=[me])
+    restored = GameState.from_dict(state.to_dict())
+    r_a = restored.players[0].astronauts[0]
+    assert r_a.basic_training_remaining == 2
+    assert r_a.advanced_training_skill == Skill.EVA.value
+    assert r_a.advanced_training_remaining == 1
+    assert r_a.hospital_remaining == 3
+    assert r_a.flight_ready is False
+
+
+def test_legacy_astronaut_dict_without_training_fields_still_loads() -> None:
+    # Old save: no training / hospital keys.
+    raw = {
+        "id": "x", "name": "X",
+        "capsule": 10, "eva": 5, "endurance": 5,
+        "command": 8,   # legacy single-skill 'command'
+        "status": "active",
+    }
+    a = _astronaut_from_dict(raw) if False else None  # placeholder so the import exists
+    from baris.state import _astronaut_from_dict
+    a = _astronaut_from_dict(raw)
+    assert a.basic_training_remaining == 0
+    assert a.advanced_training_remaining == 0
+    assert a.advanced_training_skill == ""
+    assert a.hospital_remaining == 0
+    assert a.flight_ready is True
+    # Legacy 'command' maps onto 'docking'.
+    assert a.docking == 8

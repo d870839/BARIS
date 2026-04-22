@@ -4,16 +4,22 @@ import random
 import uuid
 
 from baris.state import (
+    ADVANCED_TRAINING_COST,
+    ADVANCED_TRAINING_SKILL_GAIN,
+    ADVANCED_TRAINING_TURNS,
     ARCHITECTURE_COST_DELTA,
     ARCHITECTURE_SUCCESS_DELTA,
     ASSEMBLY_COST_FRACTION,
     Architecture,
     Astronaut,
     AstronautStatus,
+    BASIC_TRAINING_TURNS,
     CREW_MAX_BONUS,
     DEATH_CHANCE_ON_FAIL,
     DEATH_PRESTIGE_PENALTY,
     GameState,
+    HOSPITAL_CHANCE_ON_FAIL,
+    HOSPITAL_STAY_TURNS,
     LaunchReport,
     MIN_RELIABILITY_TO_LAUNCH,
     MISSION_OBJECTIVES,
@@ -32,6 +38,7 @@ from baris.state import (
     RD_SPEED,
     SCRUB_REFUND_FRACTION,
     ScheduledLaunch,
+    TRAINING_CANCEL_REFUND_FRACTION,
     objectives_for,
     RELIABILITY_CAP,
     RELIABILITY_FLOOR,
@@ -236,6 +243,52 @@ def scrub_scheduled(player: Player) -> bool:
     return True
 
 
+def start_training(
+    player: Player,
+    astronaut_id: str,
+    skill: Skill,
+) -> bool:
+    """Send an astronaut into advanced training on `skill`. Costs
+    ADVANCED_TRAINING_COST MB up-front, takes ADVANCED_TRAINING_TURNS
+    seasons. Returns True if the block started.
+
+    Rejected if:
+      - the astronaut isn't found or is KIA
+      - they're already in basic/advanced training or hospital (must
+        finish or cancel first)
+      - the player can't afford the cost
+    """
+    astro = next((a for a in player.astronauts if a.id == astronaut_id), None)
+    if astro is None or not astro.active:
+        return False
+    if (
+        astro.basic_training_remaining > 0
+        or astro.advanced_training_remaining > 0
+        or astro.hospital_remaining > 0
+    ):
+        return False
+    if player.budget < ADVANCED_TRAINING_COST:
+        return False
+    player.budget -= ADVANCED_TRAINING_COST
+    astro.advanced_training_skill = skill.value
+    astro.advanced_training_remaining = ADVANCED_TRAINING_TURNS
+    return True
+
+
+def cancel_training(player: Player, astronaut_id: str) -> bool:
+    """Pull an astronaut out of advanced training early. Refunds
+    TRAINING_CANCEL_REFUND_FRACTION of the cost; no skill gain.
+    Returns True if anything was cancelled."""
+    astro = next((a for a in player.astronauts if a.id == astronaut_id), None)
+    if astro is None or astro.advanced_training_remaining <= 0:
+        return False
+    refund = int(ADVANCED_TRAINING_COST * TRAINING_CANCEL_REFUND_FRACTION)
+    player.budget += refund
+    astro.advanced_training_skill = ""
+    astro.advanced_training_remaining = 0
+    return True
+
+
 def all_turns_in(state: GameState) -> bool:
     return state.phase == Phase.PLAYING and all(p.turn_submitted for p in state.players)
 
@@ -251,6 +304,12 @@ def resolve_turn(state: GameState, rng: random.Random | None = None) -> None:
         # Fire any launch that was committed last turn first — it's the
         # one players are expecting results on — then promote a newly-
         # submitted launch into the VAB for NEXT turn's resolve.
+        # Tick training / hospital counters BEFORE this turn's launch
+        # resolves. That way (a) existing trainees / patients count down
+        # from last turn, and (b) fresh admits from a just-failed mission
+        # start with their full counter — the tick later would otherwise
+        # immediately decrement them.
+        _tick_training_and_recovery(player, state)
         _resolve_scheduled_launch(player, state, rng)
         _promote_pending_to_scheduled(player, state)
         _apply_passive_training(player, rng)
@@ -604,14 +663,16 @@ def _next_tier(tier: ProgramTier) -> ProgramTier:
 
 
 def _select_crew(player: Player, mission: Mission) -> list[Astronaut] | None:
-    """Pick the top-skilled active astronauts for this mission, or None if roster can't fill it."""
+    """Pick the top-skilled FLIGHT-READY astronauts for this mission, or
+    None if the flight-ready roster can't fill it. Astronauts currently
+    in basic training, advanced training, or the hospital are excluded."""
     if not mission.manned or mission.crew_size == 0:
         return []
-    active = player.active_astronauts()
-    if len(active) < mission.crew_size:
+    pool = player.flight_ready_astronauts()
+    if len(pool) < mission.crew_size:
         return None
     skill_key = mission.primary_skill or Skill.CAPSULE
-    ranked = sorted(active, key=lambda a: a.skill(skill_key), reverse=True)
+    ranked = sorted(pool, key=lambda a: a.skill(skill_key), reverse=True)
     return ranked[:mission.crew_size]
 
 
@@ -697,15 +758,29 @@ def _handle_mission_failure(
             astro.status = AstronautStatus.KIA.value
             deaths.append(astro.name)
     report.deaths = list(deaths)
+    # Surviving crew may still need hospital recovery — rough knock
+    # around, radiation exposure, hypothermia on splashdown, etc.
+    # Rolls only on actually-alive crew members so KIAs don't consume
+    # extra RNG values that existing tests rely on.
+    hospitalized: list[str] = []
+    for astro in crew:
+        if astro.status != AstronautStatus.ACTIVE.value:
+            continue
+        if rng.random() < HOSPITAL_CHANCE_ON_FAIL:
+            astro.hospital_remaining = HOSPITAL_STAY_TURNS
+            hospitalized.append(astro.name)
     kia_note = ""
     if deaths:
         player.prestige = max(0, player.prestige - DEATH_PRESTIGE_PENALTY * len(deaths))
         kia_note = (
             f", KIA: {', '.join(deaths)} -{DEATH_PRESTIGE_PENALTY * len(deaths)} prestige"
         )
+    hosp_note = (
+        f", hospitalised: {', '.join(hospitalized)}" if hospitalized else ""
+    )
     state.log.append(
         f"{player.username} — {mission.name}: FAILURE "
-        f"(-{mission.prestige_fail} prestige{kia_note}). "
+        f"(-{mission.prestige_fail} prestige{kia_note}{hosp_note}). "
         f"Program funding cut by {budget_cut} MB."
     )
 
@@ -724,6 +799,42 @@ def _apply_passive_training(player: Player, rng: random.Random) -> None:
             astro.bump_skill(s, 1)
         focus = rng.choice(skills)
         astro.bump_skill(focus, 3)
+
+
+def _tick_training_and_recovery(player: Player, state: GameState) -> None:
+    """Decrement each astronaut's training / hospital counters and apply
+    skill gains when an advanced-training block completes."""
+    for astro in player.astronauts:
+        if not astro.active:
+            continue
+        if astro.basic_training_remaining > 0:
+            astro.basic_training_remaining -= 1
+            if astro.basic_training_remaining == 0:
+                state.log.append(
+                    f"{player.username}: {astro.name} completes basic training."
+                )
+        if astro.hospital_remaining > 0:
+            astro.hospital_remaining -= 1
+            if astro.hospital_remaining == 0:
+                state.log.append(
+                    f"{player.username}: {astro.name} is released from the hospital."
+                )
+        if astro.advanced_training_remaining > 0:
+            astro.advanced_training_remaining -= 1
+            if astro.advanced_training_remaining == 0:
+                skill_val = astro.advanced_training_skill
+                if skill_val:
+                    try:
+                        skill = Skill(skill_val)
+                    except ValueError:
+                        skill = None
+                    if skill is not None:
+                        astro.bump_skill(skill, ADVANCED_TRAINING_SKILL_GAIN)
+                        state.log.append(
+                            f"{player.username}: {astro.name} finishes {skill_val} "
+                            f"training (+{ADVANCED_TRAINING_SKILL_GAIN} {skill_val})."
+                        )
+                astro.advanced_training_skill = ""
 
 
 # ----------------------------------------------------------------------

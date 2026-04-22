@@ -11,10 +11,14 @@ from typing import TYPE_CHECKING
 from ursina import Button, Entity, Text, color
 
 from baris.state import (
+    ADVANCED_TRAINING_COST,
+    ADVANCED_TRAINING_SKILL_GAIN,
+    ADVANCED_TRAINING_TURNS,
     MISSIONS_BY_ID,
     MissionId,
     ProgramTier,
     Side,
+    Skill,
     program_name,
 )
 
@@ -247,3 +251,106 @@ def format_programs(me) -> str:
         if me.is_tier_unlocked(t)
     ]
     return ", ".join(unlocked) or "—"
+
+
+# ----------------------------------------------------------------------
+# Advanced Training panel (opened from the Astronaut Complex console)
+# ----------------------------------------------------------------------
+def build_training_panel(client: "BarisClient", parent: Entity) -> Entity:
+    me = client.me()
+    root, w, h = _panel_shell(
+        parent, "ADVANCED TRAINING",
+        width=1.0, height=0.85, title_color=(130, 160, 220),
+    )
+    if me is None:
+        _close_button(client, root, -0.4)
+        return root
+
+    Text(
+        text=(
+            f"Cost: {ADVANCED_TRAINING_COST} MB per astronaut.  "
+            f"Takes {ADVANCED_TRAINING_TURNS} seasons.  "
+            f"Completion: +{ADVANCED_TRAINING_SKILL_GAIN} in the chosen skill.  "
+            f"Budget: {me.budget} MB."
+        ),
+        parent=root, position=(0, 0.36),
+        origin=(0, 0), z=-0.01,
+        scale=0.95, color=color.rgb32(220, 225, 235),
+    )
+    # Table header
+    header = (
+        f"{'Name':<12}{'CA':>4}{'LM':>4}{'EVA':>4}{'DO':>4}{'EN':>4}   Status"
+    )
+    Text(
+        text=header, parent=root,
+        position=(-0.45, 0.28),
+        origin=(-0.5, 0.5), z=-0.01,
+        scale=0.9, color=color.rgb32(160, 170, 195),
+    )
+
+    # For each astronaut: one info row + a row of train/cancel buttons.
+    row_y = 0.23
+    for astro in me.astronauts:
+        skills_text = (
+            f"{astro.name[:12]:<12}"
+            f"{astro.capsule:>4}{astro.lm_pilot:>4}"
+            f"{astro.eva:>4}{astro.docking:>4}{astro.endurance:>4}"
+        )
+        if not astro.active:
+            status = "KIA"
+            status_color = (220, 90, 90)
+        elif astro.flight_ready:
+            status = "ready"
+            status_color = (110, 200, 120)
+        else:
+            status = astro.busy_reason
+            status_color = (240, 200, 90)
+        Text(
+            text=skills_text, parent=root,
+            position=(-0.45, row_y),
+            origin=(-0.5, 0.5), z=-0.01,
+            scale=0.88, color=color.rgb32(220, 225, 235),
+        )
+        Text(
+            text=status, parent=root,
+            position=(0.02, row_y),
+            origin=(-0.5, 0.5), z=-0.01,
+            scale=0.88, color=color.rgb32(*status_color),
+        )
+        # Action buttons: one per skill, or a CANCEL if already training.
+        if astro.active:
+            if astro.advanced_training_remaining > 0:
+                btn = Button(
+                    parent=root, text="CANCEL",
+                    position=(0.38, row_y), scale=(0.13, 0.045),
+                    color=color.rgb32(170, 60, 60),
+                    highlight_color=color.rgb32(220, 90, 90),
+                )
+                btn.on_click = (lambda aid=astro.id:
+                                client.astro_cancel_training(aid))
+            elif astro.flight_ready:
+                skill_specs = [
+                    (Skill.CAPSULE, "CA"),
+                    (Skill.LM_PILOT, "LM"),
+                    (Skill.EVA, "EV"),
+                    (Skill.DOCKING, "DO"),
+                    (Skill.ENDURANCE, "EN"),
+                ]
+                start_x = 0.18
+                for i, (skill, label) in enumerate(skill_specs):
+                    btn = Button(
+                        parent=root,
+                        text=label,
+                        position=(start_x + i * 0.065, row_y),
+                        scale=(0.055, 0.04),
+                        color=color.rgb32(45, 65, 95),
+                        highlight_color=color.rgb32(80, 120, 180),
+                    )
+                    btn.on_click = (
+                        lambda aid=astro.id, s=skill:
+                            client.astro_start_training(aid, s)
+                    )
+        row_y -= 0.052
+
+    _close_button(client, root, -0.4)
+    return root

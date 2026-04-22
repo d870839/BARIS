@@ -337,6 +337,25 @@ MANNED_FAILURE_BUDGET_CUT   = 30   # lost crew → public/political funding pull
 # portion (the rest has already been spent on hardware integration).
 ASSEMBLY_COST_FRACTION   = 0.3
 SCRUB_REFUND_FRACTION    = 0.5
+
+# Phase C — crew training + hospital recovery.
+# - Basic Training: a freshly-recruited astronaut needs BASIC_TRAINING_TURNS
+#   seasons of orientation before they can be selected for a mission.
+#   The starting roster is assumed pre-trained so they start at 0.
+# - Advanced Training: pay ADVANCED_TRAINING_COST MB, wait
+#   ADVANCED_TRAINING_TURNS seasons, astronaut gains
+#   ADVANCED_TRAINING_SKILL_GAIN points in the chosen skill.
+# - Hospital: after a manned-mission failure, each surviving crew member
+#   has HOSPITAL_CHANCE_ON_FAIL probability of needing HOSPITAL_STAY_TURNS
+#   seasons of recovery before flying again.
+BASIC_TRAINING_TURNS         = 3
+ADVANCED_TRAINING_TURNS      = 2
+ADVANCED_TRAINING_COST       = 3
+ADVANCED_TRAINING_SKILL_GAIN = 2
+HOSPITAL_STAY_TURNS          = 2
+HOSPITAL_CHANCE_ON_FAIL      = 0.4
+# Cancelling a training block early refunds this fraction of the cost.
+TRAINING_CANCEL_REFUND_FRACTION = 0.5
 # Reliability contributes ±10% to success around a neutral value of 50.
 # effective = base + crew_bonus + (reliability - 50) * RELIABILITY_SWING_PER_POINT
 RELIABILITY_SWING_PER_POINT = 0.002
@@ -352,6 +371,12 @@ class Astronaut:
     docking: int = 0
     endurance: int = 0
     status: str = AstronautStatus.ACTIVE.value  # stored as string for JSON safety
+    # Phase C — training / recovery countdowns. An astronaut is flight-
+    # ready iff status==active AND every one of these is zero.
+    basic_training_remaining: int = 0
+    advanced_training_skill: str = ""     # Skill.value while training, else ""
+    advanced_training_remaining: int = 0
+    hospital_remaining: int = 0
 
     def skill(self, kind: Skill) -> int:
         return getattr(self, kind.value)
@@ -363,6 +388,32 @@ class Astronaut:
     @property
     def active(self) -> bool:
         return self.status == AstronautStatus.ACTIVE.value
+
+    @property
+    def flight_ready(self) -> bool:
+        """True iff the astronaut can be assigned to a mission right now.
+        Equivalent to active + no outstanding basic/advanced training
+        and no current hospital stay."""
+        return (
+            self.active
+            and self.basic_training_remaining == 0
+            and self.advanced_training_remaining == 0
+            and self.hospital_remaining == 0
+        )
+
+    @property
+    def busy_reason(self) -> str:
+        """Human-readable reason this astronaut can't fly, or '' if ready."""
+        if not self.active:
+            return "KIA"
+        if self.basic_training_remaining > 0:
+            return f"basic training ({self.basic_training_remaining})"
+        if self.hospital_remaining > 0:
+            return f"hospital ({self.hospital_remaining})"
+        if self.advanced_training_remaining > 0:
+            skill = self.advanced_training_skill or "skill"
+            return f"training {skill} ({self.advanced_training_remaining})"
+        return ""
 
 
 @dataclass
@@ -418,6 +469,11 @@ class Player:
 
     def active_astronauts(self) -> list[Astronaut]:
         return [a for a in self.astronauts if a.active]
+
+    def flight_ready_astronauts(self) -> list[Astronaut]:
+        """Alive crew with no training/hospital blocking them from flying.
+        Use this (not active_astronauts) when picking a mission crew."""
+        return [a for a in self.astronauts if a.flight_ready]
 
     def has_any_success_in(self, tier: ProgramTier) -> bool:
         """True if the player has at least one success in any mission of the given tier."""
@@ -502,13 +558,18 @@ def _astronaut_from_dict(d: dict[str, Any]) -> Astronaut:
     """Tolerant parser: legacy state dicts stored a single 'command' skill;
     the 5-skill model splits that into lm_pilot + docking. Map the old
     value onto docking (closest analogue — orbital-ops commander) and
-    default lm_pilot to 0 when it's missing."""
+    default lm_pilot to 0 when it's missing. Also backfill Phase C
+    training / hospital fields with zero for older saves."""
     data = dict(d)
     legacy_command = data.pop("command", None)
     if legacy_command is not None and "docking" not in data:
         data["docking"] = legacy_command
     data.setdefault("lm_pilot", 0)
     data.setdefault("docking", 0)
+    data.setdefault("basic_training_remaining", 0)
+    data.setdefault("advanced_training_skill", "")
+    data.setdefault("advanced_training_remaining", 0)
+    data.setdefault("hospital_remaining", 0)
     return Astronaut(**data)
 
 

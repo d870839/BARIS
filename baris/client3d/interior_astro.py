@@ -177,6 +177,27 @@ class AstroInterior:
             position=(0, 1.4, z), scale=6, origin=(0, 0),
             color=color.rgb32(255, 220, 220),
         )
+        # TRAINING CONSOLE — press E to open the advanced-training panel.
+        tx = -4.5
+        Entity(
+            parent=self.root, model="cube",
+            position=(tx, 0.45, z), scale=(1.1, 0.9, 1.1),
+            color=color.rgb32(60, 95, 130),
+            collider="box",
+        )
+        tcap = Entity(
+            parent=self.root, model="cube",
+            position=(tx, 1.0, z), scale=(0.7, 0.15, 0.7),
+            color=color.rgb32(90, 160, 220),
+        )
+        tcap._rest_y = tcap.y
+        self.buttons["training"] = tcap
+        Text(
+            text="TRAINING\nCONSOLE", parent=self.root,
+            position=(tx, 1.55, z), scale=4.2, origin=(0, 0),
+            billboard=True,
+            color=color.rgb32(200, 225, 245),
+        )
 
     # ------------------------------------------------------------------
     # Runtime
@@ -199,12 +220,15 @@ class AstroInterior:
                 continue
             astro = roster[i]
             slot["name"].text = astro.name
-            if astro.active:
-                slot["status"].text = "ACTIVE"
-                slot["status"].color = color.rgb32(110, 200, 120)
-            else:
+            if not astro.active:
                 slot["status"].text = "KIA"
                 slot["status"].color = color.rgb32(220, 90, 90)
+            elif astro.flight_ready:
+                slot["status"].text = "READY"
+                slot["status"].color = color.rgb32(110, 200, 120)
+            else:
+                slot["status"].text = astro.busy_reason.upper()[:22]
+                slot["status"].color = color.rgb32(240, 200, 90)
             for s, label, val in zip(
                 slot["skills"],
                 ("Capsule", "LM", "EVA", "Docking", "Endure"),

@@ -455,6 +455,8 @@ class BarisClient(Entity):
             if me is not None and me.scheduled_launch is not None:
                 return "[E] SCRUB scheduled launch (refund ~half assembly)"
             return "Nothing to scrub"
+        if bid == "training":
+            return "[E] Open Advanced Training console"
         if bid.startswith("target:"):
             return f"[E] Set R&D target: {bid.split(':', 1)[1]}"
         if bid == "spend_plus":
@@ -542,6 +544,8 @@ class BarisClient(Entity):
             self.panel = panels_info.build_astro_panel(self, camera.ui)
         elif panel_id == "library":
             self.panel = panels_info.build_library_panel(self, camera.ui)
+        elif panel_id == "training":
+            self.panel = panels_info.build_training_panel(self, camera.ui)
         elif panel_id == "result" and report is not None:
             self.panel = panels_action.build_result_panel(self, camera.ui, report)
         self._enter_ui_mode()
@@ -660,6 +664,12 @@ class BarisClient(Entity):
                     return
                 self.mc_choose_architecture(arch)
             return
+        # Astronaut Complex buttons
+        if self.in_interior == "astro":
+            if bid == "training":
+                self._open_panel("training")
+                return
+            return
 
     # Legacy alias so existing input dispatch keeps working.
     def _press_rd_interior_button(self) -> None:
@@ -749,6 +759,23 @@ class BarisClient(Entity):
         manifest slot. Safe to call even if nothing is scheduled — the
         server guards against no-ops."""
         self.net.send(protocol.SCRUB_SCHEDULED)
+
+    # ------------------------------------------------------------------
+    # Astronaut training
+    # ------------------------------------------------------------------
+    def astro_start_training(self, astronaut_id: str, skill) -> None:
+        """Fire START_TRAINING; server validates budget + state. Immediately
+        rebuild the open training panel so the button state updates."""
+        self.net.send(
+            protocol.START_TRAINING,
+            astronaut_id=astronaut_id,
+            skill=skill.value,
+        )
+        self._refresh_current_panel()
+
+    def astro_cancel_training(self, astronaut_id: str) -> None:
+        self.net.send(protocol.CANCEL_TRAINING, astronaut_id=astronaut_id)
+        self._refresh_current_panel()
 
     def mc_choose_architecture(self, arch: Architecture) -> None:
         if self._turn_locked():
