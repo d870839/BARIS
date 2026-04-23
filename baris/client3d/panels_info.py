@@ -278,14 +278,19 @@ def build_training_panel(client: "BarisClient", parent: Entity) -> Entity:
 
     Text(
         text=(
-            f"Cost: {ADVANCED_TRAINING_COST} MB per astronaut.  "
-            f"Takes {ADVANCED_TRAINING_TURNS} seasons.  "
-            f"Completion: +{ADVANCED_TRAINING_SKILL_GAIN} in the chosen skill.  "
-            f"Budget: {me.budget} MB."
+            f"Cost: {ADVANCED_TRAINING_COST} MB per astronaut   "
+            f"Duration: {ADVANCED_TRAINING_TURNS} seasons   "
+            f"Gain: +{ADVANCED_TRAINING_SKILL_GAIN} to the chosen skill"
         ),
-        parent=root, position=(0, 0.36),
+        parent=root, position=(0, 0.34),
         origin=(0, 0), z=-0.01,
-        scale=0.95, color=color.rgb32(220, 225, 235),
+        scale=0.8, color=color.rgb32(220, 225, 235),
+    )
+    Text(
+        text=f"Budget: {me.budget} MB",
+        parent=root, position=(0, 0.30),
+        origin=(0, 0), z=-0.01,
+        scale=0.8, color=color.rgb32(160, 170, 195),
     )
     # Table header
     header = (
@@ -293,13 +298,13 @@ def build_training_panel(client: "BarisClient", parent: Entity) -> Entity:
     )
     Text(
         text=header, parent=root,
-        position=(-0.45, 0.28),
+        position=(-0.45, 0.24),
         origin=(-0.5, 0.5), z=-0.01,
         scale=0.9, color=color.rgb32(160, 170, 195),
     )
 
     # For each astronaut: one info row + a row of train/cancel buttons.
-    row_y = 0.23
+    row_y = 0.19
     for astro in me.astronauts:
         skills_text = (
             f"{astro.name[:12]:<12}"
@@ -328,11 +333,14 @@ def build_training_panel(client: "BarisClient", parent: Entity) -> Entity:
             scale=0.88, color=color.rgb32(*status_color),
         )
         # Action buttons: one per skill, or a CANCEL if already training.
+        # z=-0.02 keeps the buttons in front of the panel backdrop quad —
+        # without it, the two opaque quads z-fight at z=0 and buttons
+        # randomly disappear between frames.
         if astro.active:
             if astro.advanced_training_remaining > 0:
                 btn = Button(
                     parent=root, text="CANCEL",
-                    position=(0.38, row_y), scale=(0.13, 0.045),
+                    position=(0.38, row_y, -0.02), scale=(0.13, 0.045),
                     color=color.rgb32(170, 60, 60),
                     highlight_color=color.rgb32(220, 90, 90),
                 )
@@ -351,7 +359,7 @@ def build_training_panel(client: "BarisClient", parent: Entity) -> Entity:
                     btn = Button(
                         parent=root,
                         text=label,
-                        position=(start_x + i * 0.065, row_y),
+                        position=(start_x + i * 0.065, row_y, -0.02),
                         scale=(0.055, 0.04),
                         color=color.rgb32(45, 65, 95),
                         highlight_color=color.rgb32(80, 120, 180),
