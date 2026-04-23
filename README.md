@@ -62,6 +62,68 @@ Walk with **WASD** + mouse look. Approach Mission Control and press **E** to
 open the turn-submit panel; **Esc** closes. V1 only supports pass turns — R&D,
 missions, briefings, and the launch sequence still live in the 2D client.
 
+## Playing with friends over the internet
+
+BARIS is 2-player. There's no hosted matchmaking server yet — you host, your
+friend connects. The server already binds `0.0.0.0:8765`, so the only missing
+piece is a public URL. Cloudflare Quick Tunnels are the low-friction option:
+no account, no signup, URL good for as long as the terminal stays open.
+
+### Host (you)
+
+One-time: install `cloudflared`.
+- macOS: `brew install cloudflared`
+- Windows: `winget install Cloudflare.cloudflared`
+- Linux: grab the binary from Cloudflare's downloads page.
+
+Each session, two terminals:
+```
+# Terminal 1 — public tunnel to your local server
+cloudflared tunnel --url http://localhost:8765
+#   prints: https://<random-words>.trycloudflare.com   <-- send this to your friend
+
+# Terminal 2 — the game server
+source .venv/bin/activate        # Windows: .venv\Scripts\activate
+python -m baris.server.main      # add --debug to pre-seed budget + rockets
+```
+
+Then launch your own client against the *local* server (faster, no round trip
+through the tunnel):
+```
+python -m baris.client.main --name YourName
+```
+
+Close both terminals when you're done; the tunnel URL is single-use and
+changes on the next run.
+
+### Friend (the other player)
+
+Send them this block. They'll need Python 3.11+ and git.
+
+```
+# One-time setup
+git clone <your-fork-url> baris
+cd baris
+python -m venv .venv
+source .venv/bin/activate        # Windows: .venv\Scripts\activate
+pip install -r requirements.txt          # 2D client
+# or, for the 3D walkaround client:
+# pip install -r requirements-3d.txt
+
+# Each session — replace the URL with what the host sent
+python -m baris.client.main --name FriendName \
+    --server wss://<random-words>.trycloudflare.com
+# 3D: python -m baris.client3d.main --name FriendName --server wss://...
+```
+
+Notes:
+- **`wss://`** (TLS), not `ws://`, and **no `:8765`** — the tunnel handles both.
+- First run on Windows may trigger a firewall prompt for the Python client;
+  allow it on private networks.
+- 3D client is heavier (pulls in `ursina` + `panda3d`, ~50 MB). If install
+  fights you, fall back to the 2D client — they talk to the same server, so
+  mixing 2D and 3D in one game works fine.
+
 ## Controls
 
 **Lobby:**
