@@ -1,19 +1,38 @@
-"""Astronaut Complex interior — seven wall portraits showing the player's
-roster with live skill readouts. Info-display only: the only interactive
-element is the EXIT pedestal by the door."""
+"""Astronaut Complex interior — wall portraits showing the player's
+roster with live skill readouts, and a pair of seasonal NEWS screens
+flanking the exit that stream the current headline. The only
+interactive elements are the EXIT, TRAINING, and RECRUITMENT pedestals
+by the door."""
 from __future__ import annotations
 
 from typing import Any
 
 from ursina import Entity, Text, color, invoke
 
-from baris.state import STARTING_ASTRONAUTS
-
 
 ROOM_WIDTH = 16.0
 ROOM_DEPTH = 12.0
 ROOM_HEIGHT = 4.5
 BUTTON_RANGE = 2.0
+
+
+def _wrap_headline(text: str, max_chars: int = 28) -> str:
+    """Greedy word-wrap for the NEWS TV bodies. Ursina Text supports \\n;
+    we split the headline on spaces so individual words aren't broken."""
+    words = text.split()
+    lines: list[str] = []
+    current = ""
+    for w in words:
+        if not current:
+            current = w
+        elif len(current) + 1 + len(w) <= max_chars:
+            current = f"{current} {w}"
+        else:
+            lines.append(current)
+            current = w
+    if current:
+        lines.append(current)
+    return "\n".join(lines)
 
 
 class AstroInterior:
@@ -29,10 +48,12 @@ class AstroInterior:
 
         self.portraits: list[dict[str, Any]] = []  # list of refs per slot
         self.buttons: dict[str, Entity] = {}
+        self.news_texts: list[Text] = []
         self._last_roster_len = 0
 
         self._build_room()
         self._build_portraits()
+        self._build_news_screens()
         self._build_exit()
 
     def _build_room(self) -> None:
@@ -92,32 +113,45 @@ class AstroInterior:
         )
 
     def _build_portraits(self) -> None:
-        """Seven portrait frames — 5 along the north wall, 2 along the east wall."""
-        layout = [
-            # (x, z, facing) — facing is the direction the portrait points into the room.
-            (-6.0, ROOM_DEPTH / 2 - 0.1, "north"),
-            (-3.0, ROOM_DEPTH / 2 - 0.1, "north"),
-            ( 0.0, ROOM_DEPTH / 2 - 0.1, "north"),
-            ( 3.0, ROOM_DEPTH / 2 - 0.1, "north"),
-            ( 6.0, ROOM_DEPTH / 2 - 0.1, "north"),
-            (ROOM_WIDTH / 2 - 0.1, 0,  "east"),
-            (ROOM_WIDTH / 2 - 0.1, 3,  "east"),
-        ]
-        for (x, z, facing) in layout[:STARTING_ASTRONAUTS]:
-            is_east = (facing == "east")
+        """Portrait frames along the north, east, and west walls. Sized to
+        fit the full roster after Phase J recruitment drops (up to ~22
+        astronauts in a fully-recruited, death-free run). Slightly
+        narrower frames than V1 so seven fit across the north wall."""
+        half_w = ROOM_WIDTH / 2
+        half_d = ROOM_DEPTH / 2
+        wall_inset = 0.1
+        layout: list[tuple[float, float, str]] = []
+        # North wall — 7 portraits.
+        for x in (-6.0, -4.0, -2.0, 0.0, 2.0, 4.0, 6.0):
+            layout.append((x, half_d - wall_inset, "north"))
+        # East and west walls — 6 portraits each at matching z rows.
+        side_zs = (-4.5, -2.7, -0.9, 0.9, 2.7, 4.5)
+        for z in side_zs:
+            layout.append((half_w - wall_inset, z, "east"))
+        for z in side_zs:
+            layout.append((-(half_w - wall_inset), z, "west"))
+        for (x, z, facing) in layout:
+            is_side = facing in ("east", "west")
             # Frame + dark screen behind the text.
-            if is_east:
-                frame_scale = (0.1, 2.2, 1.8)
+            if facing == "east":
+                frame_scale = (0.1, 2.0, 1.5)
                 screen_offset = (-0.06, 0, 0)
-                screen_scale = (0.02, 2.0, 1.6)
+                screen_scale = (0.02, 1.8, 1.3)
                 text_rot = (0, -90, 0)
                 text_x = x - 0.08
+            elif facing == "west":
+                frame_scale = (0.1, 2.0, 1.5)
+                screen_offset = (0.06, 0, 0)
+                screen_scale = (0.02, 1.8, 1.3)
+                text_rot = (0, 90, 0)
+                text_x = x + 0.08
             else:
-                frame_scale = (1.8, 2.2, 0.1)
+                frame_scale = (1.4, 2.0, 0.1)
                 screen_offset = (0, 0, -0.06)
-                screen_scale = (1.6, 2.0, 0.02)
+                screen_scale = (1.2, 1.8, 0.02)
                 text_rot = (0, 0, 0)
                 text_x = x
+            _ = is_side  # kept for symmetry / future use
             y = 2.4
             Entity(
                 parent=self.root, model="cube",
@@ -156,6 +190,43 @@ class AstroInterior:
                 "status": status_text,
                 "skills": skill_texts,
             })
+
+    def _build_news_screens(self) -> None:
+        """Two NEWS TVs on the south wall flanking the doorway. Each
+        displays the current season's headline in a wrapped marquee. They
+        face north (into the room) so the player reads them on approach."""
+        south_z = -ROOM_DEPTH / 2 + 0.15
+        y = 2.8
+        # Doorway is at x = 0, width ~2; put the screens at x = ±4.
+        for x in (-4.5, 4.5):
+            Entity(
+                parent=self.root, model="cube",
+                position=(x, y, south_z),
+                scale=(3.2, 1.7, 0.1),
+                color=color.rgb32(40, 45, 55),
+            )
+            Entity(
+                parent=self.root, model="cube",
+                position=(x, y, south_z + 0.06),
+                scale=(3.0, 1.5, 0.02),
+                color=color.rgb32(12, 16, 28),
+            )
+            Text(
+                text="NEWS", parent=self.root,
+                position=(x, y + 0.55, south_z + 0.07),
+                rotation=(0, 180, 0),
+                scale=5, origin=(0, 0),
+                color=color.rgb32(220, 180, 90),
+            )
+            body = Text(
+                text="(waiting for this season's news…)",
+                parent=self.root,
+                position=(x, y - 0.05, south_z + 0.07),
+                rotation=(0, 180, 0),
+                scale=3.6, origin=(0, 0),
+                color=color.rgb32(220, 225, 235),
+            )
+            self.news_texts.append(body)
 
     def _build_exit(self) -> None:
         z = -ROOM_DEPTH / 2 + 0.8
@@ -228,9 +299,10 @@ class AstroInterior:
         ox, _, oz = self.origin
         return (ox, 1.8, oz - ROOM_DEPTH / 2 + 2.0)
 
-    def sync_state(self, me: Any, *_: Any) -> None:
+    def sync_state(self, me: Any, state: Any = None, *_: Any) -> None:
         if me is None:
             return
+        self._sync_news(state)
         roster = me.astronauts
         for i, slot in enumerate(self.portraits):
             if i >= len(roster):
@@ -265,6 +337,20 @@ class AstroInterior:
                     color.rgb32(220, 225, 235) if astro.active
                     else color.rgb32(160, 110, 110)
                 )
+
+    def _sync_news(self, state: Any) -> None:
+        """Update both NEWS TVs with the current season's headline. Wraps
+        long headlines across a handful of lines because the screen is
+        narrow in world units relative to Ursina Text scale."""
+        headline = (
+            getattr(state, "current_news", None)
+            if state is not None else None
+        )
+        if not headline:
+            headline = "(waiting for this season's news…)"
+        wrapped = _wrap_headline(headline, max_chars=28)
+        for t in self.news_texts:
+            t.text = wrapped
 
     def nearby_button(self, world_xz: tuple[float, float]) -> str | None:
         if not self.root.enabled:

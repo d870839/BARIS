@@ -889,6 +889,13 @@ class Client:
             "Goal: first manned lunar landing OR 40 prestige wins",
             (20, 78), size=12, color=MUTED,
         )
+        # Phase I — seasonal headline in the centre of the top HUD.
+        if self.state.current_news:
+            draw_text(
+                self.screen,
+                f"NEWS: {self.state.current_news}",
+                (260, 14), size=14, color=HIGHLIGHT,
+            )
 
     def _render_bottom_bar(self, me: Player | None) -> None:
         pygame.draw.rect(self.screen, BG_DEEP, (0, 860, WINDOW_SIZE[0], 80))

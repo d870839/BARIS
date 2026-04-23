@@ -729,6 +729,11 @@ class GameState:
     # Populated by resolve_turn(); cleared at the start of each resolution.
     # Clients read this to animate the launch-sequence screens before returning
     # to the hub. Entries are ordered as the launches were resolved.
+    # Phase I — seasonal news. current_news is the human-readable headline
+    # for the active season; current_news_id is the machine-readable card id
+    # so UIs can render icons / colour-code by event type if desired.
+    current_news: str = ""
+    current_news_id: str = ""
 
     def to_dict(self) -> dict[str, Any]:
         return asdict(self)
@@ -747,6 +752,8 @@ class GameState:
             winner=Side(d["winner"]) if d.get("winner") else None,
             first_completed=dict(d.get("first_completed", {})),
             last_launches=last_launches,
+            current_news=d.get("current_news", ""),
+            current_news_id=d.get("current_news_id", ""),
         )
 
     def find_player(self, player_id: str) -> Player | None:

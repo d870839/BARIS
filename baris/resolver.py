@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import random
 import uuid
+from typing import Any
 
 from baris.state import (
     ADVANCED_TRAINING_COST,
@@ -475,6 +476,7 @@ def resolve_turn(state: GameState, rng: random.Random | None = None) -> None:
     if state.phase == Phase.PLAYING:
         state.season, state.year = next_season(state.season, state.year)
         state.log.append(f"Advancing to {state.season.value} {state.year}.")
+        _roll_season_news(state, rng)
 
 
 # ----------------------------------------------------------------------
@@ -1236,3 +1238,196 @@ def visible_missions(player: Player) -> list[Mission]:
     preserving the canonical MISSIONS order."""
     from baris.state import MISSIONS
     return [m for m in MISSIONS if visible_to(player, m)]
+
+
+# ----------------------------------------------------------------------
+# Phase I — seasonal news system
+# ----------------------------------------------------------------------
+# Each entry in _NEWS_POOL is (event_id, weight, apply_fn). apply_fn takes
+# (state, rng) and returns the headline to record. apply_fn may return "" to
+# decline (e.g., defector event with no trailing player); the roller will
+# try again with a different event.
+
+NEWS_BUDGET_WINDFALL_DELTA    = 5
+NEWS_BUDGET_CUT_DELTA         = 3
+NEWS_PRESS_TOUR_PRESTIGE      = 2
+NEWS_DEFECTOR_PRESTIGE        = 3
+NEWS_RELIABILITY_DELTA        = 5
+NEWS_MOOD_BOOST               = 10
+NEWS_SCANDAL_PRESTIGE_PENALTY = 2
+
+
+def _leader(state: GameState) -> Player | None:
+    """Player with the highest prestige; ties broken by most successes."""
+    if not state.players:
+        return None
+    return max(
+        state.players,
+        key=lambda p: (p.prestige, sum(p.mission_successes.values())),
+    )
+
+
+def _trailing(state: GameState) -> Player | None:
+    """Player with the lowest prestige; ties broken by fewest successes.
+    Returns None if both players are tied exactly (nothing to boost)."""
+    if len(state.players) < 2:
+        return None
+    ranked = sorted(
+        state.players,
+        key=lambda p: (p.prestige, sum(p.mission_successes.values())),
+    )
+    if (ranked[0].prestige == ranked[-1].prestige
+            and sum(ranked[0].mission_successes.values())
+            == sum(ranked[-1].mission_successes.values())):
+        return None
+    return ranked[0]
+
+
+def _side_label(player: Player | None) -> str:
+    if player is None or player.side is None:
+        return "?"
+    return player.side.value
+
+
+def _news_budget_windfall(state: GameState, _rng: random.Random) -> str:
+    for p in state.players:
+        p.budget += NEWS_BUDGET_WINDFALL_DELTA
+    return f"Space-budget appropriation: both sides +{NEWS_BUDGET_WINDFALL_DELTA} MB."
+
+
+def _news_budget_cut(state: GameState, _rng: random.Random) -> str:
+    for p in state.players:
+        p.budget = max(0, p.budget - NEWS_BUDGET_CUT_DELTA)
+    return f"Congressional review trims spending: both sides -{NEWS_BUDGET_CUT_DELTA} MB."
+
+
+def _news_press_tour(state: GameState, _rng: random.Random) -> str:
+    leader = _leader(state)
+    if leader is None:
+        return ""
+    leader.prestige += NEWS_PRESS_TOUR_PRESTIGE
+    return (
+        f"{_side_label(leader)} press tour captures the world's imagination "
+        f"— +{NEWS_PRESS_TOUR_PRESTIGE} prestige."
+    )
+
+
+def _news_defector(state: GameState, _rng: random.Random) -> str:
+    target = _trailing(state)
+    if target is None:
+        return ""
+    target.prestige += NEWS_DEFECTOR_PRESTIGE
+    return (
+        f"High-profile defector arrives in {_side_label(target)} "
+        f"— +{NEWS_DEFECTOR_PRESTIGE} prestige."
+    )
+
+
+def _news_reliability_breakthrough(state: GameState, rng: random.Random) -> str:
+    """Pick a random side and a random built rocket on their side; bump it.
+    Skips if nobody has a rocket at MIN_RELIABILITY_TO_LAUNCH."""
+    candidates: list[tuple[Player, Rocket]] = []
+    for p in state.players:
+        for rocket in Rocket:
+            if p.rocket_reliability(rocket) >= MIN_RELIABILITY_TO_LAUNCH:
+                candidates.append((p, rocket))
+    if not candidates:
+        return ""
+    player, rocket = rng.choice(candidates)
+    _bump_reliability(player, rocket, NEWS_RELIABILITY_DELTA)
+    name = rocket_display_name(rocket, player.side)
+    return (
+        f"{_side_label(player)} engineers crack a thrust-stability issue "
+        f"— +{NEWS_RELIABILITY_DELTA} reliability on {name}."
+    )
+
+
+def _news_hardware_recall(state: GameState, rng: random.Random) -> str:
+    candidates: list[tuple[Player, Rocket]] = []
+    for p in state.players:
+        for rocket in Rocket:
+            if p.rocket_reliability(rocket) >= MIN_RELIABILITY_TO_LAUNCH:
+                candidates.append((p, rocket))
+    if not candidates:
+        return ""
+    player, rocket = rng.choice(candidates)
+    _bump_reliability(player, rocket, -NEWS_RELIABILITY_DELTA)
+    name = rocket_display_name(rocket, player.side)
+    return (
+        f"{_side_label(player)} {name} grounded for mandatory inspection "
+        f"— -{NEWS_RELIABILITY_DELTA} reliability."
+    )
+
+
+def _news_crew_morale_boost(state: GameState, rng: random.Random) -> str:
+    sides_with_active = [p for p in state.players if p.active_astronauts()]
+    if not sides_with_active:
+        return ""
+    player = rng.choice(sides_with_active)
+    bumped = 0
+    for a in player.active_astronauts():
+        a.mood = _clamp_mood(a.mood + NEWS_MOOD_BOOST)
+        bumped += 1
+    return (
+        f"{_side_label(player)} astronauts featured in LIFE magazine — "
+        f"+{NEWS_MOOD_BOOST} mood for {bumped} crew."
+    )
+
+
+def _news_scandal(state: GameState, _rng: random.Random) -> str:
+    target = _leader(state)
+    if target is None:
+        return ""
+    target.prestige = max(0, target.prestige - NEWS_SCANDAL_PRESTIGE_PENALTY)
+    return (
+        f"{_side_label(target)} program rocked by scandal "
+        f"— -{NEWS_SCANDAL_PRESTIGE_PENALTY} prestige."
+    )
+
+
+def _news_quiet_season(_state: GameState, _rng: random.Random) -> str:
+    return "Quiet news cycle — no major headlines this season."
+
+
+_NEWS_POOL: tuple[tuple[str, int, Any], ...] = (
+    ("budget_windfall",          2, _news_budget_windfall),
+    ("budget_cut",                2, _news_budget_cut),
+    ("press_tour",                2, _news_press_tour),
+    ("defector",                  2, _news_defector),
+    ("reliability_breakthrough",  2, _news_reliability_breakthrough),
+    ("hardware_recall",           2, _news_hardware_recall),
+    ("crew_morale_boost",         2, _news_crew_morale_boost),
+    ("scandal",                   2, _news_scandal),
+    ("quiet_season",              1, _news_quiet_season),
+)
+
+
+# Module-level test hook: when set to False, _roll_season_news becomes a
+# no-op. Lets targeted tests (e.g. mood-drop assertions) isolate the
+# mechanic they're exercising from random news-card side effects.
+_news_enabled: bool = True
+
+
+def _roll_season_news(state: GameState, rng: random.Random) -> None:
+    """Pick a weighted-random event from _NEWS_POOL and apply it. If the
+    chosen event's apply_fn declines (returns ""), draw again from the
+    remaining pool; fall back to quiet_season if nothing can fire.
+    Uses rng.choice on a weight-expanded list so test stubs don't need
+    rng.choices()."""
+    if not _news_enabled:
+        return
+    pool = list(_NEWS_POOL)
+    while pool:
+        weighted = [e for e in pool for _ in range(e[1])]
+        picked = rng.choice(weighted)
+        headline = picked[2](state, rng)
+        if headline:
+            state.current_news = headline
+            state.current_news_id = picked[0]
+            state.log.append(f"NEWS: {headline}")
+            return
+        pool = [e for e in pool if e[0] != picked[0]]
+    # Everything declined — fall back to a quiet-season headline.
+    state.current_news = _news_quiet_season(state, rng)
+    state.current_news_id = "quiet_season"
+    state.log.append(f"NEWS: {state.current_news}")

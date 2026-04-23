@@ -129,6 +129,24 @@ def _make_astronaut(name: str, **skills: int) -> Astronaut:
     )
 
 
+from contextlib import contextmanager
+
+
+@contextmanager
+def _no_news():
+    """Suppress Phase I seasonal news rolls for the duration of the block.
+    Used by tests that assert on mood / budget / reliability deltas where
+    a random news card would otherwise mask or cancel the mechanic under
+    test."""
+    from baris import resolver as _r
+    prev = _r._news_enabled
+    _r._news_enabled = False
+    try:
+        yield
+    finally:
+        _r._news_enabled = prev
+
+
 def _fire_scheduled_launch(state: GameState, rng) -> None:
     """Phase B helper: after a player submits a launch and the turn resolves,
     the mission goes into scheduled_launch (assembly paid). Call this to
@@ -2298,8 +2316,9 @@ def test_mission_failure_drops_crew_mood() -> None:
     submit_turn(me, rd_rocket=None, rd_spend=0, launch=MissionId.MANNED_ORBITAL)
     submit_turn(state.players[1], rd_rocket=None, rd_spend=0, launch=None)
     # Force failure, no death, no hospital — isolates the morale hit.
-    resolve_turn(state, rng=_FixedRng(0.99))
-    _fire_scheduled_launch(state, _FixedRng(0.99))
+    with _no_news():
+        resolve_turn(state, rng=_FixedRng(0.99))
+        _fire_scheduled_launch(state, _FixedRng(0.99))
 
     # At least one astronaut's mood dropped by roughly MOOD_FAILURE_DROP
     # (mood drift also runs, so accept a small tolerance).
@@ -2336,8 +2355,9 @@ def test_crew_kia_drops_survivor_mood_extra() -> None:
     submit_turn(state.players[1], rd_rocket=None, rd_spend=0, launch=None)
     # Success roll high (fail), first death roll low (kill crew[0]), second
     # death roll high (spare crew[1]), hospital rolls high (no hospital).
-    resolve_turn(state, rng=_FixedRng(0.0))
-    _fire_scheduled_launch(state, _SeqRng([0.99, 0.01, 0.99, 0.99, 0.99]))
+    with _no_news():
+        resolve_turn(state, rng=_FixedRng(0.0))
+        _fire_scheduled_launch(state, _SeqRng([0.99, 0.01, 0.99, 0.99, 0.99]))
 
     kia_count = sum(1 for a in me.astronauts if a.status == "kia")
     assert kia_count == 1
@@ -2521,3 +2541,137 @@ def test_legacy_player_dict_backfills_recruitment_pointer() -> None:
     }
     p = _player_from_dict(raw)
     assert p.next_recruitment_group == 2
+
+
+# ----------------------------------------------------------------------
+# Phase I — seasonal news
+# ----------------------------------------------------------------------
+
+
+def _start_for_news() -> GameState:
+    state = _two_player_state()
+    start_game(state, rng=random.Random(1))
+    return state
+
+
+def _submit_empty_turns(state: GameState) -> None:
+    for p in state.players:
+        submit_turn(p, rd_rocket=None, rd_spend=0, launch=None)
+
+
+def test_resolve_turn_records_a_news_headline() -> None:
+    state = _start_for_news()
+    _submit_empty_turns(state)
+    resolve_turn(state, rng=random.Random(7))
+    assert state.current_news        # non-empty
+    assert state.current_news_id     # machine id populated
+    assert any(line.startswith("NEWS:") for line in state.log)
+
+
+def test_budget_windfall_bumps_both_players() -> None:
+    from baris.resolver import _news_budget_windfall, NEWS_BUDGET_WINDFALL_DELTA
+    state = _start_for_news()
+    before = [p.budget for p in state.players]
+    headline = _news_budget_windfall(state, random.Random(0))
+    assert headline
+    for i, p in enumerate(state.players):
+        assert p.budget == before[i] + NEWS_BUDGET_WINDFALL_DELTA
+
+
+def test_budget_cut_floors_at_zero() -> None:
+    from baris.resolver import _news_budget_cut
+    state = _start_for_news()
+    for p in state.players:
+        p.budget = 1
+    _news_budget_cut(state, random.Random(0))
+    for p in state.players:
+        assert p.budget == 0
+
+
+def test_press_tour_targets_leader() -> None:
+    from baris.resolver import _news_press_tour, NEWS_PRESS_TOUR_PRESTIGE
+    state = _start_for_news()
+    state.players[0].prestige = 10
+    state.players[1].prestige = 3
+    before = state.players[0].prestige
+    _news_press_tour(state, random.Random(0))
+    assert state.players[0].prestige == before + NEWS_PRESS_TOUR_PRESTIGE
+    # Trailing player untouched.
+    assert state.players[1].prestige == 3
+
+
+def test_defector_targets_trailing() -> None:
+    from baris.resolver import _news_defector, NEWS_DEFECTOR_PRESTIGE
+    state = _start_for_news()
+    state.players[0].prestige = 10
+    state.players[1].prestige = 3
+    before = state.players[1].prestige
+    _news_defector(state, random.Random(0))
+    assert state.players[1].prestige == before + NEWS_DEFECTOR_PRESTIGE
+    assert state.players[0].prestige == 10
+
+
+def test_defector_declines_on_exact_tie() -> None:
+    from baris.resolver import _news_defector
+    state = _start_for_news()
+    # Same prestige, same successes → no underdog to target.
+    state.players[0].prestige = state.players[1].prestige = 5
+    assert _news_defector(state, random.Random(0)) == ""
+
+
+def test_reliability_breakthrough_requires_built_rocket() -> None:
+    from baris.resolver import _news_reliability_breakthrough
+    state = _start_for_news()
+    # Nobody has anything built — event should decline.
+    assert _news_reliability_breakthrough(state, random.Random(0)) == ""
+
+
+def test_reliability_breakthrough_bumps_some_side() -> None:
+    from baris.resolver import (
+        _news_reliability_breakthrough, NEWS_RELIABILITY_DELTA,
+    )
+    state = _start_for_news()
+    state.players[0].reliability[Rocket.MEDIUM.value] = 50
+    total_before = sum(
+        p.rocket_reliability(r)
+        for p in state.players for r in Rocket
+    )
+    headline = _news_reliability_breakthrough(state, random.Random(0))
+    assert headline
+    total_after = sum(
+        p.rocket_reliability(r)
+        for p in state.players for r in Rocket
+    )
+    assert total_after == total_before + NEWS_RELIABILITY_DELTA
+
+
+def test_crew_morale_boost_lifts_active_mood() -> None:
+    from baris.resolver import _news_crew_morale_boost, NEWS_MOOD_BOOST
+    state = _start_for_news()
+    for p in state.players:
+        for a in p.astronauts:
+            a.mood = 50
+    _news_crew_morale_boost(state, random.Random(0))
+    # At least one side was boosted; check any mood moved up.
+    lifted = [a.mood for p in state.players for a in p.astronauts if a.mood > 50]
+    assert lifted
+    assert max(lifted) == 50 + NEWS_MOOD_BOOST
+
+
+def test_news_dict_roundtrip() -> None:
+    state = _start_for_news()
+    state.current_news = "Test headline"
+    state.current_news_id = "test_id"
+    restored = GameState.from_dict(state.to_dict())
+    assert restored.current_news == "Test headline"
+    assert restored.current_news_id == "test_id"
+
+
+def test_legacy_state_dict_backfills_news_fields() -> None:
+    state = _start_for_news()
+    raw = state.to_dict()
+    raw.pop("current_news", None)
+    raw.pop("current_news_id", None)
+    restored = GameState.from_dict(raw)
+    assert restored.current_news == ""
+    assert restored.current_news_id == ""
