@@ -384,6 +384,15 @@ LM_POINTS_FROM_MULTI_CREW          = 1
 LM_POINTS_FROM_ORBITAL_EVA         = 1
 LM_POINTS_FROM_UNMANNED_LANDING    = 1
 LM_POINTS_FROM_MANNED_LUNAR_ORBIT  = 2
+
+# Phase E — multiple launch pads. Each player has LAUNCH_PADS pads
+# (default 3, labelled A/B/C). Every pad can hold one ScheduledLaunch at
+# a time, so you can have up to three missions in the VAB queue. A
+# catastrophic failure (manned death or docking ship-loss) damages the
+# launching pad for PAD_REPAIR_TURNS seasons before it's usable again.
+LAUNCH_PADS                        = 3
+PAD_NAMES: tuple[str, ...]         = ("A", "B", "C")
+PAD_REPAIR_TURNS                   = 2
 # Reliability contributes ±10% to success around a neutral value of 50.
 # effective = base + crew_bonus + (reliability - 50) * RELIABILITY_SWING_PER_POINT
 RELIABILITY_SWING_PER_POINT = 0.002
@@ -466,12 +475,11 @@ class Player:
     pending_rd_spend: int = 0
     pending_launch: str | None = None      # MissionId.value or None
     pending_objectives: list[str] = field(default_factory=list)  # ObjectiveId.value list
-    # Phase B — multi-turn scheduling. When a turn resolves, a newly-
-    # submitted launch is promoted into `scheduled_launch` (paying the
-    # assembly cost) instead of being fired immediately. On the FOLLOWING
-    # resolve, that scheduled launch actually flies. None if nothing is
-    # on the manifest.
-    scheduled_launch: "ScheduledLaunch | None" = None
+    # Phase E — launch pads. Each pad is a parallel VAB slot: new submits
+    # land in the first available pad and each pad resolves independently
+    # the following turn. Catastrophic failures damage the launching pad
+    # and take it offline for PAD_REPAIR_TURNS seasons.
+    pads: list["LaunchPad"] = field(default_factory=lambda: _default_pads())
     # Phase D — cumulative lunar reconnaissance % and LM points.
     lunar_recon: int = LUNAR_RECON_BASE
     lm_points: int = 0
@@ -533,6 +541,34 @@ class Player:
     def is_tier_unlocked(self, tier: ProgramTier) -> bool:
         return tier in self.unlocked_tiers()
 
+    # ------------------------------------------------------------------
+    # Launch-pad helpers (Phase E)
+    # ------------------------------------------------------------------
+    def find_pad(self, pad_id: str) -> "LaunchPad | None":
+        return next((p for p in self.pads if p.pad_id == pad_id), None)
+
+    def available_pad(self) -> "LaunchPad | None":
+        """First pad that can accept a new ScheduledLaunch, or None."""
+        return next((p for p in self.pads if p.available), None)
+
+    def any_pad_available(self) -> bool:
+        return any(p.available for p in self.pads)
+
+    def scheduled_launches(self) -> list["ScheduledLaunch"]:
+        """All ScheduledLaunches currently on the manifest across all
+        pads, in pad order. Convenience for UIs summarising queue state."""
+        return [p.scheduled_launch for p in self.pads if p.scheduled_launch is not None]
+
+    @property
+    def scheduled_launch(self) -> "ScheduledLaunch | None":
+        """Back-compat read-only accessor — returns the first scheduled
+        launch across the pads, or None. Callers that need multi-pad
+        awareness should iterate `self.pads` or `self.scheduled_launches()`."""
+        for pad in self.pads:
+            if pad.scheduled_launch is not None:
+                return pad.scheduled_launch
+        return None
+
 
 @dataclass
 class GameState:
@@ -581,7 +617,18 @@ def _player_from_dict(d: dict[str, Any]) -> Player:
     data["side"] = Side(side) if side else None
     raw_astronauts = data.get("astronauts") or []
     data["astronauts"] = [_astronaut_from_dict(a) for a in raw_astronauts]
-    data["scheduled_launch"] = _scheduled_launch_from_dict(data.get("scheduled_launch"))
+    # Phase E migration. If the state dict carries a 'pads' list, rehydrate
+    # it; otherwise construct defaults and fold any legacy single-slot
+    # `scheduled_launch` into pad A.
+    raw_pads = data.pop("pads", None)
+    legacy_scheduled = data.pop("scheduled_launch", None)
+    if raw_pads is not None:
+        data["pads"] = [_launch_pad_from_dict(p) for p in raw_pads]
+    else:
+        pads = _default_pads()
+        if legacy_scheduled is not None:
+            pads[0].scheduled_launch = _scheduled_launch_from_dict(legacy_scheduled)
+        data["pads"] = pads
     # Phase D — older state dicts didn't carry these yet. Default recon
     # to the LUNAR_RECON_BASE so mid-game saves keep making sense.
     data.setdefault("lunar_recon", LUNAR_RECON_BASE)
@@ -688,6 +735,36 @@ def _scheduled_launch_from_dict(d: dict[str, Any] | None) -> ScheduledLaunch | N
     data = dict(d)
     data.setdefault("objectives", [])
     return ScheduledLaunch(**data)
+
+
+@dataclass
+class LaunchPad:
+    """One of the player's launch pads (A/B/C). Holds at most one
+    ScheduledLaunch and carries a repair counter that ticks down each
+    resolve after a catastrophic failure knocks the pad out."""
+    pad_id: str
+    scheduled_launch: "ScheduledLaunch | None" = None
+    repair_turns_remaining: int = 0
+
+    @property
+    def damaged(self) -> bool:
+        return self.repair_turns_remaining > 0
+
+    @property
+    def available(self) -> bool:
+        """True iff the pad can accept a new ScheduledLaunch right now."""
+        return self.scheduled_launch is None and not self.damaged
+
+
+def _launch_pad_from_dict(d: dict[str, Any]) -> LaunchPad:
+    data = dict(d)
+    data["scheduled_launch"] = _scheduled_launch_from_dict(data.get("scheduled_launch"))
+    data.setdefault("repair_turns_remaining", 0)
+    return LaunchPad(**data)
+
+
+def _default_pads() -> list[LaunchPad]:
+    return [LaunchPad(pad_id=name) for name in PAD_NAMES]
 
 
 SEASON_ORDER = [Season.SPRING, Season.SUMMER, Season.FALL, Season.WINTER]

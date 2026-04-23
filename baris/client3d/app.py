@@ -309,8 +309,9 @@ class BarisClient(Entity):
     def _update_pad_rocket(self) -> None:
         """Swap which rocket silhouette sits on the pad based on what the
         player is about to launch. Priority: queued mission's effective
-        rocket > current R&D target > whatever was already showing.
-        No-op while a launch animation is actually playing."""
+        rocket > already-scheduled launch's frozen rocket_class > current
+        R&D target > whatever was already showing. No-op while a launch
+        animation is actually playing."""
         if self.launch_phase != "idle":
             return
         desired = None
@@ -319,6 +320,8 @@ class BarisClient(Entity):
             from baris.resolver import effective_rocket
             mission = MISSIONS_BY_ID[self.queued_mission]
             desired = effective_rocket(me, mission).value
+        elif me is not None and me.scheduled_launch is not None:
+            desired = me.scheduled_launch.rocket_class
         elif self.rd_target in ("Light", "Medium", "Heavy"):
             desired = self.rd_target
         if desired is None or desired == self.current_rocket_class:

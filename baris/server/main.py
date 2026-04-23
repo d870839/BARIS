@@ -190,14 +190,15 @@ async def handle_choose_architecture(player: Player, msg: dict[str, Any]) -> Non
 
 
 async def handle_scrub_scheduled(player: Player, msg: dict[str, Any]) -> None:
-    """Cancel the player's scheduled launch and refund a fraction of the
-    assembly cost. No-op if nothing is scheduled. Safe to call any time
-    during PLAYING phase, including after the player has already
-    submitted this turn — scrubbing just voids the upcoming launch."""
+    """Cancel a scheduled launch and refund a fraction of the assembly
+    cost. With pad_id, targets that specific pad; without, scrubs the
+    first pad that has a booking. No-op otherwise."""
     if room.state.phase != Phase.PLAYING:
         return
-    if scrub_scheduled(player):
-        log.info("%s scrubbed scheduled launch", player.username)
+    pad_id = msg.get("pad_id") or None
+    if scrub_scheduled(player, pad_id=pad_id):
+        log.info("%s scrubbed scheduled launch on pad %s",
+                 player.username, pad_id or "(first)")
 
 
 async def handle_start_training(player: Player, msg: dict[str, Any]) -> None:

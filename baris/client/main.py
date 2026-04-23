@@ -1000,6 +1000,15 @@ class Client:
             )
             arch = player.architecture or "—"
             side_lbl = player.side.value if player.side else "?"
+            pad_bits: list[str] = []
+            for pad in player.pads:
+                if pad.damaged:
+                    pad_bits.append(f"{pad.pad_id}:rep({pad.repair_turns_remaining})")
+                elif pad.scheduled_launch is not None:
+                    pad_bits.append(f"{pad.pad_id}:★")
+                else:
+                    pad_bits.append(f"{pad.pad_id}:—")
+            pads_txt = " ".join(pad_bits)
             line = (
                 f"{row_label}  [{side_lbl}] {player.username:<12}"
                 f"Budget {player.budget:>3} MB   "
@@ -1007,7 +1016,8 @@ class Client:
                 f"Firsts {firsts}   "
                 f"Arch {arch}   "
                 f"Recon {player.lunar_recon:>2}%   "
-                f"LM {player.lm_points}/{LM_POINTS_REQUIRED}"
+                f"LM {player.lm_points}/{LM_POINTS_REQUIRED}   "
+                f"Pads {pads_txt}"
             )
             draw_text(self.screen, line, (36, y), size=14, color=side_color(player.side))
 

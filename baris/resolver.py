@@ -51,6 +51,8 @@ from baris.state import (
     ProgramTier,
     RD_BATCH_COST,
     RD_SPEED,
+    LaunchPad,
+    PAD_REPAIR_TURNS,
     SCRUB_REFUND_FRACTION,
     ScheduledLaunch,
     TRAINING_CANCEL_REFUND_FRACTION,
@@ -232,7 +234,9 @@ def submit_turn(
     # time. Attempting to queue a new launch while one is already
     # scheduled is silently dropped — the player must resolve or scrub
     # the existing commitment first.
-    if launch is not None and player.scheduled_launch is None:
+    # Accept a new launch if any pad is free — the actual pad assignment
+    # happens during resolve in _promote_pending_to_scheduled.
+    if launch is not None and player.any_pad_available():
         mission = MISSIONS_BY_ID[launch]
         eff_rocket = effective_rocket(player, mission)
         eff_cost = effective_launch_cost(player, mission)
@@ -259,16 +263,27 @@ def submit_turn(
     player.turn_submitted = True
 
 
-def scrub_scheduled(player: Player) -> bool:
+def scrub_scheduled(player: Player, pad_id: str | None = None) -> bool:
     """Cancel a scheduled launch. Refunds SCRUB_REFUND_FRACTION of the
-    assembly cost already paid; the rest is sunk (hardware already built /
-    integrated). Returns True if a scheduled launch was cleared."""
-    if player.scheduled_launch is None:
-        return False
-    refund = int(player.scheduled_launch.assembly_cost_paid * SCRUB_REFUND_FRACTION)
-    player.budget += refund
-    player.scheduled_launch = None
-    return True
+    assembly cost already paid; the rest is sunk. Returns True if a
+    scheduled launch was cleared.
+
+    When pad_id is provided, only that pad's slot is scrubbed. When
+    None, scrubs the first pad that has a ScheduledLaunch — useful from
+    UIs that don't care which pad. The pad stays otherwise untouched
+    (no damage applied), so it's immediately reusable next turn."""
+    candidates = (
+        [p for p in player.pads if p.pad_id == pad_id]
+        if pad_id is not None else player.pads
+    )
+    for pad in candidates:
+        if pad.scheduled_launch is None:
+            continue
+        refund = int(pad.scheduled_launch.assembly_cost_paid * SCRUB_REFUND_FRACTION)
+        player.budget += refund
+        pad.scheduled_launch = None
+        return True
+    return False
 
 
 def start_training(
@@ -338,6 +353,7 @@ def resolve_turn(state: GameState, rng: random.Random | None = None) -> None:
         # start with their full counter — the tick later would otherwise
         # immediately decrement them.
         _tick_training_and_recovery(player, state)
+        _tick_pad_repairs(player, state)
         _resolve_scheduled_launch(player, state, rng)
         _promote_pending_to_scheduled(player, state)
         _apply_passive_training(player, rng)
@@ -425,13 +441,20 @@ def _roll_rd_batch(target: str, current: int, rng: random.Random) -> int:
 
 
 def _promote_pending_to_scheduled(player: Player, state: GameState) -> None:
-    """Take a freshly-submitted launch (player.pending_launch) and move it
-    into player.scheduled_launch for NEXT turn's resolve. Deducts the
+    """Take a freshly-submitted launch (player.pending_launch) and land it
+    into the first available pad for NEXT turn's resolve. Deducts the
     assembly portion of the cost now (simulating VAB integration work).
 
-    No-op if the player isn't trying to schedule, already has a schedule,
+    No-op if the player isn't trying to schedule, no pad is available,
     or the mission is unresolvable."""
-    if not player.pending_launch or player.scheduled_launch is not None:
+    if not player.pending_launch:
+        return
+    pad = player.available_pad()
+    if pad is None:
+        state.log.append(
+            f"{player.username}: all launch pads occupied or in repair — "
+            "queued launch dropped."
+        )
         return
     try:
         mission = MISSIONS_BY_ID[MissionId(player.pending_launch)]
@@ -448,7 +471,7 @@ def _promote_pending_to_scheduled(player: Player, state: GameState) -> None:
         )
         return
     player.budget -= assembly
-    player.scheduled_launch = ScheduledLaunch(
+    pad.scheduled_launch = ScheduledLaunch(
         mission_id=mission.id.value,
         rocket_class=eff_rocket.value,
         launch_cost_total=eff_cost,
@@ -460,23 +483,36 @@ def _promote_pending_to_scheduled(player: Player, state: GameState) -> None:
         scheduled_season=state.season.value,
     )
     state.log.append(
-        f"{player.username} — {mission.name}: scheduled for next launch "
-        f"window (assembly paid: {assembly} MB, launch due: {remaining} MB)."
+        f"{player.username} — {mission.name}: assembled on Pad {pad.pad_id} "
+        f"(assembly paid: {assembly} MB, launch due: {remaining} MB)."
     )
 
 
 def _resolve_scheduled_launch(
     player: Player, state: GameState, rng: random.Random,
 ) -> None:
-    """Fire the mission that was committed to the VAB on the previous turn.
-    Pays the remaining launch cost, rolls success/failure, emits a
-    LaunchReport. Clears player.scheduled_launch unconditionally so the
-    next promotion is free to use the slot."""
-    if player.scheduled_launch is None:
-        return
-    sl = player.scheduled_launch
+    """Fire every pad that has a ScheduledLaunch on the manifest. Each
+    pad fires independently and produces its own LaunchReport. Pads are
+    processed in pad_id order (A → B → C) so the client sees a stable
+    animation sequence."""
+    for pad in player.pads:
+        if pad.scheduled_launch is not None:
+            _resolve_pad_launch(player, pad, state, rng)
+
+
+def _resolve_pad_launch(
+    player: Player,
+    pad: LaunchPad,
+    state: GameState,
+    rng: random.Random,
+) -> None:
+    """Fire the single ScheduledLaunch sitting on `pad`. Clears the slot
+    on every exit path. On catastrophic failure (crew KIA, docking ship
+    loss) the pad is damaged and scheduled for repair."""
+    sl = pad.scheduled_launch
+    assert sl is not None  # _resolve_scheduled_launch guards this
     # Consume the slot up-front; every exit path leaves it cleared.
-    player.scheduled_launch = None
+    pad.scheduled_launch = None
     try:
         mission = MISSIONS_BY_ID[MissionId(sl.mission_id)]
         eff_rocket = Rocket(sl.rocket_class)
@@ -571,6 +607,25 @@ def _resolve_scheduled_launch(
         _grant_lunar_progress(player, mission, success=False, state=state)
     report.reliability_after = player.rocket_reliability(eff_rocket)
     report.prestige_delta = player.prestige - prestige_start
+    # Pad damage: if the flight killed crew or any objective triggered a
+    # catastrophic ship loss, this pad is offline for PAD_REPAIR_TURNS.
+    if _launch_damaged_pad(report):
+        pad.repair_turns_remaining = PAD_REPAIR_TURNS
+        state.log.append(
+            f"{player.username}: Pad {pad.pad_id} damaged in the incident — "
+            f"{PAD_REPAIR_TURNS} seasons of repair needed."
+        )
+
+
+def _launch_damaged_pad(report: LaunchReport) -> bool:
+    """A pad is damaged if the flight killed crew or any objective caused
+    a catastrophic ship loss. Aborted launches never damage the pad
+    (they didn't leave the ground)."""
+    if report.aborted:
+        return False
+    if report.deaths:
+        return True
+    return any(obj.ship_lost for obj in report.objectives)
 
 
 def _resolve_objectives(
@@ -920,6 +975,19 @@ def _tick_training_and_recovery(player: Player, state: GameState) -> None:
                             f"training (+{ADVANCED_TRAINING_SKILL_GAIN} {skill_val})."
                         )
                 astro.advanced_training_skill = ""
+
+
+def _tick_pad_repairs(player: Player, state: GameState) -> None:
+    """Tick each damaged pad's repair countdown. Idle + already-repaired
+    pads are no-ops."""
+    for pad in player.pads:
+        if pad.repair_turns_remaining <= 0:
+            continue
+        pad.repair_turns_remaining -= 1
+        if pad.repair_turns_remaining == 0:
+            state.log.append(
+                f"{player.username}: Pad {pad.pad_id} back online."
+            )
 
 
 # ----------------------------------------------------------------------

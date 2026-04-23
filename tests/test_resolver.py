@@ -1349,22 +1349,33 @@ def test_scheduled_launch_fires_next_turn() -> None:
     assert r.success is True
 
 
-def test_second_launch_queue_is_blocked_while_scheduled() -> None:
+def test_launch_queue_is_blocked_when_all_pads_occupied() -> None:
+    """With every pad holding a ScheduledLaunch, submit_turn drops any
+    further launch queue (no pad available to assemble into). With at
+    least one pad free, a new queue still goes through."""
     state = _two_player_state()
     start_game(state, rng=random.Random(1))
     me = state.players[0]
     me.reliability[Rocket.LIGHT.value] = 70
+    me.budget = 100
+    # Occupy all three pads manually.
+    from baris.state import ScheduledLaunch
+    for pad in me.pads:
+        pad.scheduled_launch = ScheduledLaunch(
+            mission_id=MissionId.SUBORBITAL.value,
+            rocket_class=Rocket.LIGHT.value,
+            launch_cost_total=3, assembly_cost_paid=0,
+            launch_cost_remaining=3, objectives=[],
+        )
 
-    # First queue goes through.
-    submit_turn(me, rd_rocket=None, rd_spend=0, launch=MissionId.SUBORBITAL)
-    submit_turn(state.players[1], rd_rocket=None, rd_spend=0, launch=None)
-    resolve_turn(state, rng=_FixedRng(0.0))
-    assert me.scheduled_launch is not None
-
-    # Now try to queue a second mission while one is already assembled.
+    # All pads booked → next submit should reject the new launch queue.
     submit_turn(me, rd_rocket=None, rd_spend=0, launch=MissionId.SATELLITE)
-    # pending_launch should have been dropped by submit_turn's guard.
     assert me.pending_launch is None
+
+    # Free up one pad → the queue should go through again.
+    me.pads[1].scheduled_launch = None
+    submit_turn(me, rd_rocket=None, rd_spend=0, launch=MissionId.SATELLITE)
+    assert me.pending_launch == MissionId.SATELLITE.value
 
 
 def test_scrub_scheduled_refunds_half_of_assembly_and_clears_slot() -> None:
@@ -1772,3 +1783,196 @@ def test_recon_caps_at_LUNAR_RECON_CAP() -> None:
     _fire_scheduled_launch(state, _FixedRng(0.0))
 
     assert me.lunar_recon == LUNAR_RECON_CAP
+
+
+# ----------------------------------------------------------------------
+# Phase E — multiple launch pads
+# ----------------------------------------------------------------------
+
+
+def test_default_player_has_three_idle_pads() -> None:
+    p = Player(player_id="a", username="A", side=Side.USA)
+    assert [pad.pad_id for pad in p.pads] == ["A", "B", "C"]
+    assert all(pad.available for pad in p.pads)
+    assert p.any_pad_available() is True
+    assert p.scheduled_launches() == []
+    # Back-compat accessor still works.
+    assert p.scheduled_launch is None
+
+
+def test_submit_schedules_into_first_available_pad() -> None:
+    state = _two_player_state()
+    start_game(state, rng=random.Random(1))
+    me = state.players[0]
+    me.reliability[Rocket.LIGHT.value] = 70
+
+    submit_turn(me, rd_rocket=None, rd_spend=0, launch=MissionId.SUBORBITAL)
+    submit_turn(state.players[1], rd_rocket=None, rd_spend=0, launch=None)
+    resolve_turn(state, rng=_FixedRng(0.0))
+
+    # First pad (A) gets the assembly; B/C stay idle.
+    assert me.pads[0].scheduled_launch is not None
+    assert me.pads[0].scheduled_launch.mission_id == MissionId.SUBORBITAL.value
+    assert me.pads[1].scheduled_launch is None
+    assert me.pads[2].scheduled_launch is None
+
+
+def test_two_pads_can_hold_parallel_schedules_and_both_fire() -> None:
+    state = _two_player_state()
+    start_game(state, rng=random.Random(1))
+    me = state.players[0]
+    me.reliability[Rocket.LIGHT.value] = 70
+    me.budget = 200
+
+    # Turn 1: submit SUBORBITAL → lands on pad A.
+    submit_turn(me, rd_rocket=None, rd_spend=0, launch=MissionId.SUBORBITAL)
+    submit_turn(state.players[1], rd_rocket=None, rd_spend=0, launch=None)
+    resolve_turn(state, rng=_FixedRng(0.0))
+    assert me.pads[0].scheduled_launch is not None
+
+    # Turn 2: submit SATELLITE while pad A's SUBORBITAL fires this same
+    # resolve. Order within a resolve is: fire-all-pads → promote-pending,
+    # so pad A's SUBORBITAL flies, clears the slot, and then SATELLITE is
+    # promoted into that same (now-empty) pad A. Pads B and C stay idle.
+    submit_turn(me, rd_rocket=None, rd_spend=0, launch=MissionId.SATELLITE)
+    submit_turn(state.players[1], rd_rocket=None, rd_spend=0, launch=None)
+    resolve_turn(state, rng=_FixedRng(0.0))
+    # One report from this resolve (pad A firing SUBORBITAL).
+    assert len(state.last_launches) == 1
+    assert state.last_launches[0].mission_id == MissionId.SUBORBITAL.value
+    # SATELLITE is now sitting on pad A for next turn's fire.
+    assert me.pads[0].scheduled_launch is not None
+    assert me.pads[0].scheduled_launch.mission_id == MissionId.SATELLITE.value
+    assert me.pads[1].scheduled_launch is None
+
+
+def test_both_pads_resolved_in_one_turn_produce_two_reports() -> None:
+    state = _two_player_state()
+    start_game(state, rng=random.Random(1))
+    me = state.players[0]
+    me.reliability[Rocket.LIGHT.value] = 70
+    me.budget = 400
+    # Manually seed two scheduled launches on pads A and B.
+    from baris.state import ScheduledLaunch
+    for pad_idx, mid in ((0, MissionId.SUBORBITAL), (1, MissionId.SATELLITE)):
+        mission = MISSIONS_BY_ID[mid]
+        me.pads[pad_idx].scheduled_launch = ScheduledLaunch(
+            mission_id=mid.value,
+            rocket_class=Rocket.LIGHT.value,
+            launch_cost_total=mission.launch_cost,
+            assembly_cost_paid=int(mission.launch_cost * ASSEMBLY_COST_FRACTION),
+            launch_cost_remaining=mission.launch_cost - int(mission.launch_cost * ASSEMBLY_COST_FRACTION),
+            objectives=[],
+        )
+
+    submit_turn(me, rd_rocket=None, rd_spend=0, launch=None)
+    submit_turn(state.players[1], rd_rocket=None, rd_spend=0, launch=None)
+    resolve_turn(state, rng=_FixedRng(0.0))
+
+    assert len(state.last_launches) == 2
+    fired = {r.mission_id for r in state.last_launches}
+    assert fired == {MissionId.SUBORBITAL.value, MissionId.SATELLITE.value}
+    assert me.pads[0].scheduled_launch is None
+    assert me.pads[1].scheduled_launch is None
+
+
+def test_scrub_scheduled_targets_specific_pad_by_id() -> None:
+    state = _two_player_state()
+    start_game(state, rng=random.Random(1))
+    me = state.players[0]
+    me.reliability[Rocket.LIGHT.value] = 70
+    me.budget = 100
+    # Seed scheduled launches on pads A and B so we can prove scrub
+    # picks the right one.
+    from baris.state import ScheduledLaunch
+    for pad in me.pads[:2]:
+        pad.scheduled_launch = ScheduledLaunch(
+            mission_id=MissionId.SUBORBITAL.value,
+            rocket_class=Rocket.LIGHT.value,
+            launch_cost_total=3, assembly_cost_paid=1,
+            launch_cost_remaining=2, objectives=[],
+        )
+    assert scrub_scheduled(me, pad_id="B")
+    assert me.pads[0].scheduled_launch is not None   # A still booked
+    assert me.pads[1].scheduled_launch is None       # B cleared
+
+
+def test_catastrophic_failure_damages_launching_pad() -> None:
+    """A manned failure that kills a crew member puts the pad into
+    repair for PAD_REPAIR_TURNS seasons."""
+    state = _two_player_state()
+    start_game(state, rng=random.Random(1))
+    me = state.players[0]
+    me.reliability[Rocket.MEDIUM.value] = 70
+    me.budget = 200
+    for a in me.astronauts:
+        a.capsule = 50
+
+    submit_turn(me, rd_rocket=None, rd_spend=0, launch=MissionId.MANNED_ORBITAL)
+    submit_turn(state.players[1], rd_rocket=None, rd_spend=0, launch=None)
+    # Force failure (0.99) + force death (0.01) + skip hospital (0.99).
+    resolve_turn(state, rng=_FixedRng(0.99))
+    _fire_scheduled_launch(
+        state, _SeqRngTrain([0.99, 0.01, 0.99]),
+    )
+    pad_a = me.pads[0]
+    assert pad_a.scheduled_launch is None
+    assert pad_a.damaged is True
+    from baris.state import PAD_REPAIR_TURNS
+    assert pad_a.repair_turns_remaining == PAD_REPAIR_TURNS
+
+
+def test_pad_repair_ticks_down_and_pad_becomes_available() -> None:
+    from baris.state import PAD_REPAIR_TURNS
+    state = _two_player_state()
+    start_game(state, rng=random.Random(1))
+    me = state.players[0]
+    me.pads[0].repair_turns_remaining = PAD_REPAIR_TURNS
+
+    for _ in range(PAD_REPAIR_TURNS):
+        submit_turn(me, rd_rocket=None, rd_spend=0, launch=None)
+        submit_turn(state.players[1], rd_rocket=None, rd_spend=0, launch=None)
+        resolve_turn(state, rng=_FixedRng(0.0))
+
+    assert me.pads[0].repair_turns_remaining == 0
+    assert me.pads[0].available is True
+
+
+def test_legacy_scheduled_launch_in_dict_migrates_into_pad_A() -> None:
+    from baris.state import _player_from_dict
+    raw_player = {
+        "player_id": "a", "username": "Alice",
+        "side": "USA",
+        "budget": 30, "prestige": 0, "ready": False,
+        "reliability": {}, "astronauts": [],
+        "mission_successes": {}, "architecture": None,
+        "turn_submitted": False,
+        "pending_rd_target": None, "pending_rd_spend": 0,
+        "pending_launch": None, "pending_objectives": [],
+        # Legacy shape — single-slot scheduled_launch, no pads key.
+        "scheduled_launch": {
+            "mission_id": MissionId.SUBORBITAL.value,
+            "rocket_class": Rocket.LIGHT.value,
+            "launch_cost_total": 3, "assembly_cost_paid": 1,
+            "launch_cost_remaining": 2, "objectives": [],
+        },
+    }
+    p = _player_from_dict(raw_player)
+    assert p.pads[0].scheduled_launch is not None
+    assert p.pads[0].scheduled_launch.mission_id == MissionId.SUBORBITAL.value
+    assert p.pads[1].scheduled_launch is None
+    assert p.pads[2].scheduled_launch is None
+
+
+class _SeqRngTrain:
+    """Sequence RNG used by the pad-damage test above. The standalone
+    _SeqRng inside other tests is local-scope; duplicate it here."""
+    def __init__(self, values):
+        self.values = list(values)
+        self._r = random.Random(1)
+    def random(self) -> float:
+        return self.values.pop(0)
+    def randint(self, a, b):
+        return self._r.randint(a, b)
+    def choice(self, seq):
+        return self._r.choice(seq)

@@ -155,20 +155,27 @@ def build_mc_panel(client: "BarisClient", parent: Entity) -> Entity:
         scale=0.95, color=color.rgb32(160, 200, 160),
     )
 
-    # Scheduled-launch banner — a mission in the VAB blocks queueing a new one.
-    scheduled = me.scheduled_launch
-    if scheduled is not None:
+    # Per-pad manifest banner — summarises A/B/C slots so the player can
+    # see what's assembled where at a glance.
+    scheduled = me.scheduled_launch   # back-compat: first booked pad
+    pad_bits: list[str] = []
+    for pad in me.pads:
+        if pad.damaged:
+            pad_bits.append(f"{pad.pad_id}:REP {pad.repair_turns_remaining}")
+            continue
+        if pad.scheduled_launch is None:
+            pad_bits.append(f"{pad.pad_id}:idle")
+            continue
         try:
-            sched_name = MISSIONS_BY_ID[MissionId(scheduled.mission_id)].name
+            name = MISSIONS_BY_ID[MissionId(pad.scheduled_launch.mission_id)].name
         except (ValueError, KeyError):
-            sched_name = scheduled.mission_id
-        Text(
-            text=(
-                f"SCHEDULED: {sched_name}  —  launch due {scheduled.launch_cost_remaining} MB next turn"
-            ),
-            parent=root, position=(-0.42, 0.235), origin=(-0.5, 0.5),
-            scale=0.95, color=color.rgb32(240, 200, 90),
-        )
+            name = pad.scheduled_launch.mission_id
+        pad_bits.append(f"{pad.pad_id}:{name[:14]}")
+    Text(
+        text="PADS: " + "   ".join(pad_bits),
+        parent=root, position=(-0.42, 0.235), origin=(-0.5, 0.5),
+        scale=0.95, color=color.rgb32(240, 200, 90),
+    )
 
     # ---- Mission list (left column) --------------------------------
     visible = visible_missions(me)
