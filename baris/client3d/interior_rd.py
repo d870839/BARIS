@@ -12,23 +12,27 @@ from baris.state import MIN_RELIABILITY_TO_LAUNCH, Module, RELIABILITY_CAP, Rock
 
 
 # Targets rendered on the wall. Order matches the x-layout left-to-right.
+# Rockets first, then modules.
 INTERIOR_TARGETS: tuple[tuple[str, str], ...] = (
-    (Rocket.LIGHT.value,   "LIGHT"),
-    (Rocket.MEDIUM.value,  "MEDIUM"),
-    (Rocket.HEAVY.value,   "HEAVY"),
-    (Module.DOCKING.value, "DOCKING"),
+    (Rocket.LIGHT.value,        "LIGHT"),
+    (Rocket.MEDIUM.value,       "MEDIUM"),
+    (Rocket.HEAVY.value,        "HEAVY"),
+    (Module.DOCKING.value,      "DOCKING"),
+    (Module.LUNAR_KICKER.value, "KICKER"),
+    (Module.EVA_SUIT.value,     "EVA"),
 )
 
-# Size of the room. Centred on origin.
-ROOM_WIDTH = 14.0       # x
+# Size of the room. Centred on origin. Widened to fit six TVs on the
+# north wall (four originally).
+ROOM_WIDTH = 18.0       # x
 ROOM_DEPTH = 12.0       # z
 ROOM_HEIGHT = 4.5       # y
 
 # TV screen dimensions on the north wall.
-TV_SCREEN_W = 2.0
+TV_SCREEN_W = 1.9
 TV_SCREEN_H = 1.2
-TV_BAR_MAX_W = 1.8
-TV_SPACING = 3.0        # centre-to-centre between adjacent TVs
+TV_BAR_MAX_W = 1.7
+TV_SPACING = 2.5        # centre-to-centre between adjacent TVs
 
 # Interaction range for physical buttons (metres).
 BUTTON_RANGE = 2.0

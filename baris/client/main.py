@@ -1378,6 +1378,8 @@ class Client:
             affordable = me.budget >= eff_cost
             crew_ok = not m.manned or len(me.flight_ready_astronauts()) >= m.crew_size
             arch_ok = meets_architecture_prereqs(me, m)
+            from baris.resolver import missing_modules
+            missing_mods = missing_modules(me, m)
             status_parts: list[str] = []
             status_color = DIM
             row_color = FG
@@ -1390,6 +1392,8 @@ class Client:
                 status_parts.append("arch prereq")
             elif not built:
                 status_parts.append(f"need {eff_rocket.value}")
+            elif missing_mods:
+                status_parts.append("need " + "+".join(m.value for m in missing_mods))
             elif not affordable:
                 status_parts.append("low funds")
             elif not crew_ok:

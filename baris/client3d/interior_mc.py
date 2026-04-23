@@ -480,9 +480,18 @@ class MCInterior:
                 )
             else:
                 self.briefing_effective.color = color.rgb32(110, 200, 120)
-            self.briefing_status.text = (
-                "FIRST!" if m.id.value not in state.first_completed else ""
-            )
+            from baris.resolver import missing_modules
+            missing_mods = missing_modules(me, m)
+            if missing_mods:
+                self.briefing_status.text = (
+                    "NEED: " + " + ".join(mod.value for mod in missing_mods)
+                )
+                self.briefing_status.color = color.rgb32(220, 90, 90)
+            elif m.id.value not in state.first_completed:
+                self.briefing_status.text = "FIRST!"
+                self.briefing_status.color = color.rgb32(240, 200, 90)
+            else:
+                self.briefing_status.text = ""
         else:
             self.briefing_title.text = "(no mission queued)"
             for t in (

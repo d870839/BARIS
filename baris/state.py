@@ -31,8 +31,13 @@ class Rocket(str, Enum):
 
 class Module(str, Enum):
     """Non-rocket hardware with its own R&D track. Researched the same way
-    rockets are (stochastic batched rolls against a single reliability score)."""
+    rockets are (stochastic batched rolls against a single reliability
+    score). Individual missions list which modules they need in their
+    `requires_modules` tuple; the resolver rejects a launch whose
+    required modules aren't built."""
     DOCKING = "Docking Module"
+    LUNAR_KICKER = "Lunar Kicker"
+    EVA_SUIT = "EVA Suit"
 
 
 class Skill(str, Enum):
@@ -140,6 +145,10 @@ class Mission:
     manned: bool = False
     crew_size: int = 0
     primary_skill: Skill | None = None
+    # Phase F — hardware prereqs beyond the rocket. Each module named
+    # here must be built (reliability >= MIN_RELIABILITY_TO_LAUNCH) at
+    # schedule time or the launch is rejected. Default: no extra prereqs.
+    requires_modules: tuple["Module", ...] = ()
 
 
 # Ordered catalog — UI iterates this to build the mission list (indices map to keys 1-0 and -).
@@ -157,18 +166,24 @@ MISSIONS: tuple[Mission, ...] = (
     Mission(MissionId.MULTI_CREW_ORBITAL,   "Multi-crew orbital",   Rocket.MEDIUM,18, 0.55, 12, 4,  6,
             tier=ProgramTier.TWO, manned=True, crew_size=2, primary_skill=Skill.ENDURANCE),
     Mission(MissionId.ORBITAL_EVA,          "Orbital EVA",          Rocket.MEDIUM,20, 0.50, 14, 5,  7,
-            tier=ProgramTier.TWO, manned=True, crew_size=2, primary_skill=Skill.EVA),
+            tier=ProgramTier.TWO, manned=True, crew_size=2, primary_skill=Skill.EVA,
+            requires_modules=(Module.EVA_SUIT,)),
     Mission(MissionId.LUNAR_PASS,           "Lunar flyby",          Rocket.MEDIUM,12, 0.60, 10, 3,  5,
-            tier=ProgramTier.TWO),
+            tier=ProgramTier.TWO,
+            requires_modules=(Module.LUNAR_KICKER,)),
     Mission(MissionId.LUNAR_ORBIT,          "Lunar orbit",          Rocket.HEAVY, 18, 0.50, 15, 4,  7,
-            tier=ProgramTier.TWO),
+            tier=ProgramTier.TWO,
+            requires_modules=(Module.LUNAR_KICKER,)),
     # Tier 3 — Apollo / Soyuz
     Mission(MissionId.LUNAR_LANDING,        "Lunar landing",        Rocket.HEAVY, 25, 0.35, 20, 5, 10,
-            tier=ProgramTier.THREE),
+            tier=ProgramTier.THREE,
+            requires_modules=(Module.LUNAR_KICKER,)),
     Mission(MissionId.MANNED_LUNAR_ORBIT,   "Manned lunar orbit",   Rocket.HEAVY, 25, 0.40, 20, 6,  9,
-            tier=ProgramTier.THREE, manned=True, crew_size=2, primary_skill=Skill.CAPSULE),
+            tier=ProgramTier.THREE, manned=True, crew_size=2, primary_skill=Skill.CAPSULE,
+            requires_modules=(Module.LUNAR_KICKER,)),
     Mission(MissionId.MANNED_LUNAR_LANDING, "Manned lunar landing", Rocket.HEAVY, 35, 0.25, 35, 8, 15,
-            tier=ProgramTier.THREE, manned=True, crew_size=3, primary_skill=Skill.LM_PILOT),
+            tier=ProgramTier.THREE, manned=True, crew_size=3, primary_skill=Skill.LM_PILOT,
+            requires_modules=(Module.LUNAR_KICKER, Module.EVA_SUIT)),
 )
 
 MISSIONS_BY_ID: dict[MissionId, Mission] = {m.id: m for m in MISSIONS}
@@ -198,6 +213,7 @@ MISSION_OBJECTIVES: dict[MissionId, tuple[MissionObjective, ...]] = {
             ObjectiveId.EVA, "Orbital EVA", Skill.EVA,
             base_success=0.60, prestige_bonus=4,
             fail_crew_death_chance=0.15,
+            requires_module=Module.EVA_SUIT,
         ),
         MissionObjective(
             ObjectiveId.LONG_DURATION, "Long-duration orbit", Skill.ENDURANCE,
@@ -215,6 +231,7 @@ MISSION_OBJECTIVES: dict[MissionId, tuple[MissionObjective, ...]] = {
             ObjectiveId.EVA, "Spacewalk", Skill.EVA,
             base_success=0.60, prestige_bonus=4,
             fail_crew_death_chance=0.15,
+            requires_module=Module.EVA_SUIT,
         ),
     ),
     MissionId.MANNED_LUNAR_LANDING: (
@@ -238,10 +255,12 @@ def objectives_for(mission_id: MissionId) -> tuple[MissionObjective, ...]:
 # both rockets and modules. Heavy rockets are genuinely hard to develop;
 # the docking module sits between Light and Medium in difficulty.
 RD_SPEED: dict[str, float] = {
-    Rocket.LIGHT.value:   1.0,
-    Rocket.MEDIUM.value:  0.5,
-    Rocket.HEAVY.value:   0.3,
-    Module.DOCKING.value: 0.7,
+    Rocket.LIGHT.value:        1.0,
+    Rocket.MEDIUM.value:       0.5,
+    Rocket.HEAVY.value:        0.3,
+    Module.DOCKING.value:      0.7,
+    Module.LUNAR_KICKER.value: 0.5,
+    Module.EVA_SUIT.value:     0.8,
 }
 RD_BATCH_COST = 3  # MB per roll
 

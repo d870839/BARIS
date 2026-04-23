@@ -190,9 +190,18 @@ def build_mc_panel(client: "BarisClient", parent: Entity) -> Entity:
         eff_cost = effective_launch_cost(me, m)
         eff_succ = effective_base_success(me, m)
         built = me.rocket_built(eff_rocket)
+        from baris.resolver import missing_modules
+        missing_mods = missing_modules(me, m)
         mtype = "M" if m.manned else "U"
         queued = client.queued_mission is not None and m.id == client.queued_mission
-        marker = "[X]" if queued else ("   " if built else "[!]")
+        # [X] queued, [!] hardware blocker (rocket OR required module),
+        # blank when ready.
+        if queued:
+            marker = "[X]"
+        elif not built or missing_mods:
+            marker = "[!]"
+        else:
+            marker = "   "
         label = (
             f"{marker} {mtype} {m.name[:18]:<18} "
             f"{rocket_display_name(eff_rocket, me.side)[:10]:<10} "
@@ -201,7 +210,7 @@ def build_mc_panel(client: "BarisClient", parent: Entity) -> Entity:
         if queued:
             fill = color.rgb32(70, 170, 90)
             hl = color.rgb32(100, 210, 120)
-        elif built:
+        elif built and not missing_mods:
             fill = color.rgb32(45, 55, 75)
             hl = color.rgb32(85, 105, 140)
         else:

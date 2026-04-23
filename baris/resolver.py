@@ -120,6 +120,14 @@ def effective_lunar_modifier(player: Player, mission: Mission) -> tuple[float, f
     return (recon_bonus, lm_penalty)
 
 
+def missing_modules(player: Player, mission: Mission) -> list[Module]:
+    """Hardware modules the mission lists in `requires_modules` that the
+    player hasn't built yet. Empty list means every prereq module is
+    launch-ready. Used by the server to reject queueing and by UIs to
+    surface a 'need: X' status on each mission row."""
+    return [m for m in mission.requires_modules if not player.module_built(m)]
+
+
 def meets_architecture_prereqs(player: Player, mission: Mission) -> bool:
     """Architecture-specific extra prereqs."""
     if mission.id != MissionId.MANNED_LUNAR_LANDING:
@@ -248,7 +256,11 @@ def submit_turn(
         crew_ok = not mission.manned or _select_crew(player, mission) is not None
         tier_ok = player.is_tier_unlocked(mission.tier)
         arch_ok = meets_architecture_prereqs(player, mission)
-        if player.rocket_built(eff_rocket) and can_afford and crew_ok and tier_ok and arch_ok:
+        modules_ok = all(player.module_built(m) for m in mission.requires_modules)
+        if (
+            player.rocket_built(eff_rocket) and can_afford and crew_ok
+            and tier_ok and arch_ok and modules_ok
+        ):
             player.pending_launch = launch.value
             # filter objectives to the mission's catalog; drop any with unmet
             # hardware prereqs.
