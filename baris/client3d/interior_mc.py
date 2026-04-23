@@ -20,6 +20,7 @@ from typing import Any
 from ursina import Entity, Text, color, invoke
 
 from baris.resolver import (
+    crew_compatibility_bonus,
     effective_base_success,
     effective_lunar_modifier,
     effective_launch_cost,
@@ -449,10 +450,14 @@ class MCInterior:
                 (me.rocket_reliability(eff_rocket) - 50) * RELIABILITY_SWING_PER_POINT
             )
             crew_b = 0.0
+            compat_b = 0.0
             if m.manned:
-                crew_b = _crew_bonus_preview(me.active_astronauts(), m)
+                preview_crew = _preview_crew_selection(me.active_astronauts(), m)
+                if preview_crew:
+                    crew_b = _crew_bonus_from(preview_crew, m)
+                    compat_b = crew_compatibility_bonus(preview_crew)
             recon_bonus, lm_penalty = effective_lunar_modifier(me, m)
-            eff = base_s + crew_b + rel_bonus + recon_bonus - lm_penalty
+            eff = base_s + crew_b + compat_b + rel_bonus + recon_bonus - lm_penalty
             prefix = "SCHEDULED: " if scheduled_id is not None else ""
             self.briefing_title.text = prefix + m.name.upper()
             self.briefing_rocket.text = f"Rocket:  {rocket_display_name(eff_rocket, me.side)}"
@@ -471,6 +476,8 @@ class MCInterior:
                 self.briefing_crew.text = (
                     f"Crew:    {crew_b:+.2f}" if m.manned else "Crew:    —"
                 )
+            if compat_b:
+                self.briefing_crew.text += f"   Cmpt {compat_b:+.3f}"
             self.briefing_rel.text = f"Rel'ty:  {rel_bonus:+.3f}"
             self.briefing_effective.text = (
                 f"EFFECTIVE  {eff:.2f}  (~{int(max(0, min(1, eff)) * 100)}%)"
@@ -565,16 +572,19 @@ class MCInterior:
         self.root.enabled = False
 
 
-def _crew_bonus_preview(active: list, mission) -> float:
-    """Mirror of resolver._crew_bonus using previewable data. Kept local so
-    the interior can show the briefing without importing the private name."""
-    from baris.state import CREW_MAX_BONUS, Skill
+def _preview_crew_selection(active: list, mission) -> list:
+    """Pick the top-skilled crew the resolver would select for this mission."""
     if not mission.manned or mission.primary_skill is None:
-        return 0.0
+        return []
     if len(active) < mission.crew_size:
+        return []
+    ranked = sorted(active, key=lambda a: a.skill(mission.primary_skill), reverse=True)
+    return ranked[:mission.crew_size]
+
+
+def _crew_bonus_from(crew: list, mission) -> float:
+    from baris.state import CREW_MAX_BONUS
+    if not crew or mission.primary_skill is None:
         return 0.0
-    skill: Skill = mission.primary_skill
-    ranked = sorted(active, key=lambda a: a.skill(skill), reverse=True)
-    crew = ranked[:mission.crew_size]
-    avg = sum(a.skill(skill) for a in crew) / len(crew)
+    avg = sum(a.skill(mission.primary_skill) for a in crew) / len(crew)
     return (avg / 100.0) * CREW_MAX_BONUS

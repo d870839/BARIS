@@ -157,8 +157,8 @@ def build_astro_panel(client: "BarisClient", parent: Entity) -> Entity:
     root, w, h = _panel_shell(parent, f"ASTRONAUT COMPLEX  —  {side}")
 
     # Header row
-    header = "{:<14}{:>8}{:>5}{:>5}{:>6}{:>8}   {}".format(
-        "Name", "Capsule", "LM", "EVA", "Dock", "Endure", "Status"
+    header = "{:<14}{:>8}{:>5}{:>5}{:>6}{:>8}{:>6}{:>4}   {}".format(
+        "Name", "Capsule", "LM", "EVA", "Dock", "Endure", "Mood", "Cp", "Status"
     )
     Text(
         text=header, parent=root,
@@ -167,16 +167,26 @@ def build_astro_panel(client: "BarisClient", parent: Entity) -> Entity:
     )
     y = 0.25
     for astro in me.astronauts:
-        row = "{:<14}{:>8}{:>5}{:>5}{:>6}{:>8}   {}".format(
+        if astro.status == "kia":
+            status = "KIA"
+        elif astro.status == "retired":
+            status = "retired"
+        else:
+            status = "active"
+        row = "{:<14}{:>8}{:>5}{:>5}{:>6}{:>8}{:>6}{:>4}   {}".format(
             astro.name, astro.capsule, astro.lm_pilot, astro.eva,
-            astro.docking, astro.endurance,
-            "active" if astro.active else "KIA",
+            astro.docking, astro.endurance, astro.mood, astro.compatibility,
+            status,
         )
         Text(
             text=row, parent=root,
             position=(-0.4, y), origin=(-0.5, 0.5),
             scale=0.9,
-            color=color.rgb32(220, 225, 235) if astro.active else color.rgb32(220, 90, 90),
+            color=(
+                color.rgb32(220, 90, 90)  if astro.status == "kia"
+                else color.rgb32(140, 145, 160) if astro.status == "retired"
+                else color.rgb32(220, 225, 235)
+            ),
         )
         y -= 0.04
 

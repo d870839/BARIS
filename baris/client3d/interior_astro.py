@@ -220,14 +220,19 @@ class AstroInterior:
                 continue
             astro = roster[i]
             slot["name"].text = astro.name
-            if not astro.active:
+            if astro.status == "kia":
                 slot["status"].text = "KIA"
                 slot["status"].color = color.rgb32(220, 90, 90)
+            elif astro.status == "retired":
+                slot["status"].text = f"RETIRED  (mood {astro.mood})"
+                slot["status"].color = color.rgb32(160, 130, 110)
             elif astro.flight_ready:
-                slot["status"].text = "READY"
+                slot["status"].text = f"READY  mood {astro.mood} / {astro.compatibility}"
                 slot["status"].color = color.rgb32(110, 200, 120)
             else:
-                slot["status"].text = astro.busy_reason.upper()[:22]
+                slot["status"].text = (
+                    f"{astro.busy_reason.upper()[:18]}  mood {astro.mood}"
+                )
                 slot["status"].color = color.rgb32(240, 200, 90)
             for s, label, val in zip(
                 slot["skills"],

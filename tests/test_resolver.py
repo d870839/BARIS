@@ -10,6 +10,7 @@ from baris.resolver import (
     can_start,
     cancel_training,
     choose_architecture,
+    crew_compatibility_bonus,
     effective_base_success,
     effective_launch_cost,
     effective_lunar_modifier,
@@ -31,7 +32,15 @@ from baris.state import (
     ARCHITECTURE_SUCCESS_DELTA,
     ASSEMBLY_COST_FRACTION,
     BASIC_TRAINING_TURNS,
+    CREW_COMPAT_MAX_BONUS,
+    Compatibility,
     HOSPITAL_STAY_TURNS,
+    MOOD_DEFAULT,
+    MOOD_FAILURE_DROP,
+    MOOD_KIA_CREW_DROP,
+    MOOD_MAX,
+    MOOD_RETIREMENT_THRESHOLD,
+    MOOD_SUCCESS_BUMP,
     LM_POINTS_PENALTY_PER_MISSING,
     LM_POINTS_REQUIRED,
     LUNAR_RECON_BASE,
@@ -2210,3 +2219,172 @@ def test_catalog_expanded_to_expected_size() -> None:
         m = MISSIONS_BY_ID[new]
         assert m.name
         assert m.launch_cost > 0
+
+
+# ----------------------------------------------------------------------
+# Phase K — crew compatibility + mood + retirement
+# ----------------------------------------------------------------------
+
+
+def test_starting_roster_seeds_compatibility_and_default_mood() -> None:
+    state = _two_player_state()
+    start_game(state, rng=random.Random(7))
+    me = state.players[0]
+    for astro in me.astronauts:
+        assert astro.compatibility in {c.value for c in Compatibility}
+        assert astro.mood == MOOD_DEFAULT
+
+
+def test_crew_compatibility_bonus_same_type_all_matching() -> None:
+    crew = [_make_astronaut(f"X{i}") for i in range(3)]
+    for a in crew:
+        a.compatibility = Compatibility.A.value
+    assert abs(crew_compatibility_bonus(crew) - CREW_COMPAT_MAX_BONUS) < 1e-9
+
+
+def test_crew_compatibility_bonus_opposite_pair_penalises() -> None:
+    a = _make_astronaut("A")
+    a.compatibility = Compatibility.A.value
+    b = _make_astronaut("B")
+    b.compatibility = Compatibility.C.value   # opposite of A
+    assert abs(crew_compatibility_bonus([a, b]) - (-CREW_COMPAT_MAX_BONUS)) < 1e-9
+
+
+def test_solo_or_empty_crew_compatibility_bonus_is_zero() -> None:
+    assert crew_compatibility_bonus([]) == 0.0
+    a = _make_astronaut("A")
+    a.compatibility = Compatibility.B.value
+    assert crew_compatibility_bonus([a]) == 0.0
+
+
+def test_mission_success_bumps_crew_mood_up() -> None:
+    state = _two_player_state()
+    start_game(state, rng=random.Random(1))
+    me = state.players[0]
+    me.reliability[Rocket.MEDIUM.value] = 70
+    me.budget = 200
+    for a in me.astronauts:
+        a.capsule = 80
+        a.mood = 70
+
+    submit_turn(me, rd_rocket=None, rd_spend=0, launch=MissionId.MANNED_ORBITAL)
+    submit_turn(state.players[1], rd_rocket=None, rd_spend=0, launch=None)
+    resolve_turn(state, rng=_FixedRng(0.0))
+    _fire_scheduled_launch(state, _FixedRng(0.0))
+
+    # Exactly one astronaut flew; their mood should be +MOOD_SUCCESS_BUMP
+    # (minus the single MOOD_DRIFT_PER_TURN toward MOOD_DRIFT_TARGET=60 that
+    # runs each resolve).
+    flown = [a for a in me.astronauts if a.mood != 70]
+    assert len(flown) >= 1
+    assert max(a.mood for a in me.astronauts) >= 70 + MOOD_SUCCESS_BUMP - 4
+
+
+def test_mission_failure_drops_crew_mood() -> None:
+    state = _two_player_state()
+    start_game(state, rng=random.Random(1))
+    me = state.players[0]
+    me.reliability[Rocket.MEDIUM.value] = 70
+    me.budget = 200
+    for a in me.astronauts:
+        a.capsule = 50
+        a.mood = 70
+
+    submit_turn(me, rd_rocket=None, rd_spend=0, launch=MissionId.MANNED_ORBITAL)
+    submit_turn(state.players[1], rd_rocket=None, rd_spend=0, launch=None)
+    # Force failure, no death, no hospital — isolates the morale hit.
+    resolve_turn(state, rng=_FixedRng(0.99))
+    _fire_scheduled_launch(state, _FixedRng(0.99))
+
+    # At least one astronaut's mood dropped by roughly MOOD_FAILURE_DROP
+    # (mood drift also runs, so accept a small tolerance).
+    lowest = min(a.mood for a in me.astronauts)
+    assert lowest <= 70 - MOOD_FAILURE_DROP + 2
+
+
+def test_crew_kia_drops_survivor_mood_extra() -> None:
+    """A 2-crew mission where one dies: the survivor eats both the
+    failure drop AND a KIA-per-dead penalty."""
+
+    class _SeqRng:
+        def __init__(self, values):
+            self.values = list(values)
+            self._r = random.Random(1)
+        def random(self) -> float:
+            return self.values.pop(0)
+        def randint(self, a, b):
+            return self._r.randint(a, b)
+        def choice(self, seq):
+            return self._r.choice(seq)
+
+    state = _two_player_state()
+    start_game(state, rng=random.Random(1))
+    me = state.players[0]
+    me.reliability[Rocket.MEDIUM.value] = 70
+    me.budget = 200
+    me.mission_successes[MissionId.SUBORBITAL.value] = 1
+    for a in me.astronauts:
+        a.endurance = 80
+        a.mood = 80
+
+    submit_turn(me, rd_rocket=None, rd_spend=0, launch=MissionId.MULTI_CREW_ORBITAL)
+    submit_turn(state.players[1], rd_rocket=None, rd_spend=0, launch=None)
+    # Success roll high (fail), first death roll low (kill crew[0]), second
+    # death roll high (spare crew[1]), hospital rolls high (no hospital).
+    resolve_turn(state, rng=_FixedRng(0.0))
+    _fire_scheduled_launch(state, _SeqRng([0.99, 0.01, 0.99, 0.99, 0.99]))
+
+    kia_count = sum(1 for a in me.astronauts if a.status == "kia")
+    assert kia_count == 1
+    survivors = [a for a in me.astronauts if a.status == "active"]
+    # Mood floor from the failure: the actual flying crew hit.
+    # Expected drop = failure drop + 1 * KIA drop. Drift may claw back a bit.
+    min_mood = min(a.mood for a in survivors)
+    expected_after = 80 - MOOD_FAILURE_DROP - MOOD_KIA_CREW_DROP
+    assert min_mood <= expected_after + 2
+
+
+def test_astronaut_below_threshold_retires_on_tick() -> None:
+    """Mood drift runs before the retirement check, so an astronaut
+    whose mood is drifting back up from a single low-mood turn won't
+    retire. Set morale low enough that even after a full drift step
+    they're still at or below the retirement threshold."""
+    state = _two_player_state()
+    start_game(state, rng=random.Random(1))
+    me = state.players[0]
+    # Start well below threshold so drift (+MOOD_DRIFT_PER_TURN) doesn't
+    # lift them past MOOD_RETIREMENT_THRESHOLD this turn.
+    me.astronauts[0].mood = max(0, MOOD_RETIREMENT_THRESHOLD - 5)
+
+    submit_turn(me, rd_rocket=None, rd_spend=0, launch=None)
+    submit_turn(state.players[1], rd_rocket=None, rd_spend=0, launch=None)
+    resolve_turn(state, rng=_FixedRng(0.0))
+
+    assert me.astronauts[0].status == "retired"
+    assert me.astronauts[0].flight_ready is False
+
+
+def test_compatibility_and_mood_roundtrip_through_state_dict() -> None:
+    me = Player(player_id="a", username="Alice", side=Side.USA)
+    me.astronauts = [Astronaut(
+        id="x", name="X",
+        compatibility=Compatibility.D.value,
+        mood=44,
+    )]
+    state = GameState(players=[me])
+    restored = GameState.from_dict(state.to_dict())
+    ra = restored.players[0].astronauts[0]
+    assert ra.compatibility == Compatibility.D.value
+    assert ra.mood == 44
+
+
+def test_legacy_astronaut_dict_backfills_compat_and_mood() -> None:
+    from baris.state import _astronaut_from_dict
+    raw = {
+        "id": "x", "name": "X",
+        "capsule": 10, "lm_pilot": 0, "eva": 0, "docking": 0, "endurance": 0,
+        "status": "active",
+    }
+    a = _astronaut_from_dict(raw)
+    assert a.compatibility == Compatibility.A.value
+    assert a.mood == MOOD_DEFAULT

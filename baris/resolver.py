@@ -32,7 +32,17 @@ from baris.state import (
     Astronaut,
     AstronautStatus,
     BASIC_TRAINING_TURNS,
+    CREW_COMPAT_MAX_BONUS,
     CREW_MAX_BONUS,
+    Compatibility,
+    MOOD_DEFAULT,
+    MOOD_DRIFT_PER_TURN,
+    MOOD_DRIFT_TARGET,
+    MOOD_FAILURE_DROP,
+    MOOD_KIA_CREW_DROP,
+    MOOD_MAX,
+    MOOD_RETIREMENT_THRESHOLD,
+    MOOD_SUCCESS_BUMP,
     DEATH_CHANCE_ON_FAIL,
     DEATH_PRESTIGE_PENALTY,
     GameState,
@@ -218,6 +228,7 @@ def _generate_starting_roster(player: Player, rng: random.Random) -> list[Astron
             eva=rng.randint(20, 50),
             docking=rng.randint(20, 50),
             endurance=rng.randint(20, 50),
+            compatibility=rng.choice([c.value for c in Compatibility]),
         ))
     return roster
 
@@ -369,6 +380,7 @@ def resolve_turn(state: GameState, rng: random.Random | None = None) -> None:
         # immediately decrement them.
         _tick_training_and_recovery(player, state)
         _tick_pad_repairs(player, state)
+        _tick_mood_and_retirements(player, state)
         _resolve_scheduled_launch(player, state, rng)
         _promote_pending_to_scheduled(player, state)
         _apply_passive_training(player, rng)
@@ -596,12 +608,17 @@ def _resolve_pad_launch(
     reliability_bonus = (
         (player.rocket_reliability(eff_rocket) - 50) * RELIABILITY_SWING_PER_POINT
     )
+    compat_bonus = crew_compatibility_bonus(crew)
     base = effective_base_success(player, mission)
     recon_bonus, lm_penalty = effective_lunar_modifier(player, mission)
-    success_chance = base + crew_bonus + reliability_bonus + recon_bonus - lm_penalty
+    success_chance = (
+        base + crew_bonus + reliability_bonus + compat_bonus
+        + recon_bonus - lm_penalty
+    )
     report.base_success = base
     report.crew_bonus = crew_bonus
     report.reliability_bonus = reliability_bonus
+    report.compat_bonus = compat_bonus
     report.lunar_recon_bonus = recon_bonus
     report.lm_points_penalty = lm_penalty
     report.effective_success = success_chance
@@ -617,9 +634,16 @@ def _resolve_pad_launch(
             player, mission, crew, state, rng, eff_rocket, report,
             objectives_raw=sl.objectives,
         )
+        if mission.manned and crew:
+            _bump_crew_mood(crew, MOOD_SUCCESS_BUMP)
     else:
         _handle_mission_failure(player, mission, crew, state, rng, eff_rocket, report)
         _grant_lunar_progress(player, mission, success=False, state=state)
+        if mission.manned and crew:
+            # Survivors take a morale hit plus an extra hit per crewmate KIA.
+            _bump_crew_mood(crew, -MOOD_FAILURE_DROP)
+            if report.deaths:
+                _bump_crew_mood(crew, -MOOD_KIA_CREW_DROP * len(report.deaths))
     report.reliability_after = player.rocket_reliability(eff_rocket)
     report.prestige_delta = player.prestige - prestige_start
     # Pad damage: if the flight killed crew or any objective triggered a
@@ -847,6 +871,45 @@ def _crew_bonus(crew: list[Astronaut], mission: Mission) -> float:
     return (avg / 100.0) * CREW_MAX_BONUS
 
 
+# ----------------------------------------------------------------------
+# Phase K — crew compatibility + mood
+# ----------------------------------------------------------------------
+
+_OPPOSITE_COMPAT: set[frozenset[str]] = {
+    frozenset({Compatibility.A.value, Compatibility.C.value}),
+    frozenset({Compatibility.B.value, Compatibility.D.value}),
+}
+
+
+def crew_compatibility_bonus(crew: list[Astronaut]) -> float:
+    """Average pairwise compatibility of the crew, scaled to at most
+    ±CREW_COMPAT_MAX_BONUS. Same/adjacent tags mesh (+1 each pair);
+    opposites (A-C, B-D) clash (-1). Returns 0.0 for solo crews."""
+    if len(crew) < 2:
+        return 0.0
+    total = 0
+    pairs = 0
+    for i in range(len(crew)):
+        for j in range(i + 1, len(crew)):
+            pair = frozenset({crew[i].compatibility, crew[j].compatibility})
+            total += -1 if pair in _OPPOSITE_COMPAT else 1
+            pairs += 1
+    return (total / pairs) * CREW_COMPAT_MAX_BONUS
+
+
+def _clamp_mood(value: int) -> int:
+    return max(0, min(MOOD_MAX, value))
+
+
+def _bump_crew_mood(crew: list[Astronaut], delta: int) -> None:
+    """Adjust every active crew member's mood by `delta`, clamped to
+    [0, MOOD_MAX]. Skips KIA / retired members."""
+    for astro in crew:
+        if astro.status != AstronautStatus.ACTIVE.value:
+            continue
+        astro.mood = _clamp_mood(astro.mood + delta)
+
+
 def _handle_mission_success(
     player: Player,
     mission: Mission,
@@ -1011,6 +1074,25 @@ def _tick_pad_repairs(player: Player, state: GameState) -> None:
         if pad.repair_turns_remaining == 0:
             state.log.append(
                 f"{player.username}: Pad {pad.pad_id} back online."
+            )
+
+
+def _tick_mood_and_retirements(player: Player, state: GameState) -> None:
+    """Each season, active astronauts' moods drift toward MOOD_DRIFT_TARGET
+    by MOOD_DRIFT_PER_TURN; anyone already above the target sheds morale
+    back down at the same rate. Astronauts at or below
+    MOOD_RETIREMENT_THRESHOLD retire (becoming unflyable)."""
+    for astro in player.astronauts:
+        if astro.status != AstronautStatus.ACTIVE.value:
+            continue
+        if astro.mood < MOOD_DRIFT_TARGET:
+            astro.mood = _clamp_mood(astro.mood + MOOD_DRIFT_PER_TURN)
+        elif astro.mood > MOOD_DRIFT_TARGET:
+            astro.mood = _clamp_mood(astro.mood - MOOD_DRIFT_PER_TURN)
+        if astro.mood <= MOOD_RETIREMENT_THRESHOLD:
+            astro.status = AstronautStatus.RETIRED.value
+            state.log.append(
+                f"{player.username}: {astro.name} retires (morale bottomed out)."
             )
 
 

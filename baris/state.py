@@ -59,6 +59,17 @@ class Skill(str, Enum):
 class AstronautStatus(str, Enum):
     ACTIVE = "active"
     KIA = "kia"
+    RETIRED = "retired"
+
+
+class Compatibility(str, Enum):
+    """Rough personality-type tag assigned to each astronaut at roster
+    creation. Used to score crew compatibility: same/adjacent types mesh
+    well, opposite types (A<->C, B<->D) grind on each other."""
+    A = "A"
+    B = "B"
+    C = "C"
+    D = "D"
 
 
 class MissionId(str, Enum):
@@ -412,6 +423,23 @@ HOSPITAL_CHANCE_ON_FAIL      = 0.4
 # Cancelling a training block early refunds this fraction of the cost.
 TRAINING_CANCEL_REFUND_FRACTION = 0.5
 
+# Phase K — crew compatibility + mood.
+# Each astronaut carries one of four personality tags (Compatibility A-D).
+# Matching or adjacent tags (A-B, B-C, C-D, D-A) are worth +1 per pair;
+# opposite tags (A-C, B-D) are -1. The crew's average pairwise score,
+# scaled by CREW_COMPAT_MAX_BONUS, folds into the mission's effective
+# success (bounded ±CREW_COMPAT_MAX_BONUS).
+CREW_COMPAT_MAX_BONUS          = 0.05
+# Mood is a 0-100 indicator updated by mission events and passive drift.
+MOOD_DEFAULT                   = 70
+MOOD_MAX                       = 100
+MOOD_DRIFT_TARGET              = 60   # per-turn drift pulls toward this
+MOOD_DRIFT_PER_TURN            = 2
+MOOD_SUCCESS_BUMP              = 10
+MOOD_FAILURE_DROP              = 10
+MOOD_KIA_CREW_DROP             = 15   # extra hit for surviving crewmates
+MOOD_RETIREMENT_THRESHOLD      = 15   # at or below, astronaut retires
+
 # Phase D — Lunar reconnaissance + LM (Lunar Module) points.
 #
 # Lunar recon tracks how thoroughly the moon has been surveyed before
@@ -472,6 +500,10 @@ class Astronaut:
     advanced_training_skill: str = ""     # Skill.value while training, else ""
     advanced_training_remaining: int = 0
     hospital_remaining: int = 0
+    # Phase K — personality tag + morale. Both default so legacy rosters
+    # without them still construct cleanly.
+    compatibility: str = Compatibility.A.value
+    mood: int = MOOD_DEFAULT
 
     def skill(self, kind: Skill) -> int:
         return getattr(self, kind.value)
@@ -497,10 +529,18 @@ class Astronaut:
         )
 
     @property
+    def retired(self) -> bool:
+        return self.status == AstronautStatus.RETIRED.value
+
+    @property
     def busy_reason(self) -> str:
         """Human-readable reason this astronaut can't fly, or '' if ready."""
-        if not self.active:
+        if self.status == AstronautStatus.KIA.value:
             return "KIA"
+        if self.status == AstronautStatus.RETIRED.value:
+            return "retired"
+        if not self.active:
+            return "inactive"
         if self.basic_training_remaining > 0:
             return f"basic training ({self.basic_training_remaining})"
         if self.hospital_remaining > 0:
@@ -710,6 +750,8 @@ def _astronaut_from_dict(d: dict[str, Any]) -> Astronaut:
     data.setdefault("advanced_training_skill", "")
     data.setdefault("advanced_training_remaining", 0)
     data.setdefault("hospital_remaining", 0)
+    data.setdefault("compatibility", Compatibility.A.value)
+    data.setdefault("mood", MOOD_DEFAULT)
     return Astronaut(**data)
 
 
@@ -757,6 +799,7 @@ class LaunchReport:
     budget_cut: int = 0
     ended_game: bool = False  # manned lunar landing success
     # Phase D — manned-lunar-landing only; 0 for everything else.
+    compat_bonus: float = 0.0
     lunar_recon_bonus: float = 0.0
     lm_points_penalty: float = 0.0
     objectives: list[ObjectiveReport] = field(default_factory=list)

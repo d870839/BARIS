@@ -7,6 +7,7 @@ from typing import TYPE_CHECKING
 from ursina import Button, Entity, Text, color
 
 from baris.resolver import (
+    crew_compatibility_bonus,
     effective_base_success,
     effective_launch_cost,
     effective_lunar_modifier,
@@ -245,11 +246,15 @@ def build_mc_panel(client: "BarisClient", parent: Entity) -> Entity:
         )
         base = effective_base_success(me, m)
         crew_b = 0.0
+        compat_b = 0.0
         if m.manned:
             active = me.active_astronauts()
-            crew_b = _preview_crew_bonus(active, m)
+            preview_crew = _preview_crew_selection(active, m)
+            if preview_crew:
+                crew_b = _preview_crew_bonus(preview_crew, m)
+                compat_b = crew_compatibility_bonus(preview_crew)
         recon_bonus, lm_penalty = effective_lunar_modifier(me, m)
-        effective = base + crew_b + rel_bonus + recon_bonus - lm_penalty
+        effective = base + crew_b + compat_b + rel_bonus + recon_bonus - lm_penalty
 
         Text(
             text=f"{m.name}", parent=root,
@@ -262,11 +267,13 @@ def build_mc_panel(client: "BarisClient", parent: Entity) -> Entity:
                 f"Recon:   {recon_bonus:+.3f}\n"
                 f"LM:      {-lm_penalty:+.3f}\n"
             )
+        compat_line = f"Compat:  {compat_b:+.3f}\n" if compat_b else ""
         brief = (
             f"Rocket:  {rocket_display_name(eff_rocket, me.side)}\n"
             f"Cost:    {eff_cost} MB\n"
             f"Base:    {base:+.2f}\n"
             f"Crew:    {crew_b:+.2f}\n"
+            f"{compat_line}"
             f"Rel'ty:  {rel_bonus:+.3f}\n"
             f"{lunar_line}"
             f"Eff:     {effective:.2f}  (~{int(max(0, min(1, effective)) * 100)}%)"
@@ -353,16 +360,20 @@ def build_mc_panel(client: "BarisClient", parent: Entity) -> Entity:
     return root
 
 
-def _preview_crew_bonus(active, mission) -> float:
-    from baris.state import CREW_MAX_BONUS, Skill
+def _preview_crew_selection(active, mission) -> list:
     if not mission.manned or mission.primary_skill is None:
-        return 0.0
+        return []
     if len(active) < mission.crew_size:
+        return []
+    ranked = sorted(active, key=lambda a: a.skill(mission.primary_skill), reverse=True)
+    return ranked[:mission.crew_size]
+
+
+def _preview_crew_bonus(crew, mission) -> float:
+    from baris.state import CREW_MAX_BONUS
+    if not crew or mission.primary_skill is None:
         return 0.0
-    skill_key: Skill = mission.primary_skill
-    ranked = sorted(active, key=lambda a: a.skill(skill_key), reverse=True)
-    crew = ranked[:mission.crew_size]
-    avg = sum(a.skill(skill_key) for a in crew) / len(crew)
+    avg = sum(a.skill(mission.primary_skill) for a in crew) / len(crew)
     return (avg / 100.0) * CREW_MAX_BONUS
 
 

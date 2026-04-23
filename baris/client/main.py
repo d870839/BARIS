@@ -919,6 +919,7 @@ class Client:
             m = MISSIONS_BY_ID[self.queued_mission]
             from baris.resolver import (
                 _crew_bonus,
+                crew_compatibility_bonus,
                 effective_base_success,
                 effective_launch_cost,
                 effective_lunar_modifier,
@@ -937,7 +938,7 @@ class Client:
             if m.manned:
                 crew = self._preview_crew(me, m)
                 if crew:
-                    effective += _crew_bonus(crew, m)
+                    effective += _crew_bonus(crew, m) + crew_compatibility_bonus(crew)
             draw_text(
                 self.screen,
                 f"Schedule: {m.name}  assembly {assembly_due} MB now + "
@@ -1289,14 +1290,17 @@ class Client:
         draw_text(self.screen, f"YOUR ROSTER — {side_label}", (cx, cy), size=18,
                   color=side_color(me.side), bold=True)
         header = (
-            f"{'Name':<14}{'Capsule':<9}{'LM':<6}{'EVA':<6}{'Dock':<6}{'Endure':<8}Status"
+            f"{'Name':<14}{'Capsule':<9}{'LM':<6}{'EVA':<6}{'Dock':<6}{'Endure':<8}{'Mood':<6}{'Cp':<4}Status"
         )
         draw_text(self.screen, header, (cx, cy + 32), size=14, color=DIM)
         y = cy + 58
         for astro in me.astronauts:
-            if not astro.active:
+            if astro.status == "kia":
                 status = "KIA"
                 color = RED
+            elif astro.status == "retired":
+                status = "retired"
+                color = DIM
             elif not astro.flight_ready:
                 status = astro.busy_reason or "training"
                 color = HIGHLIGHT
@@ -1307,6 +1311,7 @@ class Client:
                 f"{astro.name:<14}"
                 f"{astro.capsule:<9}{astro.lm_pilot:<6}"
                 f"{astro.eva:<6}{astro.docking:<6}{astro.endurance:<8}"
+                f"{astro.mood:<6}{astro.compatibility:<4}"
                 f"{status}"
             )
             draw_text(self.screen, row, (cx, y), size=15, color=color)
@@ -1524,6 +1529,7 @@ class Client:
             return
         from baris.resolver import (
             _crew_bonus,
+            crew_compatibility_bonus,
             effective_base_success,
             effective_launch_cost,
             effective_rocket,
@@ -1538,10 +1544,12 @@ class Client:
         rel_bonus = (reliability - 50) * RELIABILITY_SWING_PER_POINT
         crew: list[Astronaut] = []
         crew_b = 0.0
+        compat_b = 0.0
         if mission.manned:
             crew = self._preview_crew(me, mission)
             crew_b = _crew_bonus(crew, mission)
-        effective = base_succ + crew_b + rel_bonus
+            compat_b = crew_compatibility_bonus(crew)
+        effective = base_succ + crew_b + compat_b + rel_bonus
 
         # Ribbon header
         pygame.draw.rect(self.screen, BG_DEEP, (0, 0, WINDOW_SIZE[0], 80))
@@ -1597,6 +1605,10 @@ class Client:
         y += 22
         if mission.manned:
             draw_text(self.screen, f"  Crew bonus           {crew_b:+.2f}",
+                      (x, y), size=16, color=FG)
+            y += 22
+        if compat_b:
+            draw_text(self.screen, f"  Crew compatibility   {compat_b:+.3f}",
                       (x, y), size=16, color=FG)
             y += 22
         draw_text(self.screen, f"  Reliability bonus    {rel_bonus:+.3f}",
