@@ -14,6 +14,7 @@ from baris.resolver import (
     can_start,
     cancel_training,
     choose_architecture,
+    recruit_next_group,
     resolve_turn,
     scrub_scheduled,
     start_game,
@@ -222,6 +223,16 @@ async def handle_cancel_training(player: Player, msg: dict[str, Any]) -> None:
         log.info("%s cancelled training for %s", player.username, astronaut_id)
 
 
+async def handle_recruit_group(player: Player, _msg: dict[str, Any]) -> None:
+    if room.state.phase != Phase.PLAYING:
+        return
+    if recruit_next_group(player, room.state):
+        log.info(
+            "%s recruited group %d", player.username,
+            player.next_recruitment_group - 1,
+        )
+
+
 async def client_handler(ws: Any) -> None:
     player: Player | None = None
     try:
@@ -259,6 +270,8 @@ async def client_handler(ws: Any) -> None:
                 await handle_start_training(player, msg)
             elif mtype == protocol.CANCEL_TRAINING:
                 await handle_cancel_training(player, msg)
+            elif mtype == protocol.RECRUIT_GROUP:
+                await handle_recruit_group(player, msg)
             else:
                 await ws.send(protocol.encode(protocol.ERROR, message=f"Unknown type {mtype}"))
                 continue

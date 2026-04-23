@@ -77,6 +77,10 @@ from baris.state import (
     RELIABILITY_SWING_PER_POINT,
     UNMANNED_FAILURE_RD_GAIN,
     MANNED_FAILURE_BUDGET_CUT,
+    RECRUIT_SKILL_MAX,
+    RECRUIT_SKILL_MIN,
+    RECRUITMENT_GROUPS,
+    RecruitmentGroup,
     Rocket,
     SEASON_REFILL,
     STARTING_ASTRONAUTS,
@@ -213,11 +217,15 @@ def _apply_debug_preseed(player: Player) -> None:
 
 
 def _generate_starting_roster(player: Player, rng: random.Random) -> list[Astronaut]:
-    from baris.state import HISTORICAL_ROSTERS
+    """Build Group 1 — the starting roster — at game start. Uses the
+    group-1 name pool and slightly higher skill ranges than later
+    recruits (20-50 vs 15-40) to reflect that the first intake is
+    drawn from elite test-pilot candidates."""
+    group = RECRUITMENT_GROUPS[0]
     side_code = player.side.value if player.side else "ROS"
-    names = HISTORICAL_ROSTERS.get(side_code, ())
+    names = _group_names_for(group, side_code)
     roster: list[Astronaut] = []
-    for i in range(STARTING_ASTRONAUTS):
+    for i in range(group.size):
         default = f"{side_code}-{i + 1:02d}"
         name = names[i] if i < len(names) else default
         roster.append(Astronaut(
@@ -231,6 +239,77 @@ def _generate_starting_roster(player: Player, rng: random.Random) -> list[Astron
             compatibility=rng.choice([c.value for c in Compatibility]),
         ))
     return roster
+
+
+def _group_names_for(group: RecruitmentGroup, side_code: str) -> tuple[str, ...]:
+    if side_code == Side.USA.value:
+        return group.us_names
+    if side_code == Side.USSR.value:
+        return group.ussr_names
+    return ()
+
+
+def next_recruitment_preview(
+    player: Player, state: GameState,
+) -> tuple[RecruitmentGroup | None, bool, str]:
+    """Describe the next recruitable group: (group, can_hire_now, reason).
+    group is None when all groups have been exhausted."""
+    idx = player.next_recruitment_group
+    if idx < 1 or idx > len(RECRUITMENT_GROUPS):
+        return None, False, "all groups hired"
+    group = RECRUITMENT_GROUPS[idx - 1]
+    if state.year < group.earliest_year:
+        return group, False, f"available in {group.earliest_year}"
+    if player.budget < group.cost:
+        return group, False, f"need {group.cost} MB"
+    return group, True, ""
+
+
+def recruit_next_group(
+    player: Player, state: GameState, rng: random.Random | None = None,
+) -> bool:
+    """Hire the next recruitment group if conditions are met. Deducts
+    budget, adds astronauts (each entering basic training), and advances
+    the player's group pointer. Returns True on success, False if the
+    hire was rejected (unavailable year, insufficient budget, all groups
+    already hired)."""
+    group, can_hire, _reason = next_recruitment_preview(player, state)
+    if group is None or not can_hire:
+        return False
+    rng = rng or random.Random()
+    side_code = player.side.value if player.side else ""
+    names = _group_names_for(group, side_code)
+    existing = {a.name for a in player.astronauts}
+    added = 0
+    for i in range(group.size):
+        # Prefer historical names, skip any duplicates, then fall back to
+        # a side-coded placeholder ("USA-12") so the group always hits
+        # its declared size.
+        name = ""
+        if i < len(names) and names[i] not in existing:
+            name = names[i]
+        else:
+            slot = len(player.astronauts) + added + 1
+            name = f"{side_code}-{slot:02d}"
+            while name in existing:
+                slot += 1
+                name = f"{side_code}-{slot:02d}"
+        existing.add(name)
+        player.astronauts.append(Astronaut(
+            id=uuid.uuid4().hex[:6],
+            name=name,
+            capsule=rng.randint(RECRUIT_SKILL_MIN, RECRUIT_SKILL_MAX),
+            lm_pilot=rng.randint(RECRUIT_SKILL_MIN, RECRUIT_SKILL_MAX),
+            eva=rng.randint(RECRUIT_SKILL_MIN, RECRUIT_SKILL_MAX),
+            docking=rng.randint(RECRUIT_SKILL_MIN, RECRUIT_SKILL_MAX),
+            endurance=rng.randint(RECRUIT_SKILL_MIN, RECRUIT_SKILL_MAX),
+            compatibility=rng.choice([c.value for c in Compatibility]),
+            basic_training_remaining=BASIC_TRAINING_TURNS,
+        ))
+        added += 1
+    player.budget -= group.cost
+    player.next_recruitment_group += 1
+    return True
 
 
 def submit_turn(

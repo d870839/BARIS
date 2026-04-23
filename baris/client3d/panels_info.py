@@ -14,6 +14,7 @@ from baris.state import (
     ADVANCED_TRAINING_COST,
     ADVANCED_TRAINING_SKILL_GAIN,
     ADVANCED_TRAINING_TURNS,
+    BASIC_TRAINING_TURNS,
     MISSIONS_BY_ID,
     MissionId,
     ProgramTier,
@@ -371,4 +372,72 @@ def build_training_panel(client: "BarisClient", parent: Entity) -> Entity:
         row_y -= 0.052
 
     _close_button(client, root, -0.4)
+    return root
+
+
+# ----------------------------------------------------------------------
+# Recruitment panel (opened from the Astronaut Complex console)
+# ----------------------------------------------------------------------
+def build_recruit_panel(client: "BarisClient", parent: Entity) -> Entity:
+    from baris.resolver import next_recruitment_preview
+    me = client.me()
+    root, w, h = _panel_shell(
+        parent, "RECRUITMENT",
+        width=0.9, height=0.55, title_color=(160, 220, 90),
+    )
+    if me is None or client.state is None:
+        _close_button(client, root, -0.22)
+        return root
+
+    group, can_hire, reason = next_recruitment_preview(me, client.state)
+    Text(
+        text=f"Budget: {me.budget} MB      Roster: {len(me.astronauts)}",
+        parent=root, position=(0, 0.18),
+        origin=(0, 0), z=-0.01,
+        scale=0.95, color=color.rgb32(220, 225, 235),
+    )
+    if group is None:
+        Text(
+            text="All four recruitment groups have been hired.",
+            parent=root, position=(0, 0.05),
+            origin=(0, 0), z=-0.01,
+            scale=1.0, color=color.rgb32(160, 170, 195),
+        )
+    else:
+        Text(
+            text=(
+                f"Next: Group {group.number}  —  +{group.size} recruits,"
+                f"  cost {group.cost} MB"
+            ),
+            parent=root, position=(0, 0.06),
+            origin=(0, 0), z=-0.01,
+            scale=1.05, color=color.rgb32(220, 225, 235),
+        )
+        Text(
+            text=(
+                f"Earliest year: {group.earliest_year}    "
+                f"New recruits enter basic training for "
+                f"{BASIC_TRAINING_TURNS} seasons."
+            ),
+            parent=root, position=(0, -0.02),
+            origin=(0, 0), z=-0.01,
+            scale=0.8, color=color.rgb32(160, 170, 195),
+        )
+        if can_hire:
+            hire = Button(
+                parent=root, text=f"HIRE  ({group.cost} MB)",
+                position=(0, -0.12, -0.02), scale=(0.38, 0.07),
+                color=color.rgb32(70, 120, 50),
+                highlight_color=color.rgb32(110, 180, 80),
+            )
+            hire.on_click = lambda: client.astro_recruit_group()
+        else:
+            Text(
+                text=f"Unavailable: {reason}",
+                parent=root, position=(0, -0.12),
+                origin=(0, 0), z=-0.01,
+                scale=1.0, color=color.rgb32(220, 180, 90),
+            )
+
+    _close_button(client, root, -0.22)
     return root

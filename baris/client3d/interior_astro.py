@@ -198,6 +198,27 @@ class AstroInterior:
             billboard=True,
             color=color.rgb32(200, 225, 245),
         )
+        # RECRUITMENT CONSOLE — press E to open the recruit-group panel.
+        rx = 4.5
+        Entity(
+            parent=self.root, model="cube",
+            position=(rx, 0.45, z), scale=(1.1, 0.9, 1.1),
+            color=color.rgb32(95, 130, 60),
+            collider="box",
+        )
+        rcap = Entity(
+            parent=self.root, model="cube",
+            position=(rx, 1.0, z), scale=(0.7, 0.15, 0.7),
+            color=color.rgb32(160, 220, 90),
+        )
+        rcap._rest_y = rcap.y
+        self.buttons["recruit"] = rcap
+        Text(
+            text="RECRUITMENT\nCONSOLE", parent=self.root,
+            position=(rx, 1.55, z), scale=4.2, origin=(0, 0),
+            billboard=True,
+            color=color.rgb32(220, 245, 200),
+        )
 
     # ------------------------------------------------------------------
     # Runtime

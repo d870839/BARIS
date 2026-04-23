@@ -16,6 +16,8 @@ from baris.resolver import (
     effective_lunar_modifier,
     effective_rocket,
     meets_architecture_prereqs,
+    next_recruitment_preview,
+    recruit_next_group,
     resolve_turn,
     scrub_scheduled,
     start_game,
@@ -70,6 +72,9 @@ from baris.state import (
     Player,
     ProgramTier,
     RELIABILITY_CAP,
+    RECRUIT_SKILL_MAX,
+    RECRUIT_SKILL_MIN,
+    RECRUITMENT_GROUPS,
     RELIABILITY_FLOOR,
     RELIABILITY_GAIN_ON_SUCCESS,
     Rocket,
@@ -2388,3 +2393,131 @@ def test_legacy_astronaut_dict_backfills_compat_and_mood() -> None:
     a = _astronaut_from_dict(raw)
     assert a.compatibility == Compatibility.A.value
     assert a.mood == MOOD_DEFAULT
+
+
+# ----------------------------------------------------------------------
+# Phase J — recruitment groups
+# ----------------------------------------------------------------------
+
+
+def test_start_game_auto_hires_group_one() -> None:
+    state = _two_player_state()
+    start_game(state, rng=random.Random(1))
+    for p in state.players:
+        assert len(p.astronauts) == RECRUITMENT_GROUPS[0].size
+        # Group 1 is already hired, so the pointer points at group 2.
+        assert p.next_recruitment_group == 2
+
+
+def test_recruit_next_group_hires_second_group() -> None:
+    state = _two_player_state()
+    start_game(state, rng=random.Random(1))
+    p = state.players[0]
+    group = RECRUITMENT_GROUPS[1]
+    state.year = group.earliest_year
+    p.budget = group.cost + 10
+    before = len(p.astronauts)
+    assert recruit_next_group(p, state, rng=random.Random(2))
+    assert len(p.astronauts) == before + group.size
+    assert p.next_recruitment_group == 3
+    assert p.budget == 10  # cost deducted
+
+
+def test_recruit_next_group_rejected_before_earliest_year() -> None:
+    state = _two_player_state()
+    start_game(state, rng=random.Random(1))
+    p = state.players[0]
+    group = RECRUITMENT_GROUPS[1]
+    state.year = group.earliest_year - 1
+    p.budget = group.cost + 100
+    before = len(p.astronauts)
+    assert not recruit_next_group(p, state, rng=random.Random(2))
+    assert len(p.astronauts) == before
+    assert p.next_recruitment_group == 2
+
+
+def test_recruit_next_group_rejected_without_budget() -> None:
+    state = _two_player_state()
+    start_game(state, rng=random.Random(1))
+    p = state.players[0]
+    group = RECRUITMENT_GROUPS[1]
+    state.year = group.earliest_year
+    p.budget = group.cost - 1
+    before = len(p.astronauts)
+    assert not recruit_next_group(p, state, rng=random.Random(2))
+    assert len(p.astronauts) == before
+
+
+def test_recruit_next_group_rejected_when_all_hired() -> None:
+    state = _two_player_state()
+    start_game(state, rng=random.Random(1))
+    p = state.players[0]
+    p.next_recruitment_group = len(RECRUITMENT_GROUPS) + 1
+    state.year = 1999
+    p.budget = 1000
+    before = len(p.astronauts)
+    assert not recruit_next_group(p, state, rng=random.Random(2))
+    assert len(p.astronauts) == before
+
+
+def test_new_recruits_start_in_basic_training() -> None:
+    state = _two_player_state()
+    start_game(state, rng=random.Random(1))
+    p = state.players[0]
+    group = RECRUITMENT_GROUPS[1]
+    state.year = group.earliest_year
+    p.budget = group.cost
+    before = len(p.astronauts)
+    recruit_next_group(p, state, rng=random.Random(2))
+    new_hires = p.astronauts[before:]
+    assert len(new_hires) == group.size
+    for a in new_hires:
+        assert a.basic_training_remaining == BASIC_TRAINING_TURNS
+        assert not a.flight_ready
+        assert RECRUIT_SKILL_MIN <= a.capsule <= RECRUIT_SKILL_MAX
+
+
+def test_next_recruitment_preview_states() -> None:
+    state = _two_player_state()
+    start_game(state, rng=random.Random(1))
+    p = state.players[0]
+    group = RECRUITMENT_GROUPS[1]
+    # too early
+    state.year = group.earliest_year - 2
+    p.budget = group.cost + 50
+    g, ok, reason = next_recruitment_preview(p, state)
+    assert g is group and not ok and str(group.earliest_year) in reason
+    # affordable
+    state.year = group.earliest_year
+    g, ok, reason = next_recruitment_preview(p, state)
+    assert g is group and ok
+    # broke
+    p.budget = group.cost - 1
+    g, ok, reason = next_recruitment_preview(p, state)
+    assert g is group and not ok and "MB" in reason
+    # exhausted
+    p.next_recruitment_group = len(RECRUITMENT_GROUPS) + 1
+    g, ok, _ = next_recruitment_preview(p, state)
+    assert g is None and not ok
+
+
+def test_recruit_group_dict_roundtrip() -> None:
+    state = _two_player_state()
+    start_game(state, rng=random.Random(1))
+    p = state.players[0]
+    p.next_recruitment_group = 3
+    restored = GameState.from_dict(state.to_dict())
+    assert restored.players[0].next_recruitment_group == 3
+
+
+def test_legacy_player_dict_backfills_recruitment_pointer() -> None:
+    from baris.state import _player_from_dict
+    raw = {
+        "player_id": "x", "username": "X",
+        "side": Side.USA.value, "budget": 30, "prestige": 0,
+        "ready": True, "astronauts": [],
+        "mission_successes": {}, "architecture": None,
+        "turn_submitted": False,
+    }
+    p = _player_from_dict(raw)
+    assert p.next_recruitment_group == 2

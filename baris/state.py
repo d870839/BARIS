@@ -323,18 +323,61 @@ STARTING_ASTRONAUTS = 7
 DEATH_CHANCE_ON_FAIL = 0.25
 DEATH_PRESTIGE_PENALTY = 3
 
-# Historical starting rosters (last names, in selection-group order).
-# USA: Mercury Seven (selected 1959).
-# USSR: first-group cosmonauts (1960) plus Tereshkova (first female cosmonaut, 1962).
+# Phase J — recruitment groups. Group 1 is the starting roster; groups
+# 2-4 can be hired in order once their historical earliest_year arrives
+# and the player can afford the cost. Fresh recruits enter with
+# basic_training_remaining=BASIC_TRAINING_TURNS so they're unavailable
+# for a handful of seasons after they arrive.
+RECRUIT_SKILL_MIN = 15
+RECRUIT_SKILL_MAX = 40
+
+
+@dataclass(frozen=True)
+class RecruitmentGroup:
+    number: int
+    size: int
+    cost: int             # MB; group 1 is free (auto-hired at game start)
+    earliest_year: int    # earliest state.year the group can be recruited
+    us_names: tuple[str, ...]
+    ussr_names: tuple[str, ...]
+
+
+RECRUITMENT_GROUPS: tuple[RecruitmentGroup, ...] = (
+    # Group 1 — starting roster. USA: Mercury Seven (selected 1959).
+    # USSR: first-group cosmonauts (1960) plus Tereshkova.
+    RecruitmentGroup(
+        number=1, size=7, cost=0, earliest_year=1957,
+        us_names=("Shepard", "Grissom", "Glenn", "Carpenter",
+                  "Schirra", "Cooper", "Slayton"),
+        ussr_names=("Gagarin", "Titov", "Tereshkova", "Komarov",
+                    "Leonov", "Nikolayev", "Popovich"),
+    ),
+    # Group 2 — "New Nine" era (1962) / Soyuz-era cosmonauts.
+    RecruitmentGroup(
+        number=2, size=5, cost=25, earliest_year=1962,
+        us_names=("Armstrong", "Borman", "Conrad", "Lovell", "Young"),
+        ussr_names=("Belyayev", "Bykovsky", "Khrunov", "Volynov", "Zaikin"),
+    ),
+    # Group 3 — "The Fourteen" (1963).
+    RecruitmentGroup(
+        number=3, size=5, cost=35, earliest_year=1963,
+        us_names=("Aldrin", "Cernan", "Collins", "Scott", "Bean"),
+        ussr_names=("Artyukhin", "Gubarev", "Klimuk", "Sevastyanov", "Kubasov"),
+    ),
+    # Group 4 — "The Nineteen" (1966).
+    RecruitmentGroup(
+        number=4, size=5, cost=50, earliest_year=1966,
+        us_names=("Mattingly", "Mitchell", "Pogue", "Roosa", "Worden"),
+        ussr_names=("Grechko", "Kovalyonok", "Romanenko", "Strekalov", "Savinykh"),
+    ),
+)
+
+
+# Historical starting rosters, derived from Group 1 so there's one source
+# of truth. Kept as a name for older call-sites that reference it.
 HISTORICAL_ROSTERS: dict[str, tuple[str, ...]] = {
-    Side.USA.value: (
-        "Shepard", "Grissom", "Glenn", "Carpenter",
-        "Schirra", "Cooper", "Slayton",
-    ),
-    Side.USSR.value: (
-        "Gagarin", "Titov", "Tereshkova", "Komarov",
-        "Leonov", "Nikolayev", "Popovich",
-    ),
+    Side.USA.value: RECRUITMENT_GROUPS[0].us_names,
+    Side.USSR.value: RECRUITMENT_GROUPS[0].ussr_names,
 }
 
 # Per-side historical rocket names, mapped to our Light/Medium/Heavy classes.
@@ -581,6 +624,10 @@ class Player:
     # Phase D — cumulative lunar reconnaissance % and LM points.
     lunar_recon: int = LUNAR_RECON_BASE
     lm_points: int = 0
+    # Phase J — pointer into RECRUITMENT_GROUPS. Group 1 is auto-hired at
+    # start_game; this tracks which group is next for recruitment. Once it
+    # exceeds len(RECRUITMENT_GROUPS) the player has exhausted all hires.
+    next_recruitment_group: int = 2
 
     def rocket_reliability(self, rocket: Rocket) -> int:
         return self.reliability.get(rocket.value, 0)
@@ -731,6 +778,9 @@ def _player_from_dict(d: dict[str, Any]) -> Player:
     # to the LUNAR_RECON_BASE so mid-game saves keep making sense.
     data.setdefault("lunar_recon", LUNAR_RECON_BASE)
     data.setdefault("lm_points", 0)
+    # Phase J — legacy saves predate recruitment groups. Assume they've
+    # only hired group 1 (starting roster), so group 2 is next.
+    data.setdefault("next_recruitment_group", 2)
     return Player(**data)
 
 

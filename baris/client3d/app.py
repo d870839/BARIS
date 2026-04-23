@@ -460,6 +460,8 @@ class BarisClient(Entity):
             return "Nothing to scrub"
         if bid == "training":
             return "[E] Open Advanced Training console"
+        if bid == "recruit":
+            return "[E] Open Recruitment console"
         if bid.startswith("target:"):
             return f"[E] Set R&D target: {bid.split(':', 1)[1]}"
         if bid == "spend_plus":
@@ -549,6 +551,8 @@ class BarisClient(Entity):
             self.panel = panels_info.build_library_panel(self, camera.ui)
         elif panel_id == "training":
             self.panel = panels_info.build_training_panel(self, camera.ui)
+        elif panel_id == "recruit":
+            self.panel = panels_info.build_recruit_panel(self, camera.ui)
         elif panel_id == "result" and report is not None:
             self.panel = panels_action.build_result_panel(self, camera.ui, report)
         self._enter_ui_mode()
@@ -672,6 +676,9 @@ class BarisClient(Entity):
             if bid == "training":
                 self._open_panel("training")
                 return
+            if bid == "recruit":
+                self._open_panel("recruit")
+                return
             return
 
     # Legacy alias so existing input dispatch keeps working.
@@ -778,6 +785,13 @@ class BarisClient(Entity):
 
     def astro_cancel_training(self, astronaut_id: str) -> None:
         self.net.send(protocol.CANCEL_TRAINING, astronaut_id=astronaut_id)
+        self._refresh_current_panel()
+
+    def astro_recruit_group(self) -> None:
+        """Ask the server to hire the next recruitment group. Server
+        validates year + budget; we just refresh the panel so the new
+        status line shows up once state echoes back."""
+        self.net.send(protocol.RECRUIT_GROUP)
         self._refresh_current_panel()
 
     def mc_choose_architecture(self, arch: Architecture) -> None:

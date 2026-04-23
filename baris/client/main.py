@@ -679,6 +679,8 @@ class Client:
                         self.queued_objectives.discard(obj_id)
                     else:
                         self.queued_objectives.add(obj_id)
+            elif self.active_tab == TAB_ASTRONAUTS and event.key == pygame.K_r:
+                self.net.send(protocol.RECRUIT_GROUP)
             elif event.key == pygame.K_RETURN:
                 self._submit_turn(me)
         return True
@@ -1269,7 +1271,7 @@ class Client:
 
     # --- Astronauts tab -------------------------------------------------
     def _render_tab_astronauts(self, me: Player | None, opp: Player | None) -> None:
-        if me is None:
+        if me is None or self.state is None:
             return
         draw_text(self.screen, "ASTRONAUT ROSTER", (30, CONTENT_TOP + 10),
                   size=26, color=HIGHLIGHT, bold=True)
@@ -1278,6 +1280,26 @@ class Client:
             "Skills grow each season. Manned missions auto-select the top-skilled active crew.",
             (30, CONTENT_TOP + 50), size=14, color=DIM,
         )
+        # Phase J — next recruitment group status + [R] hotkey.
+        from baris.resolver import next_recruitment_preview
+        group, can_hire, reason = next_recruitment_preview(me, self.state)
+        if group is None:
+            recruit_line = "Recruitment: all four groups hired."
+            recruit_color = DIM
+        elif can_hire:
+            recruit_line = (
+                f"Recruitment: Group {group.number} available NOW "
+                f"(+{group.size} recruits, {group.cost} MB)  — press [R] to hire"
+            )
+            recruit_color = GREEN
+        else:
+            recruit_line = (
+                f"Recruitment: Group {group.number} "
+                f"(+{group.size} recruits, {group.cost} MB) — {reason}"
+            )
+            recruit_color = HIGHLIGHT
+        draw_text(self.screen, recruit_line, (30, CONTENT_TOP + 70),
+                  size=14, color=recruit_color)
         # Your roster — big
         card_w = 760
         card_h = 600

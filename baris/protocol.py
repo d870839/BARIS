@@ -13,6 +13,7 @@ CHOOSE_ARCHITECTURE = "choose_architecture"
 SCRUB_SCHEDULED = "scrub_scheduled"
 START_TRAINING = "start_training"
 CANCEL_TRAINING = "cancel_training"
+RECRUIT_GROUP = "recruit_group"
 
 # Server -> Client message types
 JOINED = "joined"
