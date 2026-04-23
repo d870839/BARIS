@@ -73,6 +73,15 @@ class MissionId(str, Enum):
     ORBITAL_EVA = "orbital_eva"
     MANNED_LUNAR_ORBIT = "manned_lunar_orbit"
     MANNED_LUNAR_LANDING = "manned_lunar_landing"
+    # Phase G — expanded catalog.
+    ORBITAL_DOCKING = "orbital_docking"
+    LM_EARTH_TEST = "lm_earth_test"
+    LM_LUNAR_TEST = "lm_lunar_test"
+    VENUS_FLYBY = "venus_flyby"
+    MARS_FLYBY = "mars_flyby"
+    MERCURY_FLYBY = "mercury_flyby"
+    JUPITER_FLYBY = "jupiter_flyby"
+    SATURN_FLYBY = "saturn_flyby"
 
 
 class ObjectiveId(str, Enum):
@@ -184,6 +193,33 @@ MISSIONS: tuple[Mission, ...] = (
     Mission(MissionId.MANNED_LUNAR_LANDING, "Manned lunar landing", Rocket.HEAVY, 35, 0.25, 35, 8, 15,
             tier=ProgramTier.THREE, manned=True, crew_size=3, primary_skill=Skill.LM_PILOT,
             requires_modules=(Module.LUNAR_KICKER, Module.EVA_SUIT)),
+    # Phase G — manned orbital docking.
+    Mission(MissionId.ORBITAL_DOCKING,      "Orbital docking",      Rocket.MEDIUM,22, 0.50, 14, 5,  7,
+            tier=ProgramTier.TWO, manned=True, crew_size=2, primary_skill=Skill.DOCKING,
+            requires_modules=(Module.DOCKING,)),
+    # Phase G — LM hardware tests (grant bonus LM points on success).
+    Mission(MissionId.LM_EARTH_TEST,        "LM test (Earth orbit)", Rocket.MEDIUM,24, 0.45, 12, 5,  6,
+            tier=ProgramTier.THREE, manned=True, crew_size=2, primary_skill=Skill.LM_PILOT),
+    Mission(MissionId.LM_LUNAR_TEST,        "LM test (lunar orbit)", Rocket.HEAVY, 30, 0.40, 18, 6,  8,
+            tier=ProgramTier.THREE, manned=True, crew_size=2, primary_skill=Skill.LM_PILOT,
+            requires_modules=(Module.LUNAR_KICKER,)),
+    # Phase G — interplanetary probes. All need the Lunar Kicker's
+    # deep-space injection stage. Distance ≈ difficulty.
+    Mission(MissionId.VENUS_FLYBY,          "Venus flyby",          Rocket.MEDIUM,14, 0.55,  8, 3,  4,
+            tier=ProgramTier.TWO,
+            requires_modules=(Module.LUNAR_KICKER,)),
+    Mission(MissionId.MARS_FLYBY,           "Mars flyby",           Rocket.MEDIUM,16, 0.50,  9, 3,  5,
+            tier=ProgramTier.TWO,
+            requires_modules=(Module.LUNAR_KICKER,)),
+    Mission(MissionId.MERCURY_FLYBY,        "Mercury flyby",        Rocket.MEDIUM,18, 0.45,  9, 3,  5,
+            tier=ProgramTier.THREE,
+            requires_modules=(Module.LUNAR_KICKER,)),
+    Mission(MissionId.JUPITER_FLYBY,        "Jupiter flyby",        Rocket.HEAVY, 22, 0.40, 10, 4,  6,
+            tier=ProgramTier.THREE,
+            requires_modules=(Module.LUNAR_KICKER,)),
+    Mission(MissionId.SATURN_FLYBY,         "Saturn flyby",         Rocket.HEAVY, 25, 0.35, 12, 4,  7,
+            tier=ProgramTier.THREE,
+            requires_modules=(Module.LUNAR_KICKER,)),
 )
 
 MISSIONS_BY_ID: dict[MissionId, Mission] = {m.id: m for m in MISSIONS}
@@ -403,6 +439,9 @@ LM_POINTS_FROM_MULTI_CREW          = 1
 LM_POINTS_FROM_ORBITAL_EVA         = 1
 LM_POINTS_FROM_UNMANNED_LANDING    = 1
 LM_POINTS_FROM_MANNED_LUNAR_ORBIT  = 2
+LM_POINTS_FROM_ORBITAL_DOCKING     = 1
+LM_POINTS_FROM_LM_EARTH_TEST       = 1
+LM_POINTS_FROM_LM_LUNAR_TEST       = 2
 
 # Phase E — multiple launch pads. Each player has LAUNCH_PADS pads
 # (default 3, labelled A/B/C). Every pad can hold one ScheduledLaunch at

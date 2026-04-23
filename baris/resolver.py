@@ -10,9 +10,12 @@ from baris.state import (
     ARCHITECTURE_COST_DELTA,
     ARCHITECTURE_SUCCESS_DELTA,
     ASSEMBLY_COST_FRACTION,
+    LM_POINTS_FROM_LM_EARTH_TEST,
+    LM_POINTS_FROM_LM_LUNAR_TEST,
     LM_POINTS_FROM_MANNED_LUNAR_ORBIT,
     LM_POINTS_FROM_MANNED_ORBITAL,
     LM_POINTS_FROM_MULTI_CREW,
+    LM_POINTS_FROM_ORBITAL_DOCKING,
     LM_POINTS_FROM_ORBITAL_EVA,
     LM_POINTS_FROM_UNMANNED_LANDING,
     LM_POINTS_PENALTY_PER_MISSING,
@@ -795,6 +798,15 @@ def _grant_lunar_progress(
             lm_gain = LM_POINTS_FROM_MULTI_CREW
         elif mid == MissionId.ORBITAL_EVA:
             lm_gain = LM_POINTS_FROM_ORBITAL_EVA
+        elif mid == MissionId.ORBITAL_DOCKING:
+            lm_gain = LM_POINTS_FROM_ORBITAL_DOCKING
+        elif mid == MissionId.LM_EARTH_TEST:
+            lm_gain = LM_POINTS_FROM_LM_EARTH_TEST
+        elif mid == MissionId.LM_LUNAR_TEST:
+            # Lunar LM test also feeds reconnaissance since the stage
+            # orbits the Moon alongside its hardware checkout.
+            _bump_recon(player, RECON_FROM_MANNED_LUNAR_ORBIT, state)
+            lm_gain = LM_POINTS_FROM_LM_LUNAR_TEST
         if lm_gain > 0:
             player.lm_points += lm_gain
             state.log.append(

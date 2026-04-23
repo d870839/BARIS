@@ -2100,3 +2100,113 @@ def test_eva_objective_still_filters_on_eva_suit() -> None:
         objectives=[ObjectiveId.EVA],
     )
     assert me.pending_objectives == [ObjectiveId.EVA.value]
+
+
+# ----------------------------------------------------------------------
+# Phase G — expanded mission catalog (flybys, LM tests, orbital docking)
+# ----------------------------------------------------------------------
+
+
+def test_venus_flyby_grants_prestige_without_lunar_recon() -> None:
+    """Interplanetary probes don't feed the Moon-specific recon counter."""
+    state = _two_player_state()
+    start_game(state, rng=random.Random(1))
+    me = state.players[0]
+    me.mission_successes[MissionId.SUBORBITAL.value] = 1  # unlock Tier 2
+    me.reliability[Rocket.MEDIUM.value] = 70
+    me.reliability[Module.LUNAR_KICKER.value] = 70
+    me.budget = 200
+    recon_before = me.lunar_recon
+    lm_before = me.lm_points
+
+    submit_turn(me, rd_rocket=None, rd_spend=0, launch=MissionId.VENUS_FLYBY)
+    submit_turn(state.players[1], rd_rocket=None, rd_spend=0, launch=None)
+    resolve_turn(state, rng=_FixedRng(0.0))
+    _fire_scheduled_launch(state, _FixedRng(0.0))
+
+    r = state.last_launches[0]
+    assert r.success is True
+    # Prestige bumped, lunar recon and LM points untouched.
+    assert me.prestige > 0
+    assert me.lunar_recon == recon_before
+    assert me.lm_points == lm_before
+
+
+def test_lm_earth_test_grants_one_lm_point() -> None:
+    state = _two_player_state()
+    start_game(state, rng=random.Random(1))
+    me = state.players[0]
+    # LM_EARTH_TEST is Tier 3 → unlock both prior tiers' prereqs.
+    me.mission_successes[MissionId.SUBORBITAL.value] = 1
+    me.mission_successes[MissionId.MULTI_CREW_ORBITAL.value] = 1
+    me.reliability[Rocket.MEDIUM.value] = 70
+    me.budget = 200
+
+    submit_turn(me, rd_rocket=None, rd_spend=0, launch=MissionId.LM_EARTH_TEST)
+    submit_turn(state.players[1], rd_rocket=None, rd_spend=0, launch=None)
+    resolve_turn(state, rng=_FixedRng(0.0))
+    _fire_scheduled_launch(state, _FixedRng(0.0))
+
+    assert state.last_launches[0].success is True
+    assert me.lm_points == 1
+
+
+def test_lm_lunar_test_grants_two_lm_points_and_recon() -> None:
+    state = _two_player_state()
+    start_game(state, rng=random.Random(1))
+    me = state.players[0]
+    me.mission_successes[MissionId.SUBORBITAL.value] = 1
+    me.mission_successes[MissionId.MULTI_CREW_ORBITAL.value] = 1
+    me.reliability[Rocket.HEAVY.value] = 70
+    me.reliability[Module.LUNAR_KICKER.value] = 70
+    me.budget = 200
+    recon_before = me.lunar_recon
+
+    submit_turn(me, rd_rocket=None, rd_spend=0, launch=MissionId.LM_LUNAR_TEST)
+    submit_turn(state.players[1], rd_rocket=None, rd_spend=0, launch=None)
+    resolve_turn(state, rng=_FixedRng(0.0))
+    _fire_scheduled_launch(state, _FixedRng(0.0))
+
+    assert state.last_launches[0].success is True
+    assert me.lm_points == 2
+    assert me.lunar_recon > recon_before  # lunar orbit → recon bump
+
+
+def test_orbital_docking_mission_needs_docking_module() -> None:
+    from baris.resolver import missing_modules
+    state = _two_player_state()
+    start_game(state, rng=random.Random(1))
+    me = state.players[0]
+    me.mission_successes[MissionId.SUBORBITAL.value] = 1  # unlock Tier 2
+    me.reliability[Rocket.MEDIUM.value] = 70
+    me.budget = 200
+
+    # No docking module → rejected.
+    assert missing_modules(me, MISSIONS_BY_ID[MissionId.ORBITAL_DOCKING]) == [Module.DOCKING]
+    submit_turn(me, rd_rocket=None, rd_spend=0, launch=MissionId.ORBITAL_DOCKING)
+    assert me.pending_launch is None
+
+    # Build it → accepted, and a successful resolve awards an LM point.
+    me.reliability[Module.DOCKING.value] = 70
+    submit_turn(me, rd_rocket=None, rd_spend=0, launch=MissionId.ORBITAL_DOCKING)
+    assert me.pending_launch == MissionId.ORBITAL_DOCKING.value
+    submit_turn(state.players[1], rd_rocket=None, rd_spend=0, launch=None)
+    resolve_turn(state, rng=_FixedRng(0.0))
+    _fire_scheduled_launch(state, _FixedRng(0.0))
+    assert state.last_launches[0].success is True
+    assert me.lm_points == 1
+
+
+def test_catalog_expanded_to_expected_size() -> None:
+    """Quick guard that the Phase G additions didn't accidentally go
+    missing — total missions should be 19 (11 pre-G + 8 new)."""
+    assert len(MISSIONS_BY_ID) == 19
+    # And every new id is present and has the right rough shape.
+    for new in (
+        MissionId.VENUS_FLYBY, MissionId.MARS_FLYBY, MissionId.MERCURY_FLYBY,
+        MissionId.JUPITER_FLYBY, MissionId.SATURN_FLYBY,
+        MissionId.ORBITAL_DOCKING, MissionId.LM_EARTH_TEST, MissionId.LM_LUNAR_TEST,
+    ):
+        m = MISSIONS_BY_ID[new]
+        assert m.name
+        assert m.launch_cost > 0

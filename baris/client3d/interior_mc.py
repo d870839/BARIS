@@ -40,16 +40,17 @@ from baris.state import (
 )
 
 
-ROOM_WIDTH = 22.0
+ROOM_WIDTH = 26.0
 ROOM_DEPTH = 18.0
 ROOM_HEIGHT = 5.0
 BUTTON_RANGE = 2.0
 
 # Mission grid
-MISSION_ROWS = 3
-MISSION_COLS = 4
+# Mission-grid layout: one row per tier. Each row centres on the pad
+# cluster and uses COL_X_OFFSET between adjacent pedestals so tiers with
+# different mission counts still line up symmetrically.
 ROW_Z_OFFSET = 2.4
-COL_X_OFFSET = 3.0
+COL_X_OFFSET = 2.1
 
 # All possible objectives in a fixed x-order on the west wall.
 ALL_OBJECTIVES: tuple[ObjectiveId, ...] = (
@@ -149,29 +150,31 @@ class MCInterior:
             scale=(door_half * 2, 0.6, 0.2),
             position=(0, ROOM_HEIGHT - 0.3, -half_d), color=wall,
         )
-        # Central console slab — pedestals sit on top of it.
+        # Central console slab — pedestals sit on top of it. Widened to
+        # hold the post-Phase-G catalog (Tier 2 now has 7 missions).
         Entity(
             parent=self.root, model="cube",
             position=(0, 0.3, 0),
-            scale=(12.0, 0.6, 8.0),
+            scale=(16.0, 0.6, 8.0),
             color=color.rgb32(70, 75, 90),
             collider="box",
         )
 
     def _build_mission_grid(self) -> None:
-        """3 rows × 4 cols of pedestals, assigned in MISSIONS order (Tier 1
-        row, Tier 2 row, Tier 3 row). 12 slots, 11 missions, one empty."""
+        """One row of pedestals per tier, centred on the console slab.
+        Rows carry whatever count their tier has — Phase G pushed Tier 2
+        up to seven missions, so row widths are no longer fixed."""
         missions = list(MISSIONS)
-        # Group by tier so each tier lands on its own row.
         rows = [
             [m for m in missions if _tier_for(m) == 1],
             [m for m in missions if _tier_for(m) == 2],
             [m for m in missions if _tier_for(m) == 3],
         ]
         for r, row_missions in enumerate(rows):
-            for c, m in enumerate(row_missions[:MISSION_COLS]):
-                x = (c - (MISSION_COLS - 1) / 2) * COL_X_OFFSET
-                z = (r - (MISSION_ROWS - 1) / 2) * ROW_Z_OFFSET
+            row_width = max(0, len(row_missions) - 1)
+            for c, m in enumerate(row_missions):
+                x = (c - row_width / 2) * COL_X_OFFSET
+                z = (r - (len(rows) - 1) / 2) * ROW_Z_OFFSET
                 # Pedestal base (on top of the console slab at y≈0.6).
                 Entity(
                     parent=self.root, model="cube",
