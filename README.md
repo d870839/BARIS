@@ -101,11 +101,18 @@ changes on the next run.
 Send them this block. They'll need Python 3.11+ and git.
 
 ```
-# One-time setup
+# One-time setup — swap in your fork's URL (e.g. https://github.com/<you>/BARIS.git)
 git clone <your-fork-url> baris
 cd baris
+# Active development happens on a feature branch, not main:
+git checkout claude/pull-baris-data-wd2K4
+
 python -m venv .venv
-source .venv/bin/activate        # Windows: .venv\Scripts\activate
+# Activate the venv — pick the one for your shell:
+source .venv/bin/activate             # macOS / Linux
+.\.venv\Scripts\activate               # Windows PowerShell
+.venv\Scripts\activate.bat             # Windows cmd.exe
+
 pip install -r requirements.txt          # 2D client
 # or, for the 3D walkaround client:
 # pip install -r requirements-3d.txt
@@ -118,6 +125,12 @@ python -m baris.client.main --name FriendName \
 
 Notes:
 - **`wss://`** (TLS), not `ws://`, and **no `:8765`** — the tunnel handles both.
+- **Windows PowerShell — "running scripts is disabled":** if activating the
+  venv fails with an execution-policy error, run this once as your user
+  (answer `Y` when prompted), then reopen the terminal:
+  ```
+  Set-ExecutionPolicy -Scope CurrentUser -ExecutionPolicy RemoteSigned
+  ```
 - First run on Windows may trigger a firewall prompt for the Python client;
   allow it on private networks.
 - 3D client is heavier (pulls in `ursina` + `panda3d`, ~50 MB). If install

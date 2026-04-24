@@ -59,7 +59,7 @@ def _panel_shell(
 def _close_button(client: "BarisClient", parent: Entity, y: float) -> Button:
     btn = Button(
         parent=parent, text="Close [Esc]",
-        position=(0, y), scale=(0.22, 0.05),
+        position=(0, y, -0.02), scale=(0.22, 0.05),
         color=color.rgb32(60, 70, 100),
     )
     btn.on_click = lambda: client.close_current_panel()
@@ -110,7 +110,7 @@ def build_lobby_panel(client: "BarisClient", parent: Entity) -> Entity:
     usa_btn = Button(
         parent=root,
         text=("[X] USA [1]" if usa_selected else "    USA [1]"),
-        position=(-0.17, -0.05), scale=(0.22, 0.055),
+        position=(-0.17, -0.05, -0.02), scale=(0.22, 0.055),
         color=(color.rgb32(80, 140, 220) if usa_selected
                else color.rgb32(35, 50, 90)),
         highlight_color=color.rgb32(110, 170, 240),
@@ -119,7 +119,7 @@ def build_lobby_panel(client: "BarisClient", parent: Entity) -> Entity:
     ussr_btn = Button(
         parent=root,
         text=("[X] USSR [2]" if ussr_selected else "    USSR [2]"),
-        position=(0.17, -0.05), scale=(0.22, 0.055),
+        position=(0.17, -0.05, -0.02), scale=(0.22, 0.055),
         color=(color.rgb32(220, 90, 90) if ussr_selected
                else color.rgb32(90, 35, 35)),
         highlight_color=color.rgb32(240, 120, 120),
@@ -130,7 +130,7 @@ def build_lobby_panel(client: "BarisClient", parent: Entity) -> Entity:
     ready_label = "Unready" if (me is not None and me.ready) else "Ready Up"
     ready_btn = Button(
         parent=root, text=f"{ready_label} [Enter]",
-        position=(0, -0.15), scale=(0.3, 0.06),
+        position=(0, -0.15, -0.02), scale=(0.3, 0.06),
         color=color.rgb32(50, 100, 60),
         highlight_color=color.rgb32(80, 150, 90),
     )

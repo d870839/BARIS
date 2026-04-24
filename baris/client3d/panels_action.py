@@ -79,7 +79,7 @@ def build_rd_panel(client: "BarisClient", parent: Entity) -> Entity:
             label = f"    {tlabel} [{hint}]"
         btn = Button(
             parent=root, text=label,
-            position=(x, 0.19), scale=(0.19, 0.06),
+            position=(x, 0.19, -0.02), scale=(0.19, 0.06),
             color=btn_color, highlight_color=btn_hl,
         )
         btn.on_click = (lambda v=tvalue: client.rd_set_target(v))
@@ -103,13 +103,13 @@ def build_rd_panel(client: "BarisClient", parent: Entity) -> Entity:
     # Spend controls.
     minus = Button(
         parent=root, text="-5 MB [Left]",
-        position=(-0.15, -0.18), scale=(0.18, 0.055),
+        position=(-0.15, -0.18, -0.02), scale=(0.18, 0.055),
         color=color.rgb32(60, 70, 100),
     )
     minus.on_click = lambda: client.rd_change_spend(-5)
     plus = Button(
         parent=root, text="+5 MB [Right]",
-        position=(0.15, -0.18), scale=(0.18, 0.055),
+        position=(0.15, -0.18, -0.02), scale=(0.18, 0.055),
         color=color.rgb32(60, 70, 100),
     )
     plus.on_click = lambda: client.rd_change_spend(5)
@@ -219,7 +219,7 @@ def build_mc_panel(client: "BarisClient", parent: Entity) -> Entity:
             hl = color.rgb32(130, 70, 70)
         btn = Button(
             parent=root, text=label,
-            position=(-0.22, y), scale=(0.4, 0.032),
+            position=(-0.22, y, -0.02), scale=(0.4, 0.032),
             color=fill, highlight_color=hl,
         )
         btn.on_click = (lambda mid=m.id: client.mc_select_mission(mid))
@@ -304,7 +304,7 @@ def build_mc_panel(client: "BarisClient", parent: Entity) -> Entity:
                 btn = Button(
                     parent=root,
                     text=f"{marker} {obj.name} {risk}",
-                    position=(0.22, oy), scale=(0.4, 0.036),
+                    position=(0.22, oy, -0.02), scale=(0.4, 0.036),
                     color=(
                         color.rgb32(80, 100, 60) if queued else color.rgb32(34, 44, 70)
                     ),
@@ -323,7 +323,7 @@ def build_mc_panel(client: "BarisClient", parent: Entity) -> Entity:
         for arch in (Architecture.LOR, Architecture.DA, Architecture.EOR, Architecture.LSR):
             btn = Button(
                 parent=root, text=arch.value,
-                position=(ax, -0.27), scale=(0.085, 0.05),
+                position=(ax, -0.27, -0.02), scale=(0.085, 0.05),
                 color=color.rgb32(70, 80, 100),
             )
             btn.on_click = (lambda a=arch: client.mc_choose_architecture(a))
@@ -332,7 +332,7 @@ def build_mc_panel(client: "BarisClient", parent: Entity) -> Entity:
     # Submit / scrub / close
     submit = Button(
         parent=root, text="SUBMIT TURN [Enter]",
-        position=(0.28, -0.37), scale=(0.28, 0.058),
+        position=(0.28, -0.37, -0.02), scale=(0.28, 0.058),
         color=color.rgb32(60, 120, 80),
         highlight_color=color.rgb32(90, 170, 110),
     )
@@ -347,13 +347,13 @@ def build_mc_panel(client: "BarisClient", parent: Entity) -> Entity:
         scrub_hl = color.rgb32(100, 80, 80)
     scrub = Button(
         parent=root, text="SCRUB",
-        position=(0.00, -0.37), scale=(0.18, 0.058),
+        position=(0.00, -0.37, -0.02), scale=(0.18, 0.058),
         color=scrub_color, highlight_color=scrub_hl,
     )
     scrub.on_click = lambda: client.mc_scrub_scheduled()
     cancel = Button(
         parent=root, text="Close [Esc]",
-        position=(-0.28, -0.37), scale=(0.2, 0.05),
+        position=(-0.28, -0.37, -0.02), scale=(0.2, 0.05),
         color=color.rgb32(60, 70, 100),
     )
     cancel.on_click = lambda: client.close_current_panel()
@@ -488,7 +488,7 @@ def build_result_panel(
 
     cont = Button(
         parent=root, text="Continue [Space]",
-        position=(0, -0.32), scale=(0.3, 0.055),
+        position=(0, -0.32, -0.02), scale=(0.3, 0.055),
         color=color.rgb32(60, 80, 120),
     )
     cont.on_click = lambda: client.advance_result_panel()
