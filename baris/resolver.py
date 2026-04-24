@@ -49,6 +49,10 @@ from baris.state import (
     GameState,
     HOSPITAL_CHANCE_ON_FAIL,
     HOSPITAL_STAY_TURNS,
+    INTEL_COST,
+    INTEL_RELIABILITY_NOISE,
+    INTEL_RUMOR_ACCURATE,
+    IntelReport,
     LaunchReport,
     MIN_RELIABILITY_TO_LAUNCH,
     MISSION_OBJECTIVES,
@@ -310,6 +314,89 @@ def recruit_next_group(
         added += 1
     player.budget -= group.cost
     player.next_recruitment_group += 1
+    return True
+
+
+# ----------------------------------------------------------------------
+# Phase H — intelligence
+# ----------------------------------------------------------------------
+
+
+def _intel_season_stamp(state: GameState) -> str:
+    """Season-unique key used to gate one-intel-per-season."""
+    return f"{state.year}-{state.season.value}"
+
+
+def intel_available(player: Player, state: GameState) -> tuple[bool, str]:
+    """Return (can_request, reason). reason is empty on success."""
+    if player.budget < INTEL_COST:
+        return False, f"need {INTEL_COST} MB"
+    if player.intel_requested_on == _intel_season_stamp(state):
+        return False, "already requested this season"
+    opponent = state.other_player(player.player_id) if state.other_player(player.player_id) else None
+    if opponent is None or opponent.side is None:
+        return False, "no opponent"
+    return True, ""
+
+
+def request_intel(
+    player: Player, state: GameState, rng: random.Random | None = None,
+) -> bool:
+    """Spend INTEL_COST MB and snapshot a noisy report on the opponent.
+    Returns True on success. Enforces one report per (year, season) via
+    Player.intel_requested_on. The report stored on the player is a
+    best-guess view — reliability bands are ±INTEL_RELIABILITY_NOISE,
+    and the rumored-mission field is the opponent's actual scheduled
+    launch with probability INTEL_RUMOR_ACCURATE, otherwise empty."""
+    ok, _reason = intel_available(player, state)
+    if not ok:
+        return False
+    rng = rng or random.Random()
+    opponent = state.other_player(player.player_id)
+    assert opponent is not None  # guarded by intel_available
+    # Reliability bands per rocket + module. Noise is symmetric around
+    # the true value, then clamped to [0, RELIABILITY_CAP].
+    estimates: dict[str, tuple[int, int]] = {}
+    for rocket in Rocket:
+        true = opponent.rocket_reliability(rocket)
+        low = max(0, true - INTEL_RELIABILITY_NOISE)
+        high = min(RELIABILITY_CAP, true + INTEL_RELIABILITY_NOISE)
+        estimates[rocket.value] = (low, high)
+    for module in Module:
+        true = opponent.module_reliability(module)
+        low = max(0, true - INTEL_RELIABILITY_NOISE)
+        high = min(RELIABILITY_CAP, true + INTEL_RELIABILITY_NOISE)
+        estimates[module.value] = (low, high)
+    # Rumored scheduled mission — pull from whatever's on the opponent's
+    # pads. Multiple pads are possible; pick the first scheduled, which
+    # is the one most likely to fly next.
+    rumored_id = ""
+    rumored_name = ""
+    scheduled = next(
+        (pad.scheduled_launch for pad in opponent.pads if pad.scheduled_launch),
+        None,
+    )
+    if scheduled is not None and rng.random() <= INTEL_RUMOR_ACCURATE:
+        rumored_id = scheduled.mission_id
+        mission = MISSIONS_BY_ID.get(MissionId(rumored_id)) if rumored_id else None
+        rumored_name = mission.name if mission else rumored_id
+
+    report = IntelReport(
+        taken_year=state.year,
+        taken_season=state.season.value,
+        opponent_side=opponent.side.value if opponent.side else "",
+        rocket_estimates=estimates,
+        rumored_mission=rumored_id,
+        rumored_mission_name=rumored_name,
+        active_crew_count=len(opponent.active_astronauts()),
+    )
+    player.latest_intel = report
+    player.intel_requested_on = _intel_season_stamp(state)
+    player.budget -= INTEL_COST
+    state.log.append(
+        f"INTEL: {player.username} requested a report on "
+        f"{opponent.side.value if opponent.side else '?'}."
+    )
     return True
 
 

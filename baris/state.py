@@ -483,6 +483,16 @@ MOOD_FAILURE_DROP              = 10
 MOOD_KIA_CREW_DROP             = 15   # extra hit for surviving crewmates
 MOOD_RETIREMENT_THRESHOLD      = 15   # at or below, astronaut retires
 
+# Phase H — Intelligence. Players can pay INTEL_COST once per season to
+# receive a noisy snapshot of the opponent's state. Reliability comes
+# back as a ±INTEL_RELIABILITY_NOISE band around the true value (clamped
+# to 0-RELIABILITY_CAP). The rumored-mission field is correct with
+# probability INTEL_RUMOR_ACCURATE — otherwise "" (intentional
+# misinformation).
+INTEL_COST                 = 10
+INTEL_RELIABILITY_NOISE    = 15
+INTEL_RUMOR_ACCURATE       = 0.8
+
 # Phase D — Lunar reconnaissance + LM (Lunar Module) points.
 #
 # Lunar recon tracks how thoroughly the moon has been surveyed before
@@ -595,6 +605,25 @@ class Astronaut:
 
 
 @dataclass
+class IntelReport:
+    """Phase H — one intelligence snapshot taken on the opponent.
+
+    Rocket/module estimates are stored as (low, high) bands rather than
+    exact numbers so the UI can display them as "55-85%" style readouts
+    that honestly convey the uncertainty. rumored_mission is the
+    opponent's scheduled MissionId.value at the moment of capture, with
+    probability INTEL_RUMOR_ACCURATE — otherwise empty to reflect
+    intentional misinformation."""
+    taken_year: int
+    taken_season: str
+    opponent_side: str                                   # Side.value
+    rocket_estimates: dict[str, tuple[int, int]] = field(default_factory=dict)
+    rumored_mission: str = ""
+    rumored_mission_name: str = ""
+    active_crew_count: int = 0
+
+
+@dataclass
 class Player:
     player_id: str
     username: str
@@ -628,6 +657,11 @@ class Player:
     # start_game; this tracks which group is next for recruitment. Once it
     # exceeds len(RECRUITMENT_GROUPS) the player has exhausted all hires.
     next_recruitment_group: int = 2
+    # Phase H — latest intelligence snapshot of the opponent (None until
+    # the player actually requests one). intel_requested_on is "year-season"
+    # of the most recent request so the server can enforce "one per season".
+    latest_intel: "IntelReport | None" = None
+    intel_requested_on: str = ""
 
     def rocket_reliability(self, rocket: Rocket) -> int:
         return self.reliability.get(rocket.value, 0)
@@ -788,7 +822,27 @@ def _player_from_dict(d: dict[str, Any]) -> Player:
     # Phase J — legacy saves predate recruitment groups. Assume they've
     # only hired group 1 (starting roster), so group 2 is next.
     data.setdefault("next_recruitment_group", 2)
+    # Phase H — rehydrate the intel snapshot dict into the dataclass,
+    # and backfill legacy saves that never knew about intel at all.
+    raw_intel = data.pop("latest_intel", None)
+    data["latest_intel"] = (
+        _intel_report_from_dict(raw_intel) if raw_intel else None
+    )
+    data.setdefault("intel_requested_on", "")
     return Player(**data)
+
+
+def _intel_report_from_dict(d: dict[str, Any]) -> IntelReport:
+    data = dict(d)
+    raw_est = data.get("rocket_estimates") or {}
+    data["rocket_estimates"] = {
+        k: tuple(v) if isinstance(v, (list, tuple)) else (v, v)
+        for k, v in raw_est.items()
+    }
+    data.setdefault("rumored_mission", "")
+    data.setdefault("rumored_mission_name", "")
+    data.setdefault("active_crew_count", 0)
+    return IntelReport(**data)
 
 
 def _astronaut_from_dict(d: dict[str, Any]) -> Astronaut:

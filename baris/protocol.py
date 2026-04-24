@@ -14,6 +14,7 @@ SCRUB_SCHEDULED = "scrub_scheduled"
 START_TRAINING = "start_training"
 CANCEL_TRAINING = "cancel_training"
 RECRUIT_GROUP = "recruit_group"
+REQUEST_INTEL = "request_intel"
 
 # Server -> Client message types
 JOINED = "joined"

@@ -28,6 +28,7 @@ from baris.client.net import NetClient
 from baris.client3d import launch as launch_scene
 from baris.client3d import panels_action, panels_info
 from baris.client3d.interior_astro import AstroInterior
+from baris.client3d.interior_intel import IntelInterior
 from baris.client3d.interior_library import LibraryInterior
 from baris.client3d.interior_mc import MCInterior
 from baris.client3d.interior_rd import RDInterior
@@ -51,10 +52,11 @@ log = logging.getLogger("baris.client3d")
 # (id, label, (x, z), roof color, interactive)
 # NASA-era roof accents: saturated Space-Race palette against white bodies.
 BUILDINGS: tuple[tuple[str, str, tuple[float, float], Any, bool], ...] = (
-    ("mc",      "Mission Control",   (0.0,   20.0), color.rgb32(240, 130,  50), True),   # NASA orange
-    ("rd",      "R&D Complex",       (0.0,  -20.0), color.rgb32( 60, 150,  90), True),   # lab green
-    ("astro",   "Astronaut Complex", (20.0,   0.0), color.rgb32( 40, 100, 200), True),   # sky blue
-    ("library", "Library",           (-20.0,  0.0), color.rgb32(200, 170, 110), True),   # archive tan
+    ("mc",      "Mission Control",   (0.0,   28.0), color.rgb32(240, 130,  50), True),   # NASA orange
+    ("rd",      "R&D Complex",       (0.0,  -28.0), color.rgb32( 60, 150,  90), True),   # lab green
+    ("astro",   "Astronaut Complex", (28.0,   0.0), color.rgb32( 40, 100, 200), True),   # sky blue
+    ("library", "Library",           (-28.0,  0.0), color.rgb32(200, 170, 110), True),   # archive tan
+    ("intel",   "Intelligence",      (20.0, -20.0), color.rgb32(120,  90, 160), True),   # dim purple
 )
 
 INTERACT_RANGE = 8.0
@@ -110,6 +112,7 @@ class BarisClient(Entity):
             "mc":      MCInterior(origin=(200.0, 0.0, 0.0)),
             "astro":   AstroInterior(origin=(100.0, 0.0, 100.0)),
             "library": LibraryInterior(origin=(200.0, 0.0, 100.0)),
+            "intel":   IntelInterior(origin=(300.0, 0.0, -100.0)),
         }
         # Back-compat shim: existing code that references self.rd_interior
         # continues to work without a big rename.
@@ -442,13 +445,14 @@ class BarisClient(Entity):
         "mc":      "Mission Control",
         "astro":   "Astronaut Complex",
         "library": "Library",
+        "intel":   "Intelligence Office",
     }
 
     def _prompt_for_interior_button(self, bid: str | None) -> str:
         """Human-readable hint for the currently-closest interior button."""
         room_label = self._INTERIOR_LABELS.get(self.in_interior or "", "")
         if bid is None:
-            if self.in_interior in ("astro", "library"):
+            if self.in_interior in ("astro", "library", "intel"):
                 return f"Inside the {room_label} — [Esc] walks out"
             return "Walk up to a button and press E"
         if bid == "exit":
@@ -462,6 +466,9 @@ class BarisClient(Entity):
             return "[E] Open Advanced Training console"
         if bid == "recruit":
             return "[E] Open Recruitment console"
+        if bid == "intel":
+            from baris.state import INTEL_COST
+            return f"[E] Request intelligence report ({INTEL_COST} MB)"
         if bid.startswith("target:"):
             return f"[E] Set R&D target: {bid.split(':', 1)[1]}"
         if bid == "spend_plus":
@@ -680,6 +687,12 @@ class BarisClient(Entity):
                 self._open_panel("recruit")
                 return
             return
+        # Intelligence Office buttons
+        if self.in_interior == "intel":
+            if bid == "intel":
+                self.intel_request_report()
+                return
+            return
 
     # Legacy alias so existing input dispatch keeps working.
     def _press_rd_interior_button(self) -> None:
@@ -793,6 +806,11 @@ class BarisClient(Entity):
         status line shows up once state echoes back."""
         self.net.send(protocol.RECRUIT_GROUP)
         self._refresh_current_panel()
+
+    def intel_request_report(self) -> None:
+        """Fire REQUEST_INTEL. Server validates budget + one-per-season
+        and echoes back new state with latest_intel populated."""
+        self.net.send(protocol.REQUEST_INTEL)
 
     def mc_choose_architecture(self, arch: Architecture) -> None:
         if self._turn_locked():

@@ -99,6 +99,7 @@ TAB_HUB        = "hub"
 TAB_RD         = "rd"
 TAB_ASTRONAUTS = "astronauts"
 TAB_MISSIONS   = "missions"
+TAB_INTEL      = "intel"
 TAB_LOG        = "log"
 
 TAB_KEYS = {
@@ -106,7 +107,8 @@ TAB_KEYS = {
     pygame.K_F2: TAB_RD,
     pygame.K_F3: TAB_ASTRONAUTS,
     pygame.K_F4: TAB_MISSIONS,
-    pygame.K_F5: TAB_LOG,
+    pygame.K_F5: TAB_INTEL,
+    pygame.K_F6: TAB_LOG,
 }
 
 # Mission Control hub map: clickable buildings laid out in a 2x4 grid.
@@ -117,7 +119,7 @@ HUB_BUILDINGS: tuple[tuple[str, str, str, str | None], ...] = (
     ("astro",    "Astronaut Complex", "Train & select crews",         TAB_ASTRONAUTS),
     ("mc",       "Mission Control",   "Schedule & review launches",   TAB_MISSIONS),
     ("library",  "Library",           "Flight records & event log",   TAB_LOG),
-    ("admin",    "Administration",    "HQ / budget / politics",       None),
+    ("intel",    "Intelligence",      "Spy on the opponent",          TAB_INTEL),
     ("vab",      "VAB",               "Vehicle Assembly Building",    None),
     ("infirm",   "Infirmary",         "Crew medical bay",             None),
     ("museum",   "Museum",            "Hall of firsts",               None),
@@ -140,7 +142,8 @@ BUILDING_KEY_HINTS: dict[str | None, str] = {
     TAB_RD:         "F2",
     TAB_ASTRONAUTS: "F3",
     TAB_MISSIONS:   "F4",
-    TAB_LOG:        "F5",
+    TAB_INTEL:      "F5",
+    TAB_LOG:        "F6",
 }
 
 
@@ -681,6 +684,8 @@ class Client:
                         self.queued_objectives.add(obj_id)
             elif self.active_tab == TAB_ASTRONAUTS and event.key == pygame.K_r:
                 self.net.send(protocol.RECRUIT_GROUP)
+            elif self.active_tab == TAB_INTEL and event.key == pygame.K_i:
+                self.net.send(protocol.REQUEST_INTEL)
             elif event.key == pygame.K_RETURN:
                 self._submit_turn(me)
         return True
@@ -969,6 +974,8 @@ class Client:
             self._render_tab_astronauts(me, opp)
         elif self.active_tab == TAB_MISSIONS:
             self._render_tab_missions(me, opp)
+        elif self.active_tab == TAB_INTEL:
+            self._render_tab_intel(me, opp)
         elif self.active_tab == TAB_LOG:
             self._render_tab_log()
 
@@ -1489,6 +1496,99 @@ class Client:
                 self._render_objective_toggles(me, objs, (20, panel_y + 68))
 
     # --- Log tab --------------------------------------------------------
+    def _render_tab_intel(self, me: Player | None, opp: Player | None) -> None:
+        if me is None or self.state is None:
+            return
+        from baris.resolver import intel_available
+        from baris.state import (
+            INTEL_COST, Module, Rocket, rocket_display_name,
+        )
+        draw_text(self.screen, "INTELLIGENCE OFFICE", (30, CONTENT_TOP + 10),
+                  size=26, color=HIGHLIGHT, bold=True)
+        draw_text(
+            self.screen,
+            "Pay MB for a noisy snapshot of the opponent's program. "
+            f"Cost: {INTEL_COST} MB. One report per season.",
+            (30, CONTENT_TOP + 50), size=14, color=DIM,
+        )
+        # Availability line + [I] hotkey prompt.
+        can_ask, reason = intel_available(me, self.state)
+        if can_ask:
+            status = f"Ready — press [I] to request a report ({INTEL_COST} MB)."
+            status_color = GREEN
+        else:
+            status = f"Unavailable: {reason}"
+            status_color = HIGHLIGHT
+        draw_text(self.screen, status, (30, CONTENT_TOP + 72),
+                  size=15, color=status_color)
+
+        # Report body
+        pygame.draw.rect(self.screen, PANEL, (20, CONTENT_TOP + 110, 1160, 680),
+                         border_radius=6)
+        pygame.draw.rect(self.screen, BORDER, (20, CONTENT_TOP + 110, 1160, 680), 1,
+                         border_radius=6)
+        x = 40
+        y = CONTENT_TOP + 130
+        report = me.latest_intel
+        if report is None:
+            draw_text(
+                self.screen,
+                "(No intelligence has been gathered yet.)",
+                (x, y), size=16, color=DIM,
+            )
+            return
+        opp_side = report.opponent_side or "?"
+        draw_text(
+            self.screen,
+            f"Latest report on {opp_side}  —  captured {report.taken_season} {report.taken_year}",
+            (x, y), size=18, color=HIGHLIGHT, bold=True,
+        )
+        y += 32
+        # Rocket + module bands.
+        draw_text(self.screen, "Estimated hardware reliability", (x, y),
+                  size=15, color=DIM)
+        y += 22
+        opp_side_enum = None
+        for s in (Side.USA, Side.USSR):
+            if s.value == opp_side:
+                opp_side_enum = s
+        for rocket in Rocket:
+            low, high = report.rocket_estimates.get(rocket.value, (0, 0))
+            label = rocket_display_name(rocket, opp_side_enum)
+            draw_text(
+                self.screen,
+                f"  {label:<18} {low:>3}-{high:>3}%",
+                (x, y), size=15, color=FG,
+            )
+            y += 22
+        for module in Module:
+            low, high = report.rocket_estimates.get(module.value, (0, 0))
+            draw_text(
+                self.screen,
+                f"  {module.value:<18} {low:>3}-{high:>3}%",
+                (x, y), size=15, color=FG,
+            )
+            y += 22
+        y += 10
+        draw_text(
+            self.screen,
+            f"Active astronauts on roster: {report.active_crew_count}",
+            (x, y), size=15, color=FG,
+        )
+        y += 22
+        if report.rumored_mission_name:
+            draw_text(
+                self.screen,
+                f"Rumored next mission:  {report.rumored_mission_name}",
+                (x, y), size=15, color=HIGHLIGHT,
+            )
+        else:
+            draw_text(
+                self.screen,
+                "Rumored next mission:  (unclear — sources disagree)",
+                (x, y), size=15, color=DIM,
+            )
+
     def _render_tab_log(self) -> None:
         assert self.state is not None
         draw_text(self.screen, "EVENT LOG", (30, CONTENT_TOP + 10),

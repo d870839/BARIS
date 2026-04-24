@@ -15,9 +15,11 @@ from baris.resolver import (
     effective_launch_cost,
     effective_lunar_modifier,
     effective_rocket,
+    intel_available,
     meets_architecture_prereqs,
     next_recruitment_preview,
     recruit_next_group,
+    request_intel,
     resolve_turn,
     scrub_scheduled,
     start_game,
@@ -72,6 +74,9 @@ from baris.state import (
     Player,
     ProgramTier,
     RELIABILITY_CAP,
+    INTEL_COST,
+    INTEL_RELIABILITY_NOISE,
+    IntelReport,
     RECRUIT_SKILL_MAX,
     RECRUIT_SKILL_MIN,
     RECRUITMENT_GROUPS,
@@ -2675,3 +2680,128 @@ def test_legacy_state_dict_backfills_news_fields() -> None:
     restored = GameState.from_dict(raw)
     assert restored.current_news == ""
     assert restored.current_news_id == ""
+
+
+# ----------------------------------------------------------------------
+# Phase H — intelligence
+# ----------------------------------------------------------------------
+
+
+def _start_for_intel() -> tuple[GameState, object, object]:
+    state = _two_player_state()
+    start_game(state, rng=random.Random(1))
+    return state, state.players[0], state.players[1]
+
+
+def test_request_intel_succeeds_and_charges_cost() -> None:
+    state, me, opp = _start_for_intel()
+    me.budget = 50
+    opp.reliability[Rocket.MEDIUM.value] = 60
+    assert request_intel(me, state, rng=random.Random(0))
+    assert me.budget == 50 - INTEL_COST
+    assert me.latest_intel is not None
+    assert me.latest_intel.opponent_side == Side.USSR.value
+
+
+def test_request_intel_rejected_without_budget() -> None:
+    state, me, _ = _start_for_intel()
+    me.budget = INTEL_COST - 1
+    assert not request_intel(me, state)
+    assert me.latest_intel is None
+
+
+def test_request_intel_rejected_twice_in_same_season() -> None:
+    state, me, _ = _start_for_intel()
+    me.budget = 100
+    assert request_intel(me, state, rng=random.Random(0))
+    assert not request_intel(me, state, rng=random.Random(0))
+    # Budget only charged once.
+    assert me.budget == 100 - INTEL_COST
+
+
+def test_intel_reliability_bands_bracket_truth() -> None:
+    state, me, opp = _start_for_intel()
+    me.budget = 50
+    opp.reliability[Rocket.HEAVY.value] = 70
+    request_intel(me, state, rng=random.Random(0))
+    low, high = me.latest_intel.rocket_estimates[Rocket.HEAVY.value]
+    assert low <= 70 <= high
+    assert high - low <= 2 * INTEL_RELIABILITY_NOISE
+
+
+def test_intel_rumor_truthful_when_roll_low() -> None:
+    from baris.state import MissionId, ScheduledLaunch
+    state, me, opp = _start_for_intel()
+    me.budget = 50
+    opp.pads[0].scheduled_launch = ScheduledLaunch(
+        mission_id=MissionId.SUBORBITAL.value,
+        rocket_class=Rocket.LIGHT.value,
+        launch_cost_total=10,
+        assembly_cost_paid=3,
+        launch_cost_remaining=7,
+        objectives=[],
+        scheduled_year=state.year,
+        scheduled_season=state.season.value,
+    )
+    # INTEL_RUMOR_ACCURATE = 0.8; rng.random()=0.0 ≤ 0.8 → truthful.
+    request_intel(me, state, rng=_FixedRng(0.0))
+    assert me.latest_intel.rumored_mission == MissionId.SUBORBITAL.value
+    assert me.latest_intel.rumored_mission_name
+
+
+def test_intel_rumor_misinformation_when_roll_high() -> None:
+    from baris.state import MissionId, ScheduledLaunch
+    state, me, opp = _start_for_intel()
+    me.budget = 50
+    opp.pads[0].scheduled_launch = ScheduledLaunch(
+        mission_id=MissionId.SUBORBITAL.value,
+        rocket_class=Rocket.LIGHT.value,
+        launch_cost_total=10,
+        assembly_cost_paid=3,
+        launch_cost_remaining=7,
+        objectives=[],
+        scheduled_year=state.year,
+        scheduled_season=state.season.value,
+    )
+    # rng.random()=0.99 > 0.8 → empty rumor (intentional misinformation).
+    request_intel(me, state, rng=_FixedRng(0.99))
+    assert me.latest_intel.rumored_mission == ""
+
+
+def test_intel_available_returns_clear_reasons() -> None:
+    state, me, _ = _start_for_intel()
+    me.budget = 0
+    ok, reason = intel_available(me, state)
+    assert not ok and "MB" in reason
+    me.budget = 100
+    me.intel_requested_on = f"{state.year}-{state.season.value}"
+    ok, reason = intel_available(me, state)
+    assert not ok and "season" in reason
+    me.intel_requested_on = ""
+    ok, _ = intel_available(me, state)
+    assert ok
+
+
+def test_intel_report_dict_roundtrip() -> None:
+    state, me, opp = _start_for_intel()
+    me.budget = 50
+    request_intel(me, state, rng=random.Random(0))
+    restored = GameState.from_dict(state.to_dict())
+    r = restored.players[0].latest_intel
+    assert isinstance(r, IntelReport)
+    assert r.opponent_side == me.latest_intel.opponent_side
+    assert r.rocket_estimates == me.latest_intel.rocket_estimates
+
+
+def test_legacy_player_dict_backfills_intel_fields() -> None:
+    from baris.state import _player_from_dict
+    raw = {
+        "player_id": "x", "username": "X",
+        "side": Side.USA.value, "budget": 30, "prestige": 0,
+        "ready": True, "astronauts": [],
+        "mission_successes": {}, "architecture": None,
+        "turn_submitted": False,
+    }
+    p = _player_from_dict(raw)
+    assert p.latest_intel is None
+    assert p.intel_requested_on == ""
