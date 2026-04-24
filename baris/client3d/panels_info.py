@@ -50,7 +50,7 @@ def _panel_shell(
     Text(
         text=title, parent=root,
         position=(0, height / 2 - 0.05),
-        origin=(0, 0),
+        origin=(0, 0), z=-0.01,
         scale=1.8, color=color.rgb32(*title_color),
     )
     return root, width, height
@@ -90,7 +90,7 @@ def build_lobby_panel(client: "BarisClient", parent: Entity) -> Entity:
             Text(
                 text=f"{p.username} [{side}]  —  {ready}{tag}",
                 parent=root, position=(-0.3, y),
-                origin=(-0.5, 0.5), scale=1.05,
+                origin=(-0.5, 0.5), z=-0.01, scale=1.05,
                 color=tint,
             )
             y -= 0.05
@@ -98,7 +98,7 @@ def build_lobby_panel(client: "BarisClient", parent: Entity) -> Entity:
             Text(
                 text="Waiting for opponent to join…",
                 parent=root, position=(0, y),
-                origin=(0, 0), scale=1.0,
+                origin=(0, 0), z=-0.01, scale=1.0,
                 color=color.rgb32(180, 180, 180),
             )
 
@@ -139,7 +139,7 @@ def build_lobby_panel(client: "BarisClient", parent: Entity) -> Entity:
     Text(
         text="The game starts the moment both players are READY on opposite sides.",
         parent=root, position=(0, -0.24),
-        origin=(0, 0), scale=0.9,
+        origin=(0, 0), z=-0.01, scale=0.9,
         color=color.rgb32(140, 150, 170),
     )
     return root
@@ -163,7 +163,7 @@ def build_astro_panel(client: "BarisClient", parent: Entity) -> Entity:
     )
     Text(
         text=header, parent=root,
-        position=(-0.4, 0.3), origin=(-0.5, 0.5),
+        position=(-0.4, 0.3), origin=(-0.5, 0.5), z=-0.01,
         scale=0.9, color=color.rgb32(160, 170, 195),
     )
     y = 0.25
@@ -181,7 +181,7 @@ def build_astro_panel(client: "BarisClient", parent: Entity) -> Entity:
         )
         Text(
             text=row, parent=root,
-            position=(-0.4, y), origin=(-0.5, 0.5),
+            position=(-0.4, y), origin=(-0.5, 0.5), z=-0.01,
             scale=0.9,
             color=(
                 color.rgb32(220, 90, 90)  if astro.status == "kia"
@@ -194,7 +194,7 @@ def build_astro_panel(client: "BarisClient", parent: Entity) -> Entity:
     Text(
         text="Top-skilled active astronauts are auto-selected for manned missions.",
         parent=root, position=(0, -0.3),
-        origin=(0, 0), scale=0.9,
+        origin=(0, 0), z=-0.01, scale=0.9,
         color=color.rgb32(140, 150, 170),
     )
     _close_button(client, root, -0.37)
@@ -216,14 +216,14 @@ def build_library_panel(client: "BarisClient", parent: Entity) -> Entity:
         Text(
             text="(No events yet.)",
             parent=root, position=(0, 0),
-            origin=(0, 0), scale=1.0,
+            origin=(0, 0), z=-0.01, scale=1.0,
             color=color.rgb32(180, 180, 180),
         )
     else:
         for line in lines:
             Text(
                 text=line, parent=root,
-                position=(-0.42, y), origin=(-0.5, 0.5),
+                position=(-0.42, y), origin=(-0.5, 0.5), z=-0.01,
                 scale=0.85, color=color.rgb32(220, 225, 235),
             )
             y -= 0.033
@@ -242,7 +242,7 @@ def build_library_panel(client: "BarisClient", parent: Entity) -> Entity:
         label += ", ".join(mine) if mine else "none yet"
         Text(
             text=label, parent=root,
-            position=(-0.42, firsts_y), origin=(-0.5, 0.5),
+            position=(-0.42, firsts_y), origin=(-0.5, 0.5), z=-0.01,
             scale=0.9,
             color=color.rgb32(240, 200, 90) if mine else color.rgb32(140, 150, 170),
         )

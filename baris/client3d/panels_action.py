@@ -53,7 +53,7 @@ def build_rd_panel(client: "BarisClient", parent: Entity) -> Entity:
     Text(
         text=f"Budget: {me.budget} MB      Queued spend: {client.rd_spend} MB",
         parent=root, position=(0, 0.3),
-        origin=(0, 0), scale=1.1, color=color.rgb32(220, 225, 235),
+        origin=(0, 0), z=-0.01, scale=1.1, color=color.rgb32(220, 225, 235),
     )
 
     # Target buttons: Light / Medium / Heavy / Docking Module.
@@ -95,7 +95,7 @@ def build_rd_panel(client: "BarisClient", parent: Entity) -> Entity:
         )
         Text(
             text=f"{tlabel:<16} {rel:>3}%   {tag}",
-            parent=root, position=(-0.4, y), origin=(-0.5, 0.5),
+            parent=root, position=(-0.4, y), origin=(-0.5, 0.5), z=-0.01,
             scale=1.0, color=color.rgb32(*tag_color),
         )
         y -= 0.05
@@ -120,7 +120,7 @@ def build_rd_panel(client: "BarisClient", parent: Entity) -> Entity:
             "Each 3 MB buys one stochastic R&D roll against the target."
         ),
         parent=root, position=(0, -0.28),
-        origin=(0, 0), scale=0.9, color=color.rgb32(140, 150, 170),
+        origin=(0, 0), z=-0.01, scale=0.9, color=color.rgb32(140, 150, 170),
     )
     _close_button(client, root, -0.37)
     return root
@@ -148,11 +148,11 @@ def build_mc_panel(client: "BarisClient", parent: Entity) -> Entity:
             f"Prestige {me.prestige}   Programs: {format_programs(me)}"
         ),
         parent=root, position=(-0.42, 0.31),
-        origin=(-0.5, 0.5), scale=0.95, color=color.rgb32(220, 225, 235),
+        origin=(-0.5, 0.5), z=-0.01, scale=0.95, color=color.rgb32(220, 225, 235),
     )
     Text(
         text=rd_summary, parent=root,
-        position=(-0.42, 0.27), origin=(-0.5, 0.5),
+        position=(-0.42, 0.27), origin=(-0.5, 0.5), z=-0.01,
         scale=0.95, color=color.rgb32(160, 200, 160),
     )
 
@@ -174,7 +174,7 @@ def build_mc_panel(client: "BarisClient", parent: Entity) -> Entity:
         pad_bits.append(f"{pad.pad_id}:{name[:14]}")
     Text(
         text="PADS: " + "   ".join(pad_bits),
-        parent=root, position=(-0.42, 0.235), origin=(-0.5, 0.5),
+        parent=root, position=(-0.42, 0.235), origin=(-0.5, 0.5), z=-0.01,
         scale=0.95, color=color.rgb32(240, 200, 90),
     )
 
@@ -183,7 +183,7 @@ def build_mc_panel(client: "BarisClient", parent: Entity) -> Entity:
     Text(
         text="Available missions (click to queue):",
         parent=root, position=(-0.42, 0.22),
-        origin=(-0.5, 0.5), scale=0.95, color=color.rgb32(160, 170, 195),
+        origin=(-0.5, 0.5), z=-0.01, scale=0.95, color=color.rgb32(160, 170, 195),
     )
     y = 0.175
     for m in visible[:10]:
@@ -228,14 +228,14 @@ def build_mc_panel(client: "BarisClient", parent: Entity) -> Entity:
     # ---- Right column: queued mission + briefing -------------------
     Text(
         text="QUEUED", parent=root,
-        position=(0.22, 0.22), origin=(0, 0),
+        position=(0.22, 0.22), origin=(0, 0), z=-0.01,
         scale=1.05, color=color.rgb32(240, 200, 90),
     )
     if client.queued_mission is None:
         Text(
             text="(no mission queued)",
             parent=root, position=(0.22, 0.16),
-            origin=(0, 0), scale=0.95, color=color.rgb32(140, 150, 170),
+            origin=(0, 0), z=-0.01, scale=0.95, color=color.rgb32(140, 150, 170),
         )
     else:
         m = MISSIONS_BY_ID[client.queued_mission]
@@ -258,7 +258,7 @@ def build_mc_panel(client: "BarisClient", parent: Entity) -> Entity:
 
         Text(
             text=f"{m.name}", parent=root,
-            position=(0.22, 0.16), origin=(0, 0),
+            position=(0.22, 0.16), origin=(0, 0), z=-0.01,
             scale=1.0, color=color.rgb32(240, 220, 180),
         )
         lunar_line = ""
@@ -280,7 +280,7 @@ def build_mc_panel(client: "BarisClient", parent: Entity) -> Entity:
         )
         Text(
             text=brief, parent=root,
-            position=(0.03, 0.1), origin=(-0.5, 0.5),
+            position=(0.03, 0.1), origin=(-0.5, 0.5), z=-0.01,
             scale=0.9, color=color.rgb32(220, 225, 235),
         )
 
@@ -290,7 +290,7 @@ def build_mc_panel(client: "BarisClient", parent: Entity) -> Entity:
             Text(
                 text="Objectives (click to toggle):",
                 parent=root, position=(0.22, -0.08),
-                origin=(0, 0), scale=0.9, color=color.rgb32(160, 170, 195),
+                origin=(0, 0), z=-0.01, scale=0.9, color=color.rgb32(160, 170, 195),
             )
             oy = -0.13
             for obj in obj_list:
@@ -317,7 +317,7 @@ def build_mc_panel(client: "BarisClient", parent: Entity) -> Entity:
         Text(
             text="Lunar architecture (one-way choice):",
             parent=root, position=(-0.42, -0.22),
-            origin=(-0.5, 0.5), scale=0.95, color=color.rgb32(240, 200, 90),
+            origin=(-0.5, 0.5), z=-0.01, scale=0.95, color=color.rgb32(240, 200, 90),
         )
         ax = -0.32
         for arch in (Architecture.LOR, Architecture.DA, Architecture.EOR, Architecture.LSR):
