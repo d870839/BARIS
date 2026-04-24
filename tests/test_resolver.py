@@ -77,6 +77,8 @@ from baris.state import (
     INTEL_COST,
     INTEL_RELIABILITY_NOISE,
     IntelReport,
+    MissionHistoryEntry,
+    PrestigeSnapshot,
     RECRUIT_SKILL_MAX,
     RECRUIT_SKILL_MIN,
     RECRUITMENT_GROUPS,
@@ -2805,3 +2807,120 @@ def test_legacy_player_dict_backfills_intel_fields() -> None:
     p = _player_from_dict(raw)
     assert p.latest_intel is None
     assert p.intel_requested_on == ""
+
+
+# ----------------------------------------------------------------------
+# Phase L — Museum: mission history + prestige timeline
+# ----------------------------------------------------------------------
+
+
+def test_start_game_seeds_prestige_timeline_at_zero() -> None:
+    state = _two_player_state()
+    start_game(state, rng=random.Random(1))
+    assert len(state.prestige_timeline) == 1
+    snap = state.prestige_timeline[0]
+    assert snap.year == state.year
+    assert snap.usa_prestige == 0
+    assert snap.ussr_prestige == 0
+    # No missions have flown yet.
+    assert state.mission_history == []
+
+
+def test_season_advance_appends_prestige_snapshot() -> None:
+    state = _two_player_state()
+    start_game(state, rng=random.Random(1))
+    # Submit two empty turns to advance one season.
+    for p in state.players:
+        submit_turn(p, rd_rocket=None, rd_spend=0, launch=None)
+    with _no_news():
+        resolve_turn(state, rng=random.Random(5))
+    # Seeded snapshot (t=0) + post-advance snapshot = 2 entries.
+    assert len(state.prestige_timeline) == 2
+    last = state.prestige_timeline[-1]
+    assert (last.year, last.season) == (state.year, state.season.value)
+
+
+def test_successful_launch_appends_mission_history() -> None:
+    state = _two_player_state()
+    start_game(state, rng=random.Random(1))
+    me = state.players[0]
+    me.reliability[Rocket.LIGHT.value] = 80
+    submit_turn(me, rd_rocket=None, rd_spend=0, launch=MissionId.SUBORBITAL)
+    submit_turn(state.players[1], rd_rocket=None, rd_spend=0, launch=None)
+    with _no_news():
+        resolve_turn(state, rng=_FixedRng(0.99))
+        _fire_scheduled_launch(state, _FixedRng(0.0))
+    entries = [e for e in state.mission_history
+               if e.side == Side.USA.value
+               and e.mission_id == MissionId.SUBORBITAL.value]
+    assert len(entries) == 1
+    e = entries[0]
+    assert e.success is True
+    assert e.manned is False
+    assert e.first_claimed  # first-ever suborbital
+    assert e.prestige_delta > 0
+
+
+def test_failed_launch_also_appends_history() -> None:
+    state = _two_player_state()
+    start_game(state, rng=random.Random(1))
+    me = state.players[0]
+    me.reliability[Rocket.LIGHT.value] = 30  # above MIN_RELIABILITY_TO_LAUNCH
+    submit_turn(me, rd_rocket=None, rd_spend=0, launch=MissionId.SUBORBITAL)
+    submit_turn(state.players[1], rd_rocket=None, rd_spend=0, launch=None)
+    with _no_news():
+        resolve_turn(state, rng=_FixedRng(0.99))
+        _fire_scheduled_launch(state, _FixedRng(0.99))
+    entries = [e for e in state.mission_history
+               if e.mission_id == MissionId.SUBORBITAL.value]
+    assert len(entries) == 1
+    assert entries[0].success is False
+
+
+def test_aborted_launch_not_recorded_in_history() -> None:
+    state = _two_player_state()
+    start_game(state, rng=random.Random(1))
+    me = state.players[0]
+    # Reliability below MIN_RELIABILITY_TO_LAUNCH triggers abort path.
+    me.reliability[Rocket.LIGHT.value] = 10
+    submit_turn(me, rd_rocket=None, rd_spend=0, launch=MissionId.SUBORBITAL)
+    submit_turn(state.players[1], rd_rocket=None, rd_spend=0, launch=None)
+    before = len(state.mission_history)
+    with _no_news():
+        resolve_turn(state, rng=_FixedRng(0.99))
+        _fire_scheduled_launch(state, _FixedRng(0.99))
+    assert len(state.mission_history) == before
+
+
+def test_museum_dict_roundtrip() -> None:
+    state = _two_player_state()
+    start_game(state, rng=random.Random(1))
+    state.mission_history.append(MissionHistoryEntry(
+        year=1958, season="Fall", side=Side.USA.value,
+        mission_id=MissionId.SUBORBITAL.value,
+        mission_name="Sub-orbital flight",
+        rocket="Redstone",
+        success=True, prestige_delta=5, first_claimed=True,
+    ))
+    state.prestige_timeline.append(PrestigeSnapshot(
+        year=1958, season="Fall", usa_prestige=5, ussr_prestige=0,
+    ))
+    restored = GameState.from_dict(state.to_dict())
+    assert len(restored.mission_history) == 1
+    r = restored.mission_history[0]
+    assert r.mission_name == "Sub-orbital flight"
+    assert r.success is True
+    assert r.first_claimed is True
+    assert len(restored.prestige_timeline) >= 2
+    assert restored.prestige_timeline[-1].usa_prestige == 5
+
+
+def test_legacy_state_dict_backfills_museum_fields() -> None:
+    state = _two_player_state()
+    start_game(state, rng=random.Random(1))
+    raw = state.to_dict()
+    raw.pop("mission_history", None)
+    raw.pop("prestige_timeline", None)
+    restored = GameState.from_dict(raw)
+    assert restored.mission_history == []
+    assert restored.prestige_timeline == []

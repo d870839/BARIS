@@ -54,6 +54,8 @@ from baris.state import (
     INTEL_RUMOR_ACCURATE,
     IntelReport,
     LaunchReport,
+    MissionHistoryEntry,
+    PrestigeSnapshot,
     MIN_RELIABILITY_TO_LAUNCH,
     MISSION_OBJECTIVES,
     MISSIONS_BY_ID,
@@ -200,6 +202,9 @@ def start_game(
         + (" [DEBUG MODE]" if debug else "")
         + "."
     )
+    # Phase L — seed the timeline at turn 0 with the starting prestige
+    # (zero for both sides) so the museum line chart has its first point.
+    _snapshot_prestige(state)
 
 
 def _apply_debug_preseed(player: Player) -> None:
@@ -564,6 +569,7 @@ def resolve_turn(state: GameState, rng: random.Random | None = None) -> None:
         state.season, state.year = next_season(state.season, state.year)
         state.log.append(f"Advancing to {state.season.value} {state.year}.")
         _roll_season_news(state, rng)
+        _snapshot_prestige(state)
 
 
 # ----------------------------------------------------------------------
@@ -822,6 +828,22 @@ def _resolve_pad_launch(
             f"{player.username}: Pad {pad.pad_id} damaged in the incident — "
             f"{PAD_REPAIR_TURNS} seasons of repair needed."
         )
+    # Phase L — permanent museum record of this launch.
+    if not report.aborted:
+        state.mission_history.append(MissionHistoryEntry(
+            year=state.year,
+            season=state.season.value,
+            side=report.side,
+            mission_id=report.mission_id,
+            mission_name=report.mission_name,
+            rocket=report.rocket,
+            manned=report.manned,
+            crew=list(report.crew),
+            success=report.success,
+            prestige_delta=report.prestige_delta,
+            first_claimed=report.first_claimed,
+            deaths=list(report.deaths),
+        ))
 
 
 def _launch_damaged_pad(report: LaunchReport) -> bool:
@@ -1493,6 +1515,20 @@ _NEWS_POOL: tuple[tuple[str, int, Any], ...] = (
 # no-op. Lets targeted tests (e.g. mood-drop assertions) isolate the
 # mechanic they're exercising from random news-card side effects.
 _news_enabled: bool = True
+
+
+def _snapshot_prestige(state: GameState) -> None:
+    """Phase L — record both players' current prestige at the active
+    (year, season). Called right after season advance in resolve_turn
+    and once at game start to anchor the timeline at t=0."""
+    usa = next((p for p in state.players if p.side == Side.USA), None)
+    ussr = next((p for p in state.players if p.side == Side.USSR), None)
+    state.prestige_timeline.append(PrestigeSnapshot(
+        year=state.year,
+        season=state.season.value,
+        usa_prestige=usa.prestige if usa is not None else 0,
+        ussr_prestige=ussr.prestige if ussr is not None else 0,
+    ))
 
 
 def _roll_season_news(state: GameState, rng: random.Random) -> None:

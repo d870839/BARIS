@@ -768,6 +768,12 @@ class GameState:
     # so UIs can render icons / colour-code by event type if desired.
     current_news: str = ""
     current_news_id: str = ""
+    # Phase L — Museum.
+    # mission_history: every launch ever resolved this game, in launch
+    # order. prestige_timeline: one snapshot per season so the museum
+    # can plot a line chart.
+    mission_history: list["MissionHistoryEntry"] = field(default_factory=list)
+    prestige_timeline: list["PrestigeSnapshot"] = field(default_factory=list)
 
     def to_dict(self) -> dict[str, Any]:
         return asdict(self)
@@ -777,6 +783,8 @@ class GameState:
         players = [_player_from_dict(p) for p in d.get("players", [])]
         raw_launches = d.get("last_launches") or []
         last_launches = [_launch_report_from_dict(r) for r in raw_launches]
+        raw_history = d.get("mission_history") or []
+        raw_timeline = d.get("prestige_timeline") or []
         return cls(
             phase=Phase(d["phase"]),
             season=Season(d["season"]),
@@ -788,6 +796,8 @@ class GameState:
             last_launches=last_launches,
             current_news=d.get("current_news", ""),
             current_news_id=d.get("current_news_id", ""),
+            mission_history=[_mission_history_from_dict(m) for m in raw_history],
+            prestige_timeline=[_prestige_snapshot_from_dict(s) for s in raw_timeline],
         )
 
     def find_player(self, player_id: str) -> Player | None:
@@ -921,6 +931,58 @@ def _launch_report_from_dict(d: dict[str, Any]) -> LaunchReport:
     raw_objs = data.get("objectives") or []
     data["objectives"] = [ObjectiveReport(**o) for o in raw_objs]
     return LaunchReport(**data)
+
+
+# ----------------------------------------------------------------------
+# Phase L — Museum: mission history + per-season prestige timeline
+# ----------------------------------------------------------------------
+
+
+@dataclass
+class MissionHistoryEntry:
+    """One permanent line in the in-game museum: what flew, when, for
+    whom, with what crew, and how it ended. Appended during resolve_turn
+    right after each LaunchReport is finalized; kept in launch order."""
+    year: int
+    season: str               # Season.value when the launch resolved
+    side: str                 # Side.value of the launching player
+    mission_id: str           # MissionId.value
+    mission_name: str
+    rocket: str               # side-aware display name
+    manned: bool = False
+    crew: list[str] = field(default_factory=list)
+    success: bool = False
+    prestige_delta: int = 0
+    first_claimed: bool = False
+    deaths: list[str] = field(default_factory=list)
+
+
+@dataclass
+class PrestigeSnapshot:
+    """One (year, season) sample of both sides' prestige. Appended once
+    per season advance so the museum can draw a timeline."""
+    year: int
+    season: str
+    usa_prestige: int = 0
+    ussr_prestige: int = 0
+
+
+def _mission_history_from_dict(d: dict[str, Any]) -> MissionHistoryEntry:
+    data = dict(d)
+    data.setdefault("manned", False)
+    data.setdefault("crew", [])
+    data.setdefault("success", False)
+    data.setdefault("prestige_delta", 0)
+    data.setdefault("first_claimed", False)
+    data.setdefault("deaths", [])
+    return MissionHistoryEntry(**data)
+
+
+def _prestige_snapshot_from_dict(d: dict[str, Any]) -> PrestigeSnapshot:
+    data = dict(d)
+    data.setdefault("usa_prestige", 0)
+    data.setdefault("ussr_prestige", 0)
+    return PrestigeSnapshot(**data)
 
 
 @dataclass

@@ -31,6 +31,7 @@ from baris.client3d.interior_astro import AstroInterior
 from baris.client3d.interior_intel import IntelInterior
 from baris.client3d.interior_library import LibraryInterior
 from baris.client3d.interior_mc import MCInterior
+from baris.client3d.interior_museum import MuseumInterior
 from baris.client3d.interior_rd import RDInterior
 from baris.state import (
     Architecture,
@@ -57,6 +58,7 @@ BUILDINGS: tuple[tuple[str, str, tuple[float, float], Any, bool], ...] = (
     ("astro",   "Astronaut Complex", (28.0,   0.0), color.rgb32( 40, 100, 200), True),   # sky blue
     ("library", "Library",           (-28.0,  0.0), color.rgb32(200, 170, 110), True),   # archive tan
     ("intel",   "Intelligence",      (20.0, -20.0), color.rgb32(120,  90, 160), True),   # dim purple
+    ("museum",  "Museum",            (-20.0, 20.0), color.rgb32(180, 150,  60), True),   # bronze
 )
 
 INTERACT_RANGE = 8.0
@@ -113,6 +115,7 @@ class BarisClient(Entity):
             "astro":   AstroInterior(origin=(100.0, 0.0, 100.0)),
             "library": LibraryInterior(origin=(200.0, 0.0, 100.0)),
             "intel":   IntelInterior(origin=(300.0, 0.0, -100.0)),
+            "museum":  MuseumInterior(origin=(-100.0, 0.0, 200.0)),
         }
         # Back-compat shim: existing code that references self.rd_interior
         # continues to work without a big rename.
@@ -446,13 +449,14 @@ class BarisClient(Entity):
         "astro":   "Astronaut Complex",
         "library": "Library",
         "intel":   "Intelligence Office",
+        "museum":  "Museum",
     }
 
     def _prompt_for_interior_button(self, bid: str | None) -> str:
         """Human-readable hint for the currently-closest interior button."""
         room_label = self._INTERIOR_LABELS.get(self.in_interior or "", "")
         if bid is None:
-            if self.in_interior in ("astro", "library", "intel"):
+            if self.in_interior in ("astro", "library", "intel", "museum"):
                 return f"Inside the {room_label} — [Esc] walks out"
             return "Walk up to a button and press E"
         if bid == "exit":

@@ -100,6 +100,7 @@ TAB_RD         = "rd"
 TAB_ASTRONAUTS = "astronauts"
 TAB_MISSIONS   = "missions"
 TAB_INTEL      = "intel"
+TAB_MUSEUM     = "museum"
 TAB_LOG        = "log"
 
 TAB_KEYS = {
@@ -108,7 +109,8 @@ TAB_KEYS = {
     pygame.K_F3: TAB_ASTRONAUTS,
     pygame.K_F4: TAB_MISSIONS,
     pygame.K_F5: TAB_INTEL,
-    pygame.K_F6: TAB_LOG,
+    pygame.K_F6: TAB_MUSEUM,
+    pygame.K_F7: TAB_LOG,
 }
 
 # Mission Control hub map: clickable buildings laid out in a 2x4 grid.
@@ -120,9 +122,9 @@ HUB_BUILDINGS: tuple[tuple[str, str, str, str | None], ...] = (
     ("mc",       "Mission Control",   "Schedule & review launches",   TAB_MISSIONS),
     ("library",  "Library",           "Flight records & event log",   TAB_LOG),
     ("intel",    "Intelligence",      "Spy on the opponent",          TAB_INTEL),
+    ("museum",   "Museum",            "Mission history & timeline",   TAB_MUSEUM),
     ("vab",      "VAB",               "Vehicle Assembly Building",    None),
     ("infirm",   "Infirmary",         "Crew medical bay",             None),
-    ("museum",   "Museum",            "Hall of firsts",               None),
 )
 
 # Rooftop color per building — picks out which buildings go together and
@@ -143,7 +145,8 @@ BUILDING_KEY_HINTS: dict[str | None, str] = {
     TAB_ASTRONAUTS: "F3",
     TAB_MISSIONS:   "F4",
     TAB_INTEL:      "F5",
-    TAB_LOG:        "F6",
+    TAB_MUSEUM:     "F6",
+    TAB_LOG:        "F7",
 }
 
 
@@ -976,6 +979,8 @@ class Client:
             self._render_tab_missions(me, opp)
         elif self.active_tab == TAB_INTEL:
             self._render_tab_intel(me, opp)
+        elif self.active_tab == TAB_MUSEUM:
+            self._render_tab_museum(me, opp)
         elif self.active_tab == TAB_LOG:
             self._render_tab_log()
 
@@ -1588,6 +1593,117 @@ class Client:
                 "Rumored next mission:  (unclear — sources disagree)",
                 (x, y), size=15, color=DIM,
             )
+
+    def _render_tab_museum(self, me: Player | None, opp: Player | None) -> None:
+        if self.state is None:
+            return
+        draw_text(self.screen, "MUSEUM", (30, CONTENT_TOP + 10),
+                  size=26, color=HIGHLIGHT, bold=True)
+        draw_text(
+            self.screen,
+            "Mission history and prestige timeline for this game.",
+            (30, CONTENT_TOP + 50), size=14, color=DIM,
+        )
+
+        # -------- Prestige timeline (top half) --------
+        chart = pygame.Rect(30, CONTENT_TOP + 80, 1120, 220)
+        pygame.draw.rect(self.screen, PANEL, chart, border_radius=6)
+        pygame.draw.rect(self.screen, BORDER, chart, 1, border_radius=6)
+        draw_text(self.screen, "Prestige over time",
+                  (chart.x + 14, chart.y + 8),
+                  size=15, color=HIGHLIGHT, bold=True)
+        snaps = self.state.prestige_timeline
+        # Axes bounds. Max prestige = at least PRESTIGE_TO_WIN so the goal
+        # line is visible; scale up if either side overshot.
+        from baris.state import PRESTIGE_TO_WIN
+        max_p = max(
+            [PRESTIGE_TO_WIN]
+            + [s.usa_prestige for s in snaps]
+            + [s.ussr_prestige for s in snaps]
+        )
+        plot = pygame.Rect(chart.x + 60, chart.y + 40,
+                           chart.w - 80, chart.h - 70)
+        pygame.draw.rect(self.screen, BG_DEEP, plot)
+        pygame.draw.rect(self.screen, BORDER, plot, 1)
+        # Goal line at PRESTIGE_TO_WIN.
+        goal_y = plot.bottom - int((PRESTIGE_TO_WIN / max_p) * plot.h)
+        pygame.draw.line(self.screen, DIM,
+                         (plot.x, goal_y), (plot.right, goal_y), 1)
+        draw_text(self.screen, f"{PRESTIGE_TO_WIN} — win",
+                  (plot.right - 70, goal_y - 14), size=11, color=DIM)
+        # X-axis label — start and end labels.
+        if snaps:
+            start_lbl = f"{snaps[0].season} {snaps[0].year}"
+            end_lbl = f"{snaps[-1].season} {snaps[-1].year}"
+            draw_text(self.screen, start_lbl,
+                      (plot.x, plot.bottom + 6), size=11, color=DIM)
+            draw_text(self.screen, end_lbl,
+                      (plot.right - 70, plot.bottom + 6),
+                      size=11, color=DIM)
+        # Plot each side.
+        if len(snaps) >= 2:
+            def points_for(pick) -> list[tuple[int, int]]:
+                n = len(snaps)
+                pts = []
+                for i, s in enumerate(snaps):
+                    x = plot.x + int(i * (plot.w - 1) / (n - 1))
+                    y = plot.bottom - int((pick(s) / max_p) * plot.h)
+                    pts.append((x, y))
+                return pts
+            usa_pts = points_for(lambda s: s.usa_prestige)
+            ussr_pts = points_for(lambda s: s.ussr_prestige)
+            pygame.draw.lines(self.screen, side_color(Side.USA), False, usa_pts, 2)
+            pygame.draw.lines(self.screen, side_color(Side.USSR), False, ussr_pts, 2)
+        # Legend.
+        lx = plot.right + 15
+        draw_text(self.screen, "USA",  (lx, plot.y + 4),  size=13, color=side_color(Side.USA), bold=True)
+        draw_text(self.screen, "USSR", (lx, plot.y + 24), size=13, color=side_color(Side.USSR), bold=True)
+        if me is not None:
+            draw_text(self.screen, f"you: {me.prestige}",
+                      (lx, plot.y + 56), size=12, color=FG)
+        if opp is not None:
+            draw_text(self.screen, f"opp: {opp.prestige}",
+                      (lx, plot.y + 72), size=12, color=FG)
+
+        # -------- Mission history (bottom half) --------
+        hist = pygame.Rect(30, CONTENT_TOP + 320, 1120, 470)
+        pygame.draw.rect(self.screen, PANEL, hist, border_radius=6)
+        pygame.draw.rect(self.screen, BORDER, hist, 1, border_radius=6)
+        draw_text(self.screen, "Mission history (most recent last)",
+                  (hist.x + 14, hist.y + 8),
+                  size=15, color=HIGHLIGHT, bold=True)
+        header = (
+            f"{'Season':<12}{'Side':<6}{'Mission':<28}{'Rocket':<14}"
+            f"{'Result':<10}{'Δ prest':<9}Crew"
+        )
+        draw_text(self.screen, header, (hist.x + 14, hist.y + 34),
+                  size=13, color=DIM)
+        y = hist.y + 56
+        entries = self.state.mission_history
+        # Show the last 18 entries so the panel stays readable.
+        for e in entries[-18:]:
+            stamp = f"{e.season} {e.year}"[:11]
+            side = e.side or "?"
+            name = (e.mission_name or e.mission_id)[:27]
+            rocket = (e.rocket or "?")[:13]
+            if e.success:
+                result = "FIRST!" if e.first_claimed else "ok"
+                result_color = GREEN if not e.first_claimed else HIGHLIGHT
+            else:
+                result = "KIA" if e.deaths else "fail"
+                result_color = RED
+            crew_txt = ", ".join(e.crew) if e.crew else ""
+            if e.deaths:
+                crew_txt += f"  (+{len(e.deaths)} KIA)"
+            row = (
+                f"{stamp:<12}{side:<6}{name:<28}{rocket:<14}"
+                f"{result:<10}{e.prestige_delta:<+9}{crew_txt[:40]}"
+            )
+            draw_text(self.screen, row, (hist.x + 14, y), size=13, color=result_color)
+            y += 22
+        if not entries:
+            draw_text(self.screen, "(No missions have flown yet.)",
+                      (hist.x + 14, y), size=14, color=DIM)
 
     def _render_tab_log(self) -> None:
         assert self.state is not None
