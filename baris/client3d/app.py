@@ -197,6 +197,26 @@ class BarisClient(Entity):
                 scale=(1.02, 0.03, 1.02),
                 y=0.4, color=color.rgb32(180, 185, 200),
             )
+            # Window strips — two horizontal bands of dark rectangles on
+            # each of the four facades, suggesting a multi-storey building
+            # without modelling each window individually. Local space:
+            # front face is z=-0.5, back z=+0.5, sides x=±0.5; bands sit
+            # one above + one below the visual midline.
+            for band_y in (0.18, -0.18):
+                for face_z in (-0.505, 0.505):
+                    Entity(
+                        parent=body, model="cube",
+                        position=(0, band_y, face_z),
+                        scale=(0.78, 0.06, 0.005),
+                        color=color.rgb32(45, 60, 85),
+                    )
+                for face_x in (-0.505, 0.505):
+                    Entity(
+                        parent=body, model="cube",
+                        position=(face_x, band_y, 0),
+                        scale=(0.005, 0.06, 0.78),
+                        color=color.rgb32(45, 60, 85),
+                    )
             # Tiny ground-level doorway stripe on the player-facing side.
             Entity(
                 parent=body, model="cube",
@@ -214,6 +234,10 @@ class BarisClient(Entity):
                 origin=(0, 0), billboard=True,
                 color=color.rgb32(30, 35, 45),
             )
+            # Per-building silhouette accessory so each one is memorable
+            # by shape, not just roof colour. All world-space so collider
+            # boxes around the body stay simple.
+            self._add_building_silhouette(bid, x, z)
         # Big central SUBMIT TURN button on the plaza. Pedestal + cap +
         # a billboard label. The cap's colour is swapped every frame by
         # _tick_submit_button() to signal lock state.
@@ -306,6 +330,166 @@ class BarisClient(Entity):
         self.rockets["Light"].enabled = True
 
         self.player = FirstPersonController(position=(0, 2, -5), speed=8)
+
+    def _add_building_silhouette(self, bid: str, x: float, z: float) -> None:
+        """Per-building decorative geometry — antennas, domes, columns,
+        portico — so each building has a memorable shape, not just a
+        coloured roof. Built in world space relative to the building's
+        ground footprint at (x, z); body itself is 7×6×7 centred at y=3."""
+        # Vector from origin to building gives us "back" (away from plaza)
+        # vs "front" (toward plaza). Most decorative bits go on the back
+        # so they don't block the doorway, except entrance pillars which
+        # are explicitly out front.
+        if bid == "mc":
+            # Mission Control — tall radio-tower mast with a satellite
+            # dish, behind the building (NASA tracking-station look).
+            mast_x = x + 0.0
+            mast_z = z + 4.5  # behind the building (further from origin)
+            for y_seg in (7.0, 9.5, 12.0):
+                Entity(
+                    model="cube",
+                    position=(mast_x, y_seg, mast_z),
+                    scale=(0.3, 2.0, 0.3),
+                    color=color.rgb32(190, 195, 210),
+                )
+            # Lattice cross-bracing
+            for y_seg in (8.0, 10.5):
+                Entity(
+                    model="cube",
+                    position=(mast_x, y_seg, mast_z),
+                    scale=(0.5, 0.06, 0.06),
+                    color=color.rgb32(170, 175, 190),
+                )
+            # Dish at the top
+            Entity(
+                model="sphere",
+                position=(mast_x, 13.5, mast_z),
+                scale=(1.4, 0.5, 1.4),
+                color=color.rgb32(230, 230, 240),
+            )
+            # Red aircraft-warning light
+            Entity(
+                model="cube",
+                position=(mast_x, 14.1, mast_z),
+                scale=(0.18, 0.18, 0.18),
+                color=color.rgb32(220, 60, 60),
+            )
+        elif bid == "rd":
+            # R&D Complex — three exhaust stacks on the roof, evoking
+            # an industrial / propellant test stand.
+            for dx in (-1.8, 0.0, 1.8):
+                Entity(
+                    model="cube",
+                    position=(x + dx, 7.4, z + 2.0),
+                    scale=(0.6, 2.0, 0.6),
+                    color=color.rgb32(155, 155, 165),
+                )
+                # Black soot tip
+                Entity(
+                    model="cube",
+                    position=(x + dx, 8.5, z + 2.0),
+                    scale=(0.7, 0.15, 0.7),
+                    color=color.rgb32(45, 45, 50),
+                )
+        elif bid == "astro":
+            # Astronaut Complex — half-dome on the roof, evoking a
+            # planetarium / centrifuge training building.
+            Entity(
+                model="sphere",
+                position=(x, 6.4, z),
+                scale=(5.5, 2.6, 5.5),
+                color=color.rgb32(70, 130, 220),
+            )
+            # Antenna spire
+            Entity(
+                model="cube",
+                position=(x, 8.4, z),
+                scale=(0.1, 1.2, 0.1),
+                color=color.rgb32(200, 200, 215),
+            )
+        elif bid == "library":
+            # Library — four pillars + a stepped portico in front.
+            front_z = z + 4.0  # plaza side (origin side)
+            Entity(  # entrance steps
+                model="cube",
+                position=(x, 0.15, front_z),
+                scale=(6.0, 0.3, 1.4),
+                color=color.rgb32(220, 215, 200),
+            )
+            for px in (-2.5, -0.85, 0.85, 2.5):
+                Entity(  # column
+                    model="cube",
+                    position=(x + px, 2.5, front_z),
+                    scale=(0.5, 4.7, 0.5),
+                    color=color.rgb32(235, 230, 215),
+                )
+                # Capital
+                Entity(
+                    model="cube",
+                    position=(x + px, 4.95, front_z),
+                    scale=(0.7, 0.15, 0.7),
+                    color=color.rgb32(220, 215, 200),
+                )
+            # Architrave — horizontal beam across the columns
+            Entity(
+                model="cube",
+                position=(x, 5.2, front_z),
+                scale=(6.4, 0.4, 0.7),
+                color=color.rgb32(225, 220, 205),
+            )
+        elif bid == "intel":
+            # Intelligence — radar dome (sphere) + a lower satellite dish.
+            Entity(
+                model="sphere",
+                position=(x, 7.2, z + 1.6),
+                scale=(2.4, 1.2, 2.4),
+                color=color.rgb32(220, 215, 230),
+            )
+            # Small antenna mast on top of the dome
+            Entity(
+                model="cube",
+                position=(x, 8.4, z + 1.6),
+                scale=(0.12, 1.2, 0.12),
+                color=color.rgb32(190, 190, 210),
+            )
+            # Side-mounted satellite dish
+            Entity(
+                model="sphere",
+                position=(x - 2.3, 6.8, z),
+                scale=(1.2, 0.5, 1.2),
+                color=color.rgb32(230, 225, 240),
+            )
+        elif bid == "museum":
+            # Museum — long, low-profile stone facade with a bronze sign
+            # over a centred entrance. Evokes a Smithsonian wing.
+            front_z = z - 4.0  # plaza side for this NW-positioned building
+            Entity(  # broad entrance steps
+                model="cube",
+                position=(x, 0.2, front_z),
+                scale=(8.0, 0.4, 1.6),
+                color=color.rgb32(220, 200, 160),
+            )
+            # Two squat entrance pillars
+            for px in (-2.0, 2.0):
+                Entity(
+                    model="cube",
+                    position=(x + px, 2.0, front_z),
+                    scale=(0.7, 3.7, 0.7),
+                    color=color.rgb32(230, 215, 175),
+                )
+            # Big bronze sign over the doorway
+            Entity(
+                model="cube",
+                position=(x, 4.2, front_z + 0.05),
+                scale=(4.5, 1.0, 0.1),
+                color=color.rgb32(180, 150, 60),
+            )
+            Text(
+                text="MUSEUM",
+                position=(x, 4.2, front_z - 0.06),
+                scale=4.5, origin=(0, 0),
+                color=color.rgb32(60, 50, 30),
+            )
 
     def _build_hud(self) -> None:
         self.status_text = Text(
