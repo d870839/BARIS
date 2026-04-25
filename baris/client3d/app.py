@@ -144,6 +144,15 @@ class BarisClient(Entity):
             texture="white_cube", texture_scale=(80, 80),
             collider="box",
         )
+        # Far ground ring — slightly tinted desert / scrub so the eye
+        # doesn't see the concrete apron's hard edge against the sky.
+        # Larger than the apron and a touch lower to avoid z-fighting
+        # at the seam.
+        Entity(
+            model="plane", scale=(360, 1, 360), y=-0.05,
+            color=color.rgb32(150, 130, 100),
+            texture="white_cube", texture_scale=(40, 40),
+        )
         # Central plaza — slightly warmer concrete with a ring of paving.
         Entity(
             model="plane", scale=(26, 1, 26), y=0.02,
@@ -330,6 +339,113 @@ class BarisClient(Entity):
         self.rockets["Light"].enabled = True
 
         self.player = FirstPersonController(position=(0, 2, -5), speed=8)
+
+        self._add_horizon_props()
+
+    def _add_horizon_props(self) -> None:
+        """Distant background props so the world doesn't end at the
+        concrete apron. Everything here is far enough out (radius ≥80)
+        that it reads as horizon flavour, never something the player
+        walks into. No colliders — pure visual."""
+        import math
+        # Ring of low rolling hills around the perimeter. Spaced
+        # roughly evenly with a touch of jitter so they don't feel
+        # mechanically placed; heights step gently so the silhouette
+        # is varied.
+        hill_color_a = color.rgb32(95, 110, 80)
+        hill_color_b = color.rgb32(115, 125, 95)
+        radius = 110.0
+        for i in range(36):
+            theta = (i / 36) * 2 * math.pi
+            r = radius + (4.0 if i % 3 == 0 else 0.0)
+            hx = math.cos(theta) * r
+            hz = math.sin(theta) * r
+            hill_h = 6.0 + (3.0 if i % 4 == 0 else 0.0) + (2.0 if i % 7 == 0 else 0.0)
+            hill_w = 28.0
+            Entity(
+                model="sphere",
+                position=(hx, hill_h * 0.2, hz),
+                scale=(hill_w, hill_h, hill_w),
+                color=hill_color_a if i % 2 == 0 else hill_color_b,
+            )
+        # A water tower out past the far end of the launch pads — a
+        # familiar Cape Canaveral landmark in silhouette.
+        tower_x, tower_z = 35.0, 70.0
+        Entity(  # legs (4)
+            model="cube",
+            position=(tower_x - 1.5, 5.0, tower_z - 1.5),
+            scale=(0.3, 10.0, 0.3),
+            color=color.rgb32(170, 170, 180),
+        )
+        Entity(
+            model="cube",
+            position=(tower_x + 1.5, 5.0, tower_z - 1.5),
+            scale=(0.3, 10.0, 0.3),
+            color=color.rgb32(170, 170, 180),
+        )
+        Entity(
+            model="cube",
+            position=(tower_x - 1.5, 5.0, tower_z + 1.5),
+            scale=(0.3, 10.0, 0.3),
+            color=color.rgb32(170, 170, 180),
+        )
+        Entity(
+            model="cube",
+            position=(tower_x + 1.5, 5.0, tower_z + 1.5),
+            scale=(0.3, 10.0, 0.3),
+            color=color.rgb32(170, 170, 180),
+        )
+        Entity(  # tank
+            model="sphere",
+            position=(tower_x, 11.0, tower_z),
+            scale=(5.0, 4.0, 5.0),
+            color=color.rgb32(220, 220, 230),
+        )
+        # A distant antenna farm to the south-west — three masts of
+        # varying height suggesting a tracking-station outpost.
+        for (mx, mz, h) in (
+            (-78, -50, 18.0),
+            (-72, -44, 14.0),
+            (-66, -52, 11.0),
+        ):
+            Entity(
+                model="cube",
+                position=(mx, h / 2, mz),
+                scale=(0.6, h, 0.6),
+                color=color.rgb32(170, 170, 180),
+            )
+            Entity(  # warning light at top
+                model="cube",
+                position=(mx, h + 0.3, mz),
+                scale=(0.4, 0.4, 0.4),
+                color=color.rgb32(220, 70, 70),
+            )
+        # A long, low hangar building visible past the east buildings
+        # — corrugated-roof, vaguely Cold-War-era.
+        Entity(
+            model="cube",
+            position=(70, 4.0, -8),
+            scale=(20.0, 8.0, 10.0),
+            color=color.rgb32(195, 190, 180),
+        )
+        Entity(  # roof slab
+            model="cube",
+            position=(70, 8.1, -8),
+            scale=(20.4, 0.3, 10.4),
+            color=color.rgb32(140, 135, 125),
+        )
+        Entity(  # a few horizontal trim bands
+            model="cube",
+            position=(70, 4.5, -2.95),
+            scale=(20.2, 0.15, 0.05),
+            color=color.rgb32(140, 135, 125),
+        )
+        Entity(
+            model="cube",
+            position=(70, 3.0, -2.95),
+            scale=(20.2, 0.15, 0.05),
+            color=color.rgb32(140, 135, 125),
+        )
 
     def _add_building_silhouette(self, bid: str, x: float, z: float) -> None:
         """Per-building decorative geometry — antennas, domes, columns,
