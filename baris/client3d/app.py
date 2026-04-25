@@ -748,15 +748,19 @@ class BarisClient(Entity):
           * green  — idle, ready to accept a launch.
           * amber  — a launch is scheduled and will fly next turn.
           * red    — pad is damaged, repair countdown still running.
-        Also tints the deck red for damaged pads."""
+        Also tints the deck red for damaged pads, and spawns a brief
+        flame puff whenever a pad transitions from undamaged → damaged
+        so sabotage hits feel kinetic on both sides of the apron."""
         if self.state is None or self.state.phase != Phase.PLAYING:
             return
         me = self.me()
         if me is None:
             return
+        if not hasattr(self, "_prev_pad_damage"):
+            self._prev_pad_damage: dict[tuple[str, int], bool] = {}
         pad_visuals = (self.pad, self.pad_b, self.pad_c)
-        # Pads in the player state are ordered A, B, C.
-        for pad_data, visual in zip(me.pads, pad_visuals):
+        for i, (pad_data, visual) in enumerate(zip(me.pads, pad_visuals)):
+            self._maybe_spawn_pad_puff(("me", i), pad_data, visual)
             if pad_data.damaged:
                 visual._status_marker.color = color.rgb32(220, 80, 80)
                 visual.color = color.rgb32(120, 80, 80)
@@ -771,7 +775,10 @@ class BarisClient(Entity):
         # so the legend stays consistent across both bases.
         opp = self.state.other_player(me.player_id) if self.state else None
         if opp is not None and getattr(self, "opponent_pads", None):
-            for pad_data, visual in zip(opp.pads, self.opponent_pads):
+            for i, (pad_data, visual) in enumerate(
+                zip(opp.pads, self.opponent_pads)
+            ):
+                self._maybe_spawn_pad_puff(("opp", i), pad_data, visual)
                 if pad_data.damaged:
                     visual._status_marker.color = color.rgb32(220, 80, 80)
                     visual.color = color.rgb32(120, 80, 80)
@@ -781,6 +788,30 @@ class BarisClient(Entity):
                 else:
                     visual._status_marker.color = color.rgb32(110, 200, 120)
                     visual.color = visual._deck_color
+
+    def _maybe_spawn_pad_puff(
+        self, key: tuple[str, int], pad_data: Any, visual: Entity,
+    ) -> None:
+        """Compare current vs previously-seen damage state for `key`
+        and spawn a transient flame ball when it just flipped on."""
+        was_damaged = self._prev_pad_damage.get(key, False)
+        self._prev_pad_damage[key] = pad_data.damaged
+        if pad_data.damaged and not was_damaged:
+            self._spawn_pad_damage_puff(visual)
+
+    def _spawn_pad_damage_puff(self, visual: Entity) -> None:
+        """Bright orange ball that quickly shrinks to nothing and
+        self-destroys. Two seconds total — long enough to read across
+        the apron, short enough not to clutter the scene if multiple
+        sabotages chain."""
+        flame = Entity(
+            model="sphere",
+            position=(visual.x, visual.y + 1.5, visual.z),
+            scale=(3.0, 3.0, 3.0),
+            color=color.rgb32(245, 150, 50),
+        )
+        flame.animate_scale(0.05, duration=1.4)
+        invoke(destroy, flame, delay=1.6)
 
     def _near_submit_button(self) -> bool:
         sx, _, sz = self.submit_button_pos
