@@ -340,6 +340,8 @@ class BarisClient(Entity):
 
         self.player = FirstPersonController(position=(0, 2, -5), speed=8)
 
+        self._build_opponent_facility(origin=(140.0, 0.0, 0.0))
+
         self._add_horizon_props()
 
     def _add_horizon_props(self) -> None:
@@ -446,6 +448,79 @@ class BarisClient(Entity):
             scale=(20.2, 0.15, 0.05),
             color=color.rgb32(140, 135, 125),
         )
+
+    def _build_opponent_facility(
+        self, origin: tuple[float, float, float],
+    ) -> None:
+        """Mirror of the player's hub placed far east at `origin`. Buildings
+        and pads only, no colliders — the player can walk towards it but
+        nothing here is interactive. Pad status markers + deck tints are
+        live-driven by _tick_pad_status() from the OPPONENT'S pads, so
+        you can see the goat land when you fire a Catapult Calamity."""
+        ox, _oy, oz = origin
+        # Six buildings in the same star-pattern as the player's hub.
+        opp_layout = (
+            ("mc",      ( 0.0,  28.0), color.rgb32(240, 130,  50)),
+            ("rd",      ( 0.0, -28.0), color.rgb32( 60, 150,  90)),
+            ("astro",   (28.0,   0.0), color.rgb32( 40, 100, 200)),
+            ("library", (-28.0,  0.0), color.rgb32(200, 170, 110)),
+            ("intel",   (20.0, -20.0), color.rgb32(120,  90, 160)),
+            ("museum",  (-20.0, 20.0), color.rgb32(180, 150,  60)),
+        )
+        for bid, (bx, bz), roof in opp_layout:
+            body = Entity(
+                model="cube", position=(ox + bx, 3, oz + bz),
+                scale=(7, 6, 7), color=color.rgb32(245, 245, 248),
+            )
+            Entity(
+                parent=body, model="cube",
+                scale=(1.05, 0.18, 1.05),
+                y=0.5, color=roof,
+            )
+            Entity(
+                parent=body, model="cube",
+                scale=(1.02, 0.03, 1.02),
+                y=0.4, color=color.rgb32(180, 185, 200),
+            )
+        # A small "OPPONENT" sign so the player isn't confused which
+        # facility they're looking at.
+        Text(
+            text="OPPONENT",
+            position=(ox, 9.5, oz),
+            scale=12, origin=(0, 0),
+            billboard=True,
+            color=color.rgb32(220, 90, 90),
+        )
+        # Three simple opponent pad slabs. We don't bother with the
+        # full gantry — at this distance the legs would just clutter
+        # the silhouette. Each pad is a deck slab + a status marker
+        # cube on top, recoloured by _tick_pad_status() each frame.
+        opp_pad_visuals: list[Entity] = []
+        for i, (px, pz) in enumerate(
+            ((-12.0, 40.0), (0.0, 40.0), (12.0, 40.0))
+        ):
+            deck = Entity(
+                model="cube",
+                position=(ox + px, 0.3, oz + pz),
+                scale=(5, 0.6, 5),
+                color=color.rgb32(165, 165, 175),
+            )
+            deck._deck_color = deck.color
+            deck._status_marker = Entity(
+                model="cube",
+                position=(ox + px, 0.65, oz + pz - 1.6),
+                scale=(1.6, 0.08, 0.4),
+                color=color.rgb32(120, 200, 120),
+            )
+            Text(
+                text=f"PAD {chr(ord('A') + i)}",
+                position=(ox + px, 1.4, oz + pz),
+                scale=3.5, origin=(0, 0),
+                billboard=True,
+                color=color.rgb32(220, 90, 90),
+            )
+            opp_pad_visuals.append(deck)
+        self.opponent_pads = opp_pad_visuals
 
     def _add_building_silhouette(self, bid: str, x: float, z: float) -> None:
         """Per-building decorative geometry — antennas, domes, columns,
@@ -691,6 +766,21 @@ class BarisClient(Entity):
             else:
                 visual._status_marker.color = color.rgb32(110, 200, 120)
                 visual.color = visual._deck_color
+        # Mirror the OPPONENT'S pad state onto the far-east silhouette
+        # so the player sees their sabotage land. Same colour scheme
+        # so the legend stays consistent across both bases.
+        opp = self.state.other_player(me.player_id) if self.state else None
+        if opp is not None and getattr(self, "opponent_pads", None):
+            for pad_data, visual in zip(opp.pads, self.opponent_pads):
+                if pad_data.damaged:
+                    visual._status_marker.color = color.rgb32(220, 80, 80)
+                    visual.color = color.rgb32(120, 80, 80)
+                elif pad_data.scheduled_launch is not None:
+                    visual._status_marker.color = color.rgb32(240, 200, 90)
+                    visual.color = visual._deck_color
+                else:
+                    visual._status_marker.color = color.rgb32(110, 200, 120)
+                    visual.color = visual._deck_color
 
     def _near_submit_button(self) -> bool:
         sx, _, sz = self.submit_button_pos
