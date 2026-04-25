@@ -60,6 +60,11 @@ from baris.state import (
     REVIEW_KIA_PENALTY,
     REVIEW_PASS_THRESHOLD,
     REVIEW_SUCCESS_BONUS,
+    SABOTAGE_CARDS,
+    SABOTAGE_RELIABILITY_HIT,
+    SABOTAGE_RELIABILITY_STEAL_GAIN,
+    SabotageCard,
+    get_sabotage_card,
     MIN_RELIABILITY_TO_LAUNCH,
     MISSION_OBJECTIVES,
     MISSIONS_BY_ID,
@@ -95,6 +100,7 @@ from baris.state import (
     Rocket,
     SEASON_REFILL,
     STARTING_ASTRONAUTS,
+    Season,
     Side,
     Skill,
     next_season,
@@ -1524,6 +1530,158 @@ _NEWS_POOL: tuple[tuple[str, int, Any], ...] = (
 # no-op. Lets targeted tests (e.g. mood-drop assertions) isolate the
 # mechanic they're exercising from random news-card side effects.
 _news_enabled: bool = True
+
+
+# ----------------------------------------------------------------------
+# DIRTY TRICKS — sabotage cards (divergence)
+# ----------------------------------------------------------------------
+
+
+def _sabotage_season_stamp(state: GameState) -> str:
+    return f"{state.year}-{state.season.value}"
+
+
+def sabotage_available(
+    player: Player, state: GameState, card_id: str,
+) -> tuple[bool, str]:
+    """Return (can_fire, reason). reason is empty on success."""
+    card = get_sabotage_card(card_id)
+    if card is None:
+        return False, "unknown card"
+    if state.phase != Phase.PLAYING:
+        return False, "game not in progress"
+    if player.budget < card.cost:
+        return False, f"need {card.cost} MB"
+    if player.sabotage_used_on == _sabotage_season_stamp(state):
+        return False, "already used a sabotage this season"
+    opponent = state.other_player(player.player_id)
+    if opponent is None or opponent.side is None:
+        return False, "no opponent"
+    return True, ""
+
+
+def execute_sabotage(
+    player: Player, state: GameState, card_id: str,
+    rng: random.Random | None = None,
+) -> bool:
+    """Fire one sabotage card at the opponent. Charges card.cost up
+    front; if the per-card effect can't apply (e.g. catapult with no
+    scheduled pads), refunds the cost and the season slot stays free
+    so the player can try a different card. Always logs a comedic
+    headline so the news ticker reflects what happened (or didn't)."""
+    ok, _reason = sabotage_available(player, state, card_id)
+    if not ok:
+        return False
+    card = get_sabotage_card(card_id)
+    assert card is not None  # validated above
+    rng = rng or random.Random()
+    opponent = state.other_player(player.player_id)
+    assert opponent is not None and opponent.side is not None
+
+    handler = _SABOTAGE_HANDLERS.get(card.card_id)
+    if handler is None:
+        return False
+    player.budget -= card.cost
+    player.sabotage_used_on = _sabotage_season_stamp(state)
+    fired_headline = handler(player, opponent, state, rng)
+    if not fired_headline:
+        # Refund + free up the season slot — the card had nothing to
+        # bite into, so the player gets a do-over.
+        player.budget += card.cost
+        player.sabotage_used_on = ""
+        state.log.append(
+            f"DIRTY TRICKS: {player.username} prepped {card.name} "
+            f"but found no target — cost refunded."
+        )
+        return False
+    state.log.append(f"DIRTY TRICKS: {fired_headline}")
+    return True
+
+
+# Per-card handlers. Each takes (acting_player, opponent_player, state,
+# rng) and returns a comedic headline string on success or "" if the
+# card couldn't apply.
+
+def _sab_catapult(
+    me: Player, opp: Player, state: GameState, rng: random.Random,
+) -> str:
+    targets = [p for p in opp.pads
+               if p.scheduled_launch is not None and not p.damaged]
+    if not targets:
+        return ""
+    pad = rng.choice(targets)
+    pad.repair_turns_remaining = PAD_REPAIR_TURNS
+    return (
+        f"a flaming goat lands on {opp.side.value if opp.side else '?'}'s "
+        f"Pad {pad.pad_id}. Pad damaged, {PAD_REPAIR_TURNS} seasons of "
+        "repair needed. The goat is fine."
+    )
+
+
+def _sab_weatherman(
+    me: Player, opp: Player, state: GameState, rng: random.Random,
+) -> str:
+    targets = [p for p in opp.pads if p.scheduled_launch is not None]
+    if not targets:
+        return ""
+    pad = rng.choice(targets)
+    sched = pad.scheduled_launch
+    assert sched is not None
+    new_season, new_year = next_season(
+        Season(sched.scheduled_season) if sched.scheduled_season else state.season,
+        sched.scheduled_year or state.year,
+    )
+    sched.scheduled_year = new_year
+    sched.scheduled_season = new_season.value
+    return (
+        f"the {opp.side.value if opp.side else '?'} weatherman invents a "
+        f"hurricane. Pad {pad.pad_id} launch slips to "
+        f"{new_season.value} {new_year}."
+    )
+
+
+def _sab_mole(
+    me: Player, opp: Player, state: GameState, rng: random.Random,
+) -> str:
+    targets = [r for r in Rocket
+               if opp.rocket_reliability(r) >= MIN_RELIABILITY_TO_LAUNCH]
+    if not targets:
+        return ""
+    rocket = rng.choice(targets)
+    _bump_reliability(opp, rocket, -SABOTAGE_RELIABILITY_HIT)
+    name = rocket_display_name(rocket, opp.side)
+    return (
+        f"a mole inside {opp.side.value if opp.side else '?'} mission "
+        f"control swaps a manual page. {name} loses "
+        f"{SABOTAGE_RELIABILITY_HIT} reliability."
+    )
+
+
+def _sab_blueprints(
+    me: Player, opp: Player, state: GameState, rng: random.Random,
+) -> str:
+    targets = [r for r in Rocket
+               if opp.rocket_reliability(r) >= MIN_RELIABILITY_TO_LAUNCH]
+    if not targets:
+        return ""
+    rocket = rng.choice(targets)
+    _bump_reliability(opp, rocket, -SABOTAGE_RELIABILITY_STEAL_GAIN)
+    _bump_reliability(me, rocket, SABOTAGE_RELIABILITY_STEAL_GAIN)
+    opp_name = rocket_display_name(rocket, opp.side)
+    my_name = rocket_display_name(rocket, me.side)
+    return (
+        f"{me.side.value if me.side else '?'} engineers 'borrow' "
+        f"{opp_name} blueprints. -{SABOTAGE_RELIABILITY_STEAL_GAIN} for "
+        f"the opponent, +{SABOTAGE_RELIABILITY_STEAL_GAIN} for {my_name}."
+    )
+
+
+_SABOTAGE_HANDLERS: dict[str, Any] = {
+    "catapult":   _sab_catapult,
+    "weatherman": _sab_weatherman,
+    "mole":       _sab_mole,
+    "blueprints": _sab_blueprints,
+}
 
 
 def memorial_roll(state: GameState) -> list[tuple[str, str, int, str, str]]:

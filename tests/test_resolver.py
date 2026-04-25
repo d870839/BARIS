@@ -3124,3 +3124,134 @@ def test_memorial_roll_handles_multiple_deaths_per_flight() -> None:
     roll = memorial_roll(state)
     assert len(roll) == 3
     assert all(entry[1] == "Apollo 1" for entry in roll)
+
+
+# ----------------------------------------------------------------------
+# DIRTY TRICKS — sabotage MVP
+# ----------------------------------------------------------------------
+
+
+def _state_with_built_rockets(state: GameState, ussr_built: bool = True) -> None:
+    """Helper: give USSR (or USA) a launchable Medium rocket so
+    reliability-targeting cards have something to bite into."""
+    target = (state.players[1] if ussr_built else state.players[0])
+    target.reliability[Rocket.MEDIUM.value] = 70
+
+
+def _schedule_a_pad(state: GameState, side_idx: int = 1) -> None:
+    """Helper: drop a fake ScheduledLaunch onto pad A of one of the
+    players so catapult / weatherman cards have a target."""
+    from baris.state import ScheduledLaunch
+    p = state.players[side_idx]
+    p.pads[0].scheduled_launch = ScheduledLaunch(
+        mission_id="suborbital", rocket_class=Rocket.LIGHT.value,
+        launch_cost_total=10, assembly_cost_paid=3,
+        launch_cost_remaining=7, objectives=[],
+        scheduled_year=state.year, scheduled_season=state.season.value,
+    )
+
+
+def test_sabotage_catapult_damages_scheduled_pad() -> None:
+    from baris.resolver import execute_sabotage
+    state = _two_player_state()
+    start_game(state, rng=random.Random(1))
+    me = state.players[0]
+    me.budget = 50
+    _schedule_a_pad(state)
+    assert execute_sabotage(me, state, "catapult", rng=random.Random(0))
+    opp_pad = state.players[1].pads[0]
+    assert opp_pad.damaged
+    assert opp_pad.repair_turns_remaining > 0
+    assert me.budget == 50 - 15           # cost paid
+    assert me.sabotage_used_on            # season slot consumed
+
+
+def test_sabotage_catapult_refunds_when_no_target() -> None:
+    from baris.resolver import execute_sabotage
+    state = _two_player_state()
+    start_game(state, rng=random.Random(1))
+    me = state.players[0]
+    me.budget = 50
+    # Opponent has no scheduled pads → catapult finds nothing.
+    assert not execute_sabotage(me, state, "catapult", rng=random.Random(0))
+    assert me.budget == 50                # cost refunded
+    assert me.sabotage_used_on == ""      # season slot freed
+
+
+def test_sabotage_weatherman_delays_scheduled_launch_one_season() -> None:
+    from baris.resolver import execute_sabotage
+    state = _two_player_state()
+    start_game(state, rng=random.Random(1))
+    me = state.players[0]
+    me.budget = 50
+    _schedule_a_pad(state)
+    sched = state.players[1].pads[0].scheduled_launch
+    assert sched is not None
+    before_season, before_year = sched.scheduled_season, sched.scheduled_year
+    assert execute_sabotage(me, state, "weatherman", rng=random.Random(0))
+    after_season, after_year = sched.scheduled_season, sched.scheduled_year
+    # Either the season changed or the year incremented (Winter→Spring).
+    assert (after_season != before_season) or (after_year != before_year)
+
+
+def test_sabotage_mole_drops_opponent_reliability() -> None:
+    from baris.resolver import execute_sabotage
+    state = _two_player_state()
+    start_game(state, rng=random.Random(1))
+    me = state.players[0]
+    opp = state.players[1]
+    me.budget = 50
+    _state_with_built_rockets(state, ussr_built=True)
+    before = opp.rocket_reliability(Rocket.MEDIUM)
+    assert execute_sabotage(me, state, "mole", rng=random.Random(0))
+    assert opp.rocket_reliability(Rocket.MEDIUM) == before - 5
+
+
+def test_sabotage_blueprints_steals_reliability() -> None:
+    from baris.resolver import execute_sabotage
+    state = _two_player_state()
+    start_game(state, rng=random.Random(1))
+    me = state.players[0]
+    opp = state.players[1]
+    me.budget = 50
+    _state_with_built_rockets(state, ussr_built=True)
+    opp_before = opp.rocket_reliability(Rocket.MEDIUM)
+    me_before = me.rocket_reliability(Rocket.MEDIUM)
+    assert execute_sabotage(me, state, "blueprints", rng=random.Random(0))
+    assert opp.rocket_reliability(Rocket.MEDIUM) == opp_before - 5
+    assert me.rocket_reliability(Rocket.MEDIUM) == me_before + 5
+
+
+def test_sabotage_one_per_season() -> None:
+    from baris.resolver import execute_sabotage
+    state = _two_player_state()
+    start_game(state, rng=random.Random(1))
+    me = state.players[0]
+    me.budget = 100
+    _state_with_built_rockets(state, ussr_built=True)
+    assert execute_sabotage(me, state, "mole", rng=random.Random(0))
+    # Second sabotage same season — refused.
+    assert not execute_sabotage(me, state, "mole", rng=random.Random(0))
+
+
+def test_sabotage_rejected_without_budget() -> None:
+    from baris.resolver import execute_sabotage
+    state = _two_player_state()
+    start_game(state, rng=random.Random(1))
+    me = state.players[0]
+    me.budget = 5  # below any card cost
+    _state_with_built_rockets(state, ussr_built=True)
+    assert not execute_sabotage(me, state, "mole", rng=random.Random(0))
+
+
+def test_legacy_player_dict_backfills_sabotage_used_on() -> None:
+    from baris.state import _player_from_dict
+    raw = {
+        "player_id": "x", "username": "X",
+        "side": Side.USA.value, "budget": 30, "prestige": 0,
+        "ready": True, "astronauts": [],
+        "mission_successes": {}, "architecture": None,
+        "turn_submitted": False,
+    }
+    p = _player_from_dict(raw)
+    assert p.sabotage_used_on == ""

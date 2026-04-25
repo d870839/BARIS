@@ -867,6 +867,8 @@ class BarisClient(Entity):
         if bid == "intel":
             from baris.state import INTEL_COST
             return f"[E] Request intelligence report ({INTEL_COST} MB)"
+        if bid == "sabotage":
+            return "[E] Open DIRTY TRICKS — sabotage cards"
         if bid.startswith("target:"):
             return f"[E] Set R&D target: {bid.split(':', 1)[1]}"
         if bid == "spend_plus":
@@ -948,6 +950,8 @@ class BarisClient(Entity):
             self.panel = panels_info.build_training_panel(self, camera.ui)
         elif panel_id == "recruit":
             self.panel = panels_info.build_recruit_panel(self, camera.ui)
+        elif panel_id == "sabotage":
+            self.panel = panels_info.build_sabotage_panel(self, camera.ui)
         elif panel_id == "result" and report is not None:
             self.panel = panels_action.build_result_panel(self, camera.ui, report)
         self._enter_ui_mode()
@@ -1068,6 +1072,9 @@ class BarisClient(Entity):
             if bid == "intel":
                 self.intel_request_report()
                 return
+            if bid == "sabotage":
+                self._open_panel("sabotage")
+                return
             return
 
     # Legacy alias so existing input dispatch keeps working.
@@ -1187,6 +1194,13 @@ class BarisClient(Entity):
         """Fire REQUEST_INTEL. Server validates budget + one-per-season
         and echoes back new state with latest_intel populated."""
         self.net.send(protocol.REQUEST_INTEL)
+
+    def intel_execute_sabotage(self, card_id: str) -> None:
+        """Fire EXECUTE_SABOTAGE. Server validates budget + per-season
+        gate, applies the per-card effect, and echoes back state.
+        Refresh the open panel so the in-progress card list updates."""
+        self.net.send(protocol.EXECUTE_SABOTAGE, card_id=card_id)
+        self._refresh_current_panel()
 
     def mc_choose_architecture(self, arch: Architecture) -> None:
         if self._turn_locked():

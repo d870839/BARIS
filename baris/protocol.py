@@ -15,6 +15,7 @@ START_TRAINING = "start_training"
 CANCEL_TRAINING = "cancel_training"
 RECRUIT_GROUP = "recruit_group"
 REQUEST_INTEL = "request_intel"
+EXECUTE_SABOTAGE = "execute_sabotage"
 
 # Server -> Client message types
 JOINED = "joined"

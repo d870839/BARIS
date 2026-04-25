@@ -609,6 +609,70 @@ REVIEW_SUCCESS_BONUS        = 2
 REVIEW_KIA_PENALTY          = 3
 REVIEW_FIRE_AT_WARNINGS     = 2
 
+
+# DIRTY TRICKS — divergence from the original game. A player can fire
+# off one sabotage per season for an MB cost; cards target the opponent
+# and try to cause a hardware / schedule / reliability headache. If the
+# card has no valid target (e.g. catapult with no scheduled pads), the
+# resolver refunds the cost and the season slot stays free. Tone is
+# deliberately comedic — keep it absurd in the news log.
+SABOTAGE_RELIABILITY_HIT = 5
+SABOTAGE_RELIABILITY_STEAL_GAIN = 5
+
+
+@dataclass(frozen=True)
+class SabotageCard:
+    card_id: str           # stable wire id
+    name: str
+    cost: int              # MB
+    description: str       # comedic flavour for the UI
+
+
+SABOTAGE_CARDS: tuple[SabotageCard, ...] = (
+    SabotageCard(
+        card_id="catapult",
+        name="Catapult Calamity",
+        cost=15,
+        description=(
+            "A morally-dubious medieval engineer launches a goat at one of "
+            "the opponent's scheduled pads. Pad takes immediate damage."
+        ),
+    ),
+    SabotageCard(
+        card_id="weatherman",
+        name="Bribed Weatherman",
+        cost=10,
+        description=(
+            "Sketchy meteorologist invents a hurricane. The opponent's "
+            "scheduled launch is pushed back a season."
+        ),
+    ),
+    SabotageCard(
+        card_id="mole",
+        name="Industrial Mole",
+        cost=12,
+        description=(
+            "An undercover Cappuccino Assassino loosens a few bolts. "
+            f"-{SABOTAGE_RELIABILITY_HIT} reliability on a random "
+            "opponent rocket."
+        ),
+    ),
+    SabotageCard(
+        card_id="blueprints",
+        name="Borrowed Blueprints",
+        cost=15,
+        description=(
+            "Trippi Troppi photocopies the opponent's blueprints in the "
+            "supply closet. Steal 5 reliability from a random built "
+            "opponent rocket onto your matching class."
+        ),
+    ),
+)
+
+
+def get_sabotage_card(card_id: str) -> SabotageCard | None:
+    return next((c for c in SABOTAGE_CARDS if c.card_id == card_id), None)
+
 # Phase D — Lunar reconnaissance + LM (Lunar Module) points.
 #
 # Lunar recon tracks how thoroughly the moon has been surveyed before
@@ -784,6 +848,9 @@ class Player:
     # to double-review on a single transition.
     warnings: int = 0
     last_review_year: int = 0
+    # DIRTY TRICKS — "year-season" key of the most recent sabotage so
+    # the server can throttle to one per season per player.
+    sabotage_used_on: str = ""
 
     def rocket_reliability(self, rocket: Rocket) -> int:
         return self.reliability.get(rocket.value, 0)
@@ -964,6 +1031,8 @@ def _player_from_dict(d: dict[str, Any]) -> Player:
     # Phase M — legacy saves predate Government Review.
     data.setdefault("warnings", 0)
     data.setdefault("last_review_year", 0)
+    # DIRTY TRICKS — legacy saves predate sabotage.
+    data.setdefault("sabotage_used_on", "")
     return Player(**data)
 
 

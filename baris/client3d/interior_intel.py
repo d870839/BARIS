@@ -33,6 +33,7 @@ class IntelInterior:
         self._build_room()
         self._build_dashboard()
         self._build_intel_console()
+        self._build_sabotage_console()
         self._build_exit()
 
     def _build_room(self) -> None:
@@ -153,6 +154,33 @@ class IntelInterior:
             position=(x, 2.2, z), scale=3.8, origin=(0, 0),
             billboard=True,
             color=color.rgb32(160, 170, 195),
+        )
+
+    def _build_sabotage_console(self) -> None:
+        """Pedestal opposite the intel console, with a comically-sketchy
+        red-purple cap. Press E to open the DIRTY TRICKS panel where
+        you actually pick which sabotage card to fire."""
+        z = -ROOM_DEPTH / 2 + 0.8
+        x = 3.5
+        Entity(
+            parent=self.root, model="cube",
+            position=(x, 0.45, z), scale=(1.1, 0.9, 1.1),
+            color=color.rgb32(120, 50, 80),
+            collider="box",
+        )
+        cap = Entity(
+            parent=self.root, model="cube",
+            position=(x, 1.0, z), scale=(0.7, 0.15, 0.7),
+            color=color.rgb32(190, 70, 110),
+        )
+        cap._rest_y = cap.y
+        self.buttons["sabotage"] = cap
+        Text(
+            text="DIRTY TRICKS",
+            parent=self.root,
+            position=(x, 1.55, z), scale=4.2, origin=(0, 0),
+            billboard=True,
+            color=color.rgb32(255, 200, 220),
         )
 
     def _build_exit(self) -> None:

@@ -74,6 +74,13 @@ MISSION_KEYS = {
     pygame.K_7: 6, pygame.K_8: 7, pygame.K_9: 8,
     pygame.K_0: 9, pygame.K_MINUS: 10,
 }
+# DIRTY TRICKS — number-pad on the Intel tab fires a sabotage card.
+SABOTAGE_KEYS = {
+    pygame.K_1: "catapult",
+    pygame.K_2: "weatherman",
+    pygame.K_3: "mole",
+    pygame.K_4: "blueprints",
+}
 ARCHITECTURE_KEYS = {
     pygame.K_a: Architecture.DA,
     pygame.K_s: Architecture.EOR,
@@ -689,6 +696,11 @@ class Client:
                 self.net.send(protocol.RECRUIT_GROUP)
             elif self.active_tab == TAB_INTEL and event.key == pygame.K_i:
                 self.net.send(protocol.REQUEST_INTEL)
+            elif self.active_tab == TAB_INTEL and event.key in SABOTAGE_KEYS:
+                self.net.send(
+                    protocol.EXECUTE_SABOTAGE,
+                    card_id=SABOTAGE_KEYS[event.key],
+                )
             elif event.key == pygame.K_RETURN:
                 self._submit_turn(me)
         return True
@@ -1513,9 +1525,9 @@ class Client:
     def _render_tab_intel(self, me: Player | None, opp: Player | None) -> None:
         if me is None or self.state is None:
             return
-        from baris.resolver import intel_available
+        from baris.resolver import intel_available, sabotage_available
         from baris.state import (
-            INTEL_COST, Module, Rocket, rocket_display_name,
+            INTEL_COST, Module, Rocket, SABOTAGE_CARDS, rocket_display_name,
         )
         draw_text(self.screen, "INTELLIGENCE OFFICE", (30, CONTENT_TOP + 10),
                   size=26, color=HIGHLIGHT, bold=True)
@@ -1536,11 +1548,52 @@ class Client:
         draw_text(self.screen, status, (30, CONTENT_TOP + 72),
                   size=15, color=status_color)
 
-        # Report body
-        pygame.draw.rect(self.screen, PANEL, (20, CONTENT_TOP + 110, 1160, 680),
+        # Report body — left ~55% (650px wide).
+        pygame.draw.rect(self.screen, PANEL, (20, CONTENT_TOP + 110, 670, 680),
                          border_radius=6)
-        pygame.draw.rect(self.screen, BORDER, (20, CONTENT_TOP + 110, 1160, 680), 1,
+        pygame.draw.rect(self.screen, BORDER, (20, CONTENT_TOP + 110, 670, 680), 1,
                          border_radius=6)
+        # DIRTY TRICKS panel — right ~40% (470px wide).
+        sab_rect = pygame.Rect(710, CONTENT_TOP + 110, 470, 680)
+        pygame.draw.rect(self.screen, PANEL, sab_rect, border_radius=6)
+        pygame.draw.rect(self.screen, BORDER, sab_rect, 1, border_radius=6)
+        draw_text(self.screen, "DIRTY TRICKS",
+                  (sab_rect.x + 14, sab_rect.y + 8),
+                  size=18, color=HIGHLIGHT, bold=True)
+        draw_text(self.screen, "Press the number to fire. One per season.",
+                  (sab_rect.x + 14, sab_rect.y + 36),
+                  size=12, color=DIM)
+        sy = sab_rect.y + 60
+        for idx, card in enumerate(SABOTAGE_CARDS, start=1):
+            ok, why = sabotage_available(me, self.state, card.card_id)
+            head_color = GREEN if ok else DIM
+            draw_text(
+                self.screen,
+                f"[{idx}] {card.name}  ({card.cost} MB)",
+                (sab_rect.x + 14, sy), size=15, color=head_color, bold=True,
+            )
+            sy += 20
+            # Word-wrap the description across the panel width.
+            words = card.description.split()
+            line = ""
+            for w in words:
+                trial = (line + " " + w).strip()
+                if len(trial) > 56:
+                    draw_text(self.screen, line,
+                              (sab_rect.x + 28, sy), size=12, color=FG)
+                    sy += 16
+                    line = w
+                else:
+                    line = trial
+            if line:
+                draw_text(self.screen, line,
+                          (sab_rect.x + 28, sy), size=12, color=FG)
+                sy += 16
+            if not ok:
+                draw_text(self.screen, f"  ({why})",
+                          (sab_rect.x + 28, sy), size=11, color=HIGHLIGHT)
+                sy += 16
+            sy += 10
         x = 40
         y = CONTENT_TOP + 130
         report = me.latest_intel

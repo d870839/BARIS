@@ -447,3 +447,67 @@ def build_recruit_panel(client: "BarisClient", parent: Entity) -> Entity:
 
     _close_button(client, root, -0.22)
     return root
+
+
+# ----------------------------------------------------------------------
+# DIRTY TRICKS panel — opened from the Intelligence Office
+# ----------------------------------------------------------------------
+def build_sabotage_panel(client: "BarisClient", parent: Entity) -> Entity:
+    from baris.resolver import sabotage_available
+    from baris.state import SABOTAGE_CARDS
+    me = client.me()
+    root, w, h = _panel_shell(
+        parent, "DIRTY TRICKS",
+        width=1.0, height=0.7, title_color=(220, 130, 170),
+    )
+    if me is None or client.state is None:
+        _close_button(client, root, -0.3)
+        return root
+    Text(
+        text=(
+            f"Budget: {me.budget} MB.   One sabotage per season.   "
+            "Cards refund themselves if there's no valid target."
+        ),
+        parent=root, position=(0, 0.27),
+        origin=(0, 0), z=-0.01,
+        scale=0.9, color=color.rgb32(220, 225, 235),
+    )
+    # One row per card.
+    row_y = 0.16
+    for card in SABOTAGE_CARDS:
+        ok, why = sabotage_available(me, client.state, card.card_id)
+        Text(
+            text=f"{card.name}   ({card.cost} MB)",
+            parent=root, position=(-0.45, row_y),
+            origin=(-0.5, 0.5), z=-0.01,
+            scale=1.05,
+            color=color.rgb32(110, 200, 130) if ok else color.rgb32(160, 165, 180),
+        )
+        Text(
+            text=card.description,
+            parent=root, position=(-0.45, row_y - 0.04),
+            origin=(-0.5, 0.5), z=-0.01,
+            scale=0.78, color=color.rgb32(190, 195, 210),
+        )
+        if ok:
+            btn = Button(
+                parent=root, text="FIRE",
+                position=(0.38, row_y - 0.02, -0.02),
+                scale=(0.16, 0.06),
+                color=color.rgb32(170, 60, 90),
+                highlight_color=color.rgb32(220, 90, 130),
+            )
+            btn.on_click = (
+                lambda cid=card.card_id: client.intel_execute_sabotage(cid)
+            )
+        else:
+            Text(
+                text=f"({why})",
+                parent=root, position=(0.38, row_y - 0.02),
+                origin=(0, 0), z=-0.01,
+                scale=0.85, color=color.rgb32(220, 180, 110),
+            )
+        row_y -= 0.13
+
+    _close_button(client, root, -0.3)
+    return root
