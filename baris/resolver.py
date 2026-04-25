@@ -1526,6 +1526,22 @@ _NEWS_POOL: tuple[tuple[str, int, Any], ...] = (
 _news_enabled: bool = True
 
 
+def memorial_roll(state: GameState) -> list[tuple[str, str, int, str, str]]:
+    """Phase N — flatten mission_history into a per-astronaut memorial
+    roster for the Memorial Wall. Returns a list of
+    (astronaut_name, mission_name, year, season, side) tuples ordered
+    by when each death happened (oldest first). Pure derivation; no
+    state mutation. Both clients render directly off this."""
+    roll: list[tuple[str, str, int, str, str]] = []
+    for entry in state.mission_history:
+        for name in entry.deaths:
+            roll.append((
+                name, entry.mission_name, entry.year,
+                entry.season, entry.side,
+            ))
+    return roll
+
+
 def _run_government_review(state: GameState, ended_year: int) -> None:
     """Phase M — once per game-year, score each player on the year just
     ended. Below REVIEW_PASS_THRESHOLD adds a warning; reach

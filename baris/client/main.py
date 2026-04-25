@@ -1665,27 +1665,26 @@ class Client:
             draw_text(self.screen, f"opp: {opp.prestige}",
                       (lx, plot.y + 72), size=12, color=FG)
 
-        # -------- Mission history (bottom half) --------
-        hist = pygame.Rect(30, CONTENT_TOP + 320, 1120, 470)
+        # -------- Mission history (bottom-left, ~70% of width) --------
+        hist = pygame.Rect(30, CONTENT_TOP + 320, 760, 470)
         pygame.draw.rect(self.screen, PANEL, hist, border_radius=6)
         pygame.draw.rect(self.screen, BORDER, hist, 1, border_radius=6)
         draw_text(self.screen, "Mission history (most recent last)",
                   (hist.x + 14, hist.y + 8),
                   size=15, color=HIGHLIGHT, bold=True)
         header = (
-            f"{'Season':<12}{'Side':<6}{'Mission':<28}{'Rocket':<14}"
-            f"{'Result':<10}{'Δ prest':<9}Crew"
+            f"{'Season':<12}{'Side':<6}{'Mission':<22}{'Rocket':<11}"
+            f"{'Result':<8}{'Δ prest':<9}Crew"
         )
         draw_text(self.screen, header, (hist.x + 14, hist.y + 34),
-                  size=13, color=DIM)
+                  size=12, color=DIM)
         y = hist.y + 56
         entries = self.state.mission_history
-        # Show the last 18 entries so the panel stays readable.
         for e in entries[-18:]:
             stamp = f"{e.season} {e.year}"[:11]
             side = e.side or "?"
-            name = (e.mission_name or e.mission_id)[:27]
-            rocket = (e.rocket or "?")[:13]
+            name = (e.mission_name or e.mission_id)[:21]
+            rocket = (e.rocket or "?")[:10]
             if e.success:
                 result = "FIRST!" if e.first_claimed else "ok"
                 result_color = GREEN if not e.first_claimed else HIGHLIGHT
@@ -1696,14 +1695,35 @@ class Client:
             if e.deaths:
                 crew_txt += f"  (+{len(e.deaths)} KIA)"
             row = (
-                f"{stamp:<12}{side:<6}{name:<28}{rocket:<14}"
-                f"{result:<10}{e.prestige_delta:<+9}{crew_txt[:40]}"
+                f"{stamp:<12}{side:<6}{name:<22}{rocket:<11}"
+                f"{result:<8}{e.prestige_delta:<+9}{crew_txt[:18]}"
             )
-            draw_text(self.screen, row, (hist.x + 14, y), size=13, color=result_color)
+            draw_text(self.screen, row, (hist.x + 14, y), size=12, color=result_color)
             y += 22
         if not entries:
             draw_text(self.screen, "(No missions have flown yet.)",
                       (hist.x + 14, y), size=14, color=DIM)
+
+        # -------- Memorial roll (bottom-right) --------
+        from baris.resolver import memorial_roll
+        mem = pygame.Rect(810, CONTENT_TOP + 320, 340, 470)
+        pygame.draw.rect(self.screen, PANEL, mem, border_radius=6)
+        pygame.draw.rect(self.screen, BORDER, mem, 1, border_radius=6)
+        draw_text(self.screen, "In memoriam",
+                  (mem.x + 14, mem.y + 8),
+                  size=15, color=HIGHLIGHT, bold=True)
+        roll = memorial_roll(self.state)
+        if not roll:
+            draw_text(self.screen, "(no losses yet — fly safe)",
+                      (mem.x + 14, mem.y + 38), size=13, color=DIM)
+        else:
+            my = mem.y + 38
+            # Newest first so freshly-fallen astronauts surface at the top.
+            for entry in reversed(roll[-18:]):
+                name, mission_name, year, season, side = entry
+                line = f"{name:<13} {mission_name[:14]:<14} {season[:3]} {year}"
+                draw_text(self.screen, line, (mem.x + 14, my), size=12, color=DIM)
+                my += 22
 
     def _render_tab_log(self) -> None:
         assert self.state is not None

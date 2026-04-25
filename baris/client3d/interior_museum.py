@@ -29,6 +29,9 @@ HISTORY_ROWS = 18
 # How many prestige snapshots the chart shows (newest-first trim).
 TIMELINE_SAMPLES = 40
 
+# How many memorial rows fit on the west wall (Phase N).
+MEMORIAL_ROWS = 12
+
 
 class MuseumInterior:
     def __init__(
@@ -45,10 +48,15 @@ class MuseumInterior:
         self.timeline_legend: Text | None = None
         self.timeline_bars: list[tuple[Entity, Entity]] = []
         self.timeline_xlabel: Text | None = None
+        # Phase N — Memorial Wall
+        self.memorial_title: Text | None = None
+        self.memorial_rows: list[Text] = []
+        self.memorial_empty: Text | None = None
 
         self._build_room()
         self._build_history_wall()
         self._build_timeline_wall()
+        self._build_memorial_wall()
         self._build_exit()
 
     def _build_room(self) -> None:
@@ -197,6 +205,49 @@ class MuseumInterior:
         )
         _ = z0
 
+    def _build_memorial_wall(self) -> None:
+        """West wall: Memorial plaque listing every astronaut KIA on a
+        flight, oldest first. A small headline + a granite-style plate
+        + up to MEMORIAL_ROWS engraved name lines."""
+        wall_x = -ROOM_WIDTH / 2 + 0.14
+        Entity(  # back plate
+            parent=self.root, model="cube",
+            position=(wall_x, 1.7, 0), scale=(0.1, 3.2, 8.0),
+            color=color.rgb32(60, 60, 70),
+        )
+        Entity(  # inset face
+            parent=self.root, model="cube",
+            position=(wall_x + 0.06, 1.7, 0), scale=(0.02, 2.9, 7.6),
+            color=color.rgb32(35, 35, 45),
+        )
+        self.memorial_title = Text(
+            text="IN  MEMORIAM",
+            parent=self.root,
+            position=(wall_x + 0.1, 3.05, 0), rotation=(0, 90, 0),
+            scale=8.5, origin=(0, 0),
+            color=color.rgb32(220, 200, 150),
+        )
+        # Pre-allocate engraved-name rows. Default empty; sync_state
+        # fills them in with KIA entries from state.mission_history.
+        for i in range(MEMORIAL_ROWS):
+            t = Text(
+                text="",
+                parent=self.root,
+                position=(wall_x + 0.1, 2.55 - i * 0.21, 0),
+                rotation=(0, 90, 0),
+                scale=4.2, origin=(0, 0),
+                color=color.rgb32(220, 215, 200),
+            )
+            self.memorial_rows.append(t)
+        # Empty-state placeholder shown when nobody has died yet.
+        self.memorial_empty = Text(
+            text="(no losses yet — fly safe)",
+            parent=self.root,
+            position=(wall_x + 0.1, 1.6, 0), rotation=(0, 90, 0),
+            scale=4.2, origin=(0, 0),
+            color=color.rgb32(160, 155, 145),
+        )
+
     def _build_exit(self) -> None:
         z = -ROOM_DEPTH / 2 + 0.8
         Entity(
@@ -229,6 +280,26 @@ class MuseumInterior:
     def sync_state(self, me: Any, state: Any = None, *_: Any) -> None:
         self._sync_history(state)
         self._sync_timeline(state)
+        self._sync_memorial(state)
+
+    def _sync_memorial(self, state: Any) -> None:
+        from baris.resolver import memorial_roll
+        roll = memorial_roll(state) if state is not None else []
+        if not roll:
+            for t in self.memorial_rows:
+                t.text = ""
+            if self.memorial_empty is not None:
+                self.memorial_empty.enabled = True
+            return
+        if self.memorial_empty is not None:
+            self.memorial_empty.enabled = False
+        # Newest first so freshly-fallen astronauts are visible at the top.
+        for i, t in enumerate(self.memorial_rows):
+            if i >= len(roll):
+                t.text = ""
+                continue
+            name, mission_name, year, season, side = roll[-(i + 1)]
+            t.text = f"{name:<14}  {mission_name[:18]:<18}  {season[:3]} {year}"
 
     def _sync_history(self, state: Any) -> None:
         history = list(getattr(state, "mission_history", []) or [])

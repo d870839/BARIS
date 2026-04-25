@@ -3071,3 +3071,54 @@ def test_legacy_player_dict_backfills_review_fields() -> None:
     p = _player_from_dict(raw)
     assert p.warnings == 0
     assert p.last_review_year == 0
+
+
+# ----------------------------------------------------------------------
+# Phase N — Memorial Wall
+# ----------------------------------------------------------------------
+
+
+def test_memorial_roll_empty_when_no_deaths() -> None:
+    from baris.resolver import memorial_roll
+    state = _two_player_state()
+    start_game(state, rng=random.Random(1))
+    assert memorial_roll(state) == []
+
+
+def test_memorial_roll_flattens_deaths_in_chronological_order() -> None:
+    from baris.resolver import memorial_roll
+    state = _two_player_state()
+    start_game(state, rng=random.Random(1))
+    state.mission_history.append(MissionHistoryEntry(
+        year=1959, season="Summer", side=Side.USA.value,
+        mission_id="x", mission_name="Mercury 4",
+        rocket="Redstone", manned=True, success=False,
+        deaths=["Glenn"],
+    ))
+    state.mission_history.append(MissionHistoryEntry(
+        year=1962, season="Fall", side=Side.USSR.value,
+        mission_id="y", mission_name="Voskhod 2",
+        rocket="R-7", manned=True, success=False,
+        deaths=["Komarov", "Volkov"],
+    ))
+    roll = memorial_roll(state)
+    # Three names total, in append order (chronological).
+    assert [r[0] for r in roll] == ["Glenn", "Komarov", "Volkov"]
+    assert roll[0] == ("Glenn", "Mercury 4", 1959, "Summer", Side.USA.value)
+    assert roll[1][1] == "Voskhod 2"
+    assert roll[2][1] == "Voskhod 2"
+
+
+def test_memorial_roll_handles_multiple_deaths_per_flight() -> None:
+    from baris.resolver import memorial_roll
+    state = _two_player_state()
+    start_game(state, rng=random.Random(1))
+    state.mission_history.append(MissionHistoryEntry(
+        year=1967, season="Winter", side=Side.USA.value,
+        mission_id="z", mission_name="Apollo 1",
+        rocket="Saturn V", manned=True, success=False,
+        deaths=["Grissom", "White", "Chaffee"],
+    ))
+    roll = memorial_roll(state)
+    assert len(roll) == 3
+    assert all(entry[1] == "Apollo 1" for entry in roll)
