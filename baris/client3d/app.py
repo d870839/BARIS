@@ -492,35 +492,39 @@ class BarisClient(Entity):
             )
         elif bid == "rd":
             # R&D Complex — three exhaust stacks on the roof, evoking
-            # an industrial / propellant test stand.
+            # an industrial / propellant test stand. Base sits clearly
+            # above the roof slab top (~y=6.6) so the stacks don't dip
+            # into the body geometry.
             for dx in (-1.8, 0.0, 1.8):
                 Entity(
                     model="cube",
-                    position=(x + dx, 7.4, z + 2.0),
-                    scale=(0.6, 2.0, 0.6),
+                    position=(x + dx, 7.9, z + 2.0),
+                    scale=(0.6, 2.4, 0.6),
                     color=color.rgb32(155, 155, 165),
                 )
                 # Black soot tip
                 Entity(
                     model="cube",
-                    position=(x + dx, 8.5, z + 2.0),
+                    position=(x + dx, 9.2, z + 2.0),
                     scale=(0.7, 0.15, 0.7),
                     color=color.rgb32(45, 45, 50),
                 )
         elif bid == "astro":
             # Astronaut Complex — half-dome on the roof, evoking a
-            # planetarium / centrifuge training building.
+            # planetarium / centrifuge training building. Centre sits
+            # one full radius above the roof slab so the lower
+            # hemisphere doesn't penetrate the body.
             Entity(
                 model="sphere",
-                position=(x, 6.4, z),
+                position=(x, 8.4, z),
                 scale=(5.5, 2.6, 5.5),
                 color=color.rgb32(70, 130, 220),
             )
             # Antenna spire
             Entity(
                 model="cube",
-                position=(x, 8.4, z),
-                scale=(0.1, 1.2, 0.1),
+                position=(x, 10.4, z),
+                scale=(0.1, 1.4, 0.1),
                 color=color.rgb32(200, 200, 215),
             )
         elif bid == "library":
@@ -554,25 +558,26 @@ class BarisClient(Entity):
                 color=color.rgb32(225, 220, 205),
             )
         elif bid == "intel":
-            # Intelligence — radar dome (sphere) + a lower satellite dish.
+            # Intelligence — radar dome (sphere) + a satellite dish that
+            # sits on the roof, not penetrating it.
             Entity(
                 model="sphere",
-                position=(x, 7.2, z + 1.6),
+                position=(x, 7.5, z + 1.6),
                 scale=(2.4, 1.2, 2.4),
                 color=color.rgb32(220, 215, 230),
             )
             # Small antenna mast on top of the dome
             Entity(
                 model="cube",
-                position=(x, 8.4, z + 1.6),
+                position=(x, 8.7, z + 1.6),
                 scale=(0.12, 1.2, 0.12),
                 color=color.rgb32(190, 190, 210),
             )
-            # Side-mounted satellite dish
+            # Roof-mounted satellite dish (clear of the body)
             Entity(
                 model="sphere",
-                position=(x - 2.3, 6.8, z),
-                scale=(1.2, 0.5, 1.2),
+                position=(x - 1.8, 7.6, z - 1.2),
+                scale=(1.6, 0.4, 1.6),
                 color=color.rgb32(230, 225, 240),
             )
         elif bid == "museum":
@@ -868,18 +873,8 @@ class BarisClient(Entity):
             return "[E] +5 MB"
         if bid == "spend_minus":
             return "[E] -5 MB"
-        if bid.startswith("mission:"):
-            mid = bid.split(":", 1)[1]
-            try:
-                name = MISSIONS_BY_ID[MissionId(mid)].name
-            except (ValueError, KeyError):
-                name = mid
-            return f"[E] Queue mission: {name}"
-        if bid.startswith("objective:"):
-            pretty = bid.split(":", 1)[1].replace("_", " ").title()
-            return f"[E] Toggle objective: {pretty}"
-        if bid.startswith("arch:"):
-            return f"[E] Commit architecture: {bid.split(':', 1)[1]}"
+        if bid == "mc_panel":
+            return "[E] Open MISSION SELECT — pick mission / objectives / arch"
         return ""
 
     # ------------------------------------------------------------------
@@ -1047,29 +1042,17 @@ class BarisClient(Entity):
             elif bid == "spend_minus":
                 self.rd_change_spend(-5)
             return
-        # Mission Control buttons
+        # Mission Control buttons. The V2 layout only has three: a single
+        # MISSION SELECT console that opens the panel, a SCRUB pedestal,
+        # and the EXIT (handled above). Every per-mission / per-objective
+        # / per-architecture press happens inside the panel now.
         if self.in_interior == "mc":
             if bid == "scrub":
                 self.mc_scrub_scheduled()
                 return
-            if bid.startswith("mission:"):
-                try:
-                    mid = MissionId(bid.split(":", 1)[1])
-                except ValueError:
-                    return
-                self.mc_select_mission(mid)
-            elif bid.startswith("objective:"):
-                try:
-                    oid = ObjectiveId(bid.split(":", 1)[1])
-                except ValueError:
-                    return
-                self.mc_toggle_objective(oid)
-            elif bid.startswith("arch:"):
-                try:
-                    arch = Architecture(bid.split(":", 1)[1])
-                except ValueError:
-                    return
-                self.mc_choose_architecture(arch)
+            if bid == "mc_panel":
+                self._open_panel("mc")
+                return
             return
         # Astronaut Complex buttons
         if self.in_interior == "astro":

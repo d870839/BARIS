@@ -268,9 +268,17 @@ def build_mc_panel(client: "BarisClient", parent: Entity) -> Entity:
                 f"LM:      {-lm_penalty:+.3f}\n"
             )
         compat_line = f"Compat:  {compat_b:+.3f}\n" if compat_b else ""
+        # Pad assignment preview — server picks the first available pad
+        # at resolve time, so report what that would be right now.
+        next_pad = me.available_pad()
+        if next_pad is not None:
+            pad_line = f"Pad:     {next_pad.pad_id}\n"
+        else:
+            pad_line = "Pad:     ALL BUSY — won't fly\n"
         brief = (
             f"Rocket:  {rocket_display_name(eff_rocket, me.side)}\n"
             f"Cost:    {eff_cost} MB\n"
+            f"{pad_line}"
             f"Base:    {base:+.2f}\n"
             f"Crew:    {crew_b:+.2f}\n"
             f"{compat_line}"

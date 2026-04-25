@@ -1,18 +1,23 @@
-"""Mission Control interior — a walk-in ops floor. Layout:
+"""Mission Control interior — a walk-in ops floor.
 
-- Central console: 3×4 grid of pedestals, one per MissionId. Disabled
-  (dim red cap) when the mission isn't currently visible to the player;
-  green with [X] prefix when queued.
-- North wall: giant briefing TV summarising the queued mission.
-- West wall: objective toggle pedestals (up to 5, only those belonging
-  to the queued mission are enabled).
-- East wall: architecture selector pedestals (LOR/DA/EOR/LSR), only
-  enabled once Tier 3 unlocks and no architecture has been committed.
-- South wall: doorway + EXIT pedestal.
+V2 layout (Phase L+):
+  * North wall — giant briefing TV summarising the queued mission +
+    which pad will receive it.
+  * West wall — PAD STATUS dashboard (A / B / C, each with state
+    + scheduled-mission name + repair countdown when damaged).
+  * Centre — single MISSION SELECT console: press E to open the
+    full mc panel for picking missions, toggling objectives, and
+    committing an architecture. The panel handles every prereq
+    constraint (only objectives belonging to the queued mission are
+    selectable, architecture only appears at Tier 3, etc.).
+  * South wall — SCRUB pedestal beside the EXIT.
 
-Each press routes through BarisClient's existing mc_* methods, which
-already guard against me.turn_submitted, so interactions lock during
-waiting-on-opponent."""
+The previous floor of mission/objective/architecture pedestals lived
+here through phases A-K. It worked but was visually noisy — too many
+pedestals competing for attention, and constraints (e.g. moonwalk
+only on lunar landings) were communicated by dim red caps in a sea
+of pedestals. The panel-driven menu is denser and the constraints
+become invisible-by-default rather than disabled-and-visible."""
 from __future__ import annotations
 
 from typing import Any
@@ -22,21 +27,14 @@ from ursina import Entity, Text, color, invoke
 from baris.resolver import (
     crew_compatibility_bonus,
     effective_base_success,
-    effective_lunar_modifier,
     effective_launch_cost,
+    effective_lunar_modifier,
     effective_rocket,
-    visible_missions,
 )
 from baris.state import (
-    ARCHITECTURE_FULL_NAMES,
-    Architecture,
-    MISSIONS,
     MISSIONS_BY_ID,
     MissionId,
-    ObjectiveId,
-    ProgramTier,
     RELIABILITY_SWING_PER_POINT,
-    objectives_for,
     rocket_display_name,
 )
 
@@ -46,26 +44,6 @@ ROOM_DEPTH = 18.0
 ROOM_HEIGHT = 5.0
 BUTTON_RANGE = 2.0
 
-# Mission grid
-# Mission-grid layout: one row per tier. Each row centres on the pad
-# cluster and uses COL_X_OFFSET between adjacent pedestals so tiers with
-# different mission counts still line up symmetrically.
-ROW_Z_OFFSET = 2.4
-COL_X_OFFSET = 2.1
-
-# All possible objectives in a fixed x-order on the west wall.
-ALL_OBJECTIVES: tuple[ObjectiveId, ...] = (
-    ObjectiveId.EVA,
-    ObjectiveId.DOCKING,
-    ObjectiveId.LONG_DURATION,
-    ObjectiveId.MOONWALK,
-    ObjectiveId.SAMPLE_RETURN,
-)
-
-
-def _tier_for(m) -> int:
-    return int(m.tier.value)
-
 
 class MCInterior:
     def __init__(self, origin: tuple[float, float, float] = (200.0, 0.0, 0.0)) -> None:
@@ -73,31 +51,28 @@ class MCInterior:
         self.root = Entity(position=origin)
         self.root.enabled = False
 
-        # Dynamic refs
         self.buttons: dict[str, Entity] = {}
-        self._mission_caps: dict[str, Entity] = {}      # mission_id.value -> cap
-        self._mission_labels: dict[str, Text] = {}      # mission_id.value -> label
-        self._arch_caps: dict[str, Entity] = {}         # Architecture.value -> cap
-        self._objective_caps: dict[str, Entity] = {}    # ObjectiveId.value -> cap
-        self._objective_labels: dict[str, Text] = {}
 
-        # Briefing TV text refs
+        # Briefing TV refs
         self.briefing_title: Text | None = None
         self.briefing_rocket: Text | None = None
         self.briefing_cost: Text | None = None
+        self.briefing_pad: Text | None = None
         self.briefing_base: Text | None = None
         self.briefing_crew: Text | None = None
         self.briefing_rel: Text | None = None
         self.briefing_effective: Text | None = None
         self.briefing_status: Text | None = None
 
+        # Pad dashboard refs
+        self._pad_status_rows: list[dict[str, Any]] = []
+
         self._build_room()
-        self._build_mission_grid()
         self._build_briefing_tv()
-        self._build_objective_wall()
-        self._build_arch_wall()
-        self._build_exit()
+        self._build_pad_dashboard()
+        self._build_mission_console()
         self._build_scrub_station()
+        self._build_exit()
 
     # ------------------------------------------------------------------
     # Geometry
@@ -118,11 +93,13 @@ class MCInterior:
             color=color.rgb32(205, 205, 210),
         )
         wall = color.rgb32(235, 235, 240)
+        # North
         Entity(
             parent=self.root, model="cube", collider="box",
             scale=(ROOM_WIDTH, ROOM_HEIGHT, 0.2),
             position=(0, ROOM_HEIGHT / 2, half_d), color=wall,
         )
+        # West / East
         Entity(
             parent=self.root, model="cube", collider="box",
             scale=(0.2, ROOM_HEIGHT, ROOM_DEPTH),
@@ -133,6 +110,7 @@ class MCInterior:
             scale=(0.2, ROOM_HEIGHT, ROOM_DEPTH),
             position=(half_w, ROOM_HEIGHT / 2, 0), color=wall,
         )
+        # South wall with doorway split
         door_half = 1.0
         Entity(
             parent=self.root, model="cube", collider="box",
@@ -151,65 +129,13 @@ class MCInterior:
             scale=(door_half * 2, 0.6, 0.2),
             position=(0, ROOM_HEIGHT - 0.3, -half_d), color=wall,
         )
-        # Central console slab — pedestals sit on top of it. Widened to
-        # hold the post-Phase-G catalog (Tier 2 now has 7 missions).
-        Entity(
-            parent=self.root, model="cube",
-            position=(0, 0.3, 0),
-            scale=(16.0, 0.6, 8.0),
-            color=color.rgb32(70, 75, 90),
-            collider="box",
-        )
-
-    def _build_mission_grid(self) -> None:
-        """One row of pedestals per tier, centred on the console slab.
-        Rows carry whatever count their tier has — Phase G pushed Tier 2
-        up to seven missions, so row widths are no longer fixed."""
-        missions = list(MISSIONS)
-        rows = [
-            [m for m in missions if _tier_for(m) == 1],
-            [m for m in missions if _tier_for(m) == 2],
-            [m for m in missions if _tier_for(m) == 3],
-        ]
-        for r, row_missions in enumerate(rows):
-            row_width = max(0, len(row_missions) - 1)
-            for c, m in enumerate(row_missions):
-                x = (c - row_width / 2) * COL_X_OFFSET
-                z = (r - (len(rows) - 1) / 2) * ROW_Z_OFFSET
-                # Pedestal base (on top of the console slab at y≈0.6).
-                Entity(
-                    parent=self.root, model="cube",
-                    position=(x, 0.95, z),
-                    scale=(0.9, 0.7, 0.9),
-                    color=color.rgb32(110, 115, 130),
-                    collider="box",
-                )
-                cap = Entity(
-                    parent=self.root, model="cube",
-                    position=(x, 1.35, z),
-                    scale=(0.55, 0.16, 0.55),
-                    color=color.rgb32(70, 75, 95),
-                )
-                cap._rest_y = cap.y
-                bid = f"mission:{m.id.value}"
-                self.buttons[bid] = cap
-                self._mission_caps[m.id.value] = cap
-                # Two-line label above the pedestal.
-                lbl = Text(
-                    text=m.name[:20],
-                    parent=self.root,
-                    position=(x, 1.55, z),
-                    scale=4.5, origin=(0, 0),
-                    billboard=True,
-                    color=color.rgb32(220, 225, 235),
-                )
-                self._mission_labels[m.id.value] = lbl
 
     def _build_briefing_tv(self) -> None:
-        """Giant status board on the north wall."""
+        """Giant status board on the north wall — header, mission name,
+        and a 2-column stat grid with rocket / cost / pad / base /
+        crew / reliability / effective % / status."""
         z = ROOM_DEPTH / 2 - 0.12
         y = 3.2
-        # Frame + screen
         Entity(
             parent=self.root, model="cube",
             position=(0, y, z), scale=(12.0, 3.2, 0.1),
@@ -220,7 +146,6 @@ class MCInterior:
             position=(0, y, z - 0.06), scale=(11.6, 2.8, 0.02),
             color=color.rgb32(16, 22, 36),
         )
-        # Header
         Text(
             text="QUEUED MISSION",
             parent=self.root,
@@ -228,7 +153,6 @@ class MCInterior:
             scale=7, origin=(0, 0),
             color=color.rgb32(240, 200, 90),
         )
-        # Mission name (big)
         self.briefing_title = Text(
             text="(none)",
             parent=self.root,
@@ -236,10 +160,10 @@ class MCInterior:
             scale=12, origin=(0, 0),
             color=color.rgb32(230, 230, 235),
         )
-        # Stats grid: two columns of four rows each
         left_x = -4.6
-        for i, attr in enumerate(("briefing_rocket", "briefing_cost",
-                                  "briefing_base",   "briefing_crew")):
+        for i, attr in enumerate((
+            "briefing_rocket", "briefing_cost", "briefing_pad", "briefing_base",
+        )):
             t = Text(
                 text="",
                 parent=self.root,
@@ -249,8 +173,9 @@ class MCInterior:
             )
             setattr(self, attr, t)
         right_x = 0.6
-        for i, attr in enumerate(("briefing_rel", "briefing_effective",
-                                  "briefing_status")):
+        for i, attr in enumerate((
+            "briefing_crew", "briefing_rel", "briefing_effective", "briefing_status",
+        )):
             t = Text(
                 text="",
                 parent=self.root,
@@ -260,89 +185,109 @@ class MCInterior:
             )
             setattr(self, attr, t)
 
-    def _build_objective_wall(self) -> None:
-        """West wall: five objective-toggle pedestals in a vertical column."""
-        x = -ROOM_WIDTH / 2 + 0.6
-        # Backdrop plinth
+    def _build_pad_dashboard(self) -> None:
+        """West wall: live readout of all three launch pads. Each row
+        gets its own dark plate with a coloured status lamp on the left
+        and three text lines (label / state / scheduled mission)."""
+        wall_x = -ROOM_WIDTH / 2 + 0.14
+        # Backdrop plate.
         Entity(
             parent=self.root, model="cube",
-            position=(x, 0.5, 0), scale=(0.8, 1.0, 8.5),
-            color=color.rgb32(85, 90, 105),
-            collider="box",
+            position=(wall_x, 2.4, 0), scale=(0.1, 4.0, 9.0),
+            color=color.rgb32(40, 45, 55),
+        )
+        Entity(
+            parent=self.root, model="cube",
+            position=(wall_x + 0.06, 2.4, 0), scale=(0.02, 3.6, 8.6),
+            color=color.rgb32(16, 22, 36),
         )
         Text(
-            text="OBJECTIVES",
+            text="LAUNCH PADS",
             parent=self.root,
-            position=(x - 0.1, 2.8, 0), rotation=(0, 90, 0),
+            position=(wall_x + 0.1, 4.0, 0), rotation=(0, 90, 0),
             scale=7, origin=(0, 0),
-            color=color.rgb32(240, 200, 90),
+            color=color.rgb32(240, 200, 110),
         )
-        spacing = 1.6
-        start_z = -((len(ALL_OBJECTIVES) - 1) / 2) * spacing
-        for i, obj_id in enumerate(ALL_OBJECTIVES):
-            z = start_z + i * spacing
-            cap = Entity(
+        # Three rows for A / B / C, evenly spaced down the wall.
+        for i, pad_label in enumerate(("A", "B", "C")):
+            row_y = 3.0 - i * 1.05
+            lamp = Entity(
                 parent=self.root, model="cube",
-                position=(x + 0.05, 1.1, z), scale=(0.5, 0.15, 0.9),
-                color=color.rgb32(70, 75, 95),
+                position=(wall_x + 0.1, row_y, -3.0),
+                rotation=(0, 90, 0),
+                scale=(0.5, 0.5, 0.05),
+                color=color.rgb32(110, 200, 120),  # default green / idle
             )
-            cap._rest_y = cap.y
-            bid = f"objective:{obj_id.value}"
-            self.buttons[bid] = cap
-            self._objective_caps[obj_id.value] = cap
-            lbl = Text(
-                text=obj_id.value.replace("_", " ").title(),
+            label = Text(
+                text=f"PAD {pad_label}",
                 parent=self.root,
-                position=(x - 0.45, 1.1, z), rotation=(0, 90, 0),
-                scale=4, origin=(0, 0),
+                position=(wall_x + 0.1, row_y + 0.25, -2.0),
+                rotation=(0, 90, 0),
+                scale=6, origin=(-0.5, 0.5),
+                color=color.rgb32(240, 240, 245),
+            )
+            state_line = Text(
+                text="",
+                parent=self.root,
+                position=(wall_x + 0.1, row_y - 0.05, -2.0),
+                rotation=(0, 90, 0),
+                scale=4, origin=(-0.5, 0.5),
+                color=color.rgb32(180, 190, 210),
+            )
+            mission_line = Text(
+                text="",
+                parent=self.root,
+                position=(wall_x + 0.1, row_y - 0.32, -2.0),
+                rotation=(0, 90, 0),
+                scale=4, origin=(-0.5, 0.5),
                 color=color.rgb32(220, 225, 235),
             )
-            self._objective_labels[obj_id.value] = lbl
+            self._pad_status_rows.append({
+                "lamp": lamp,
+                "label": label,
+                "state": state_line,
+                "mission": mission_line,
+            })
 
-    def _build_arch_wall(self) -> None:
-        """East wall: architecture selector."""
-        x = ROOM_WIDTH / 2 - 0.6
+    def _build_mission_console(self) -> None:
+        """Single tall console in the centre of the floor. Press E to
+        open the full mission-control panel — pick a mission, toggle
+        objectives, commit an architecture."""
+        x = 0.0
+        z = -1.0
         Entity(
             parent=self.root, model="cube",
-            position=(x, 0.5, 0), scale=(0.8, 1.0, 7.0),
-            color=color.rgb32(85, 90, 105),
+            position=(x, 0.7, z), scale=(2.0, 1.4, 1.4),
+            color=color.rgb32(60, 70, 95),
             collider="box",
         )
-        Text(
-            text="ARCHITECTURE",
-            parent=self.root,
-            position=(x + 0.1, 2.8, 0), rotation=(0, -90, 0),
-            scale=7, origin=(0, 0),
-            color=color.rgb32(240, 200, 90),
+        cap = Entity(
+            parent=self.root, model="cube",
+            position=(x, 1.5, z), scale=(1.5, 0.18, 1.0),
+            color=color.rgb32(110, 170, 220),
         )
-        specs = (Architecture.LOR, Architecture.DA, Architecture.EOR, Architecture.LSR)
-        spacing = 1.6
-        start_z = -((len(specs) - 1) / 2) * spacing
-        for i, arch in enumerate(specs):
-            z = start_z + i * spacing
-            cap = Entity(
-                parent=self.root, model="cube",
-                position=(x - 0.05, 1.1, z), scale=(0.5, 0.15, 0.9),
-                color=color.rgb32(70, 75, 95),
-            )
-            cap._rest_y = cap.y
-            bid = f"arch:{arch.value}"
-            self.buttons[bid] = cap
-            self._arch_caps[arch.value] = cap
-            Text(
-                text=f"{arch.value}\n{ARCHITECTURE_FULL_NAMES[arch]}",
-                parent=self.root,
-                position=(x + 0.45, 1.1, z), rotation=(0, -90, 0),
-                scale=3.5, origin=(0, 0),
-                color=color.rgb32(220, 225, 235),
-            )
+        cap._rest_y = cap.y
+        self.buttons["mc_panel"] = cap
+        Text(
+            text="MISSION SELECT",
+            parent=self.root,
+            position=(x, 2.4, z), scale=7, origin=(0, 0),
+            billboard=True,
+            color=color.rgb32(220, 235, 250),
+        )
+        Text(
+            text="press E to open the menu",
+            parent=self.root,
+            position=(x, 2.0, z), scale=4.5, origin=(0, 0),
+            billboard=True,
+            color=color.rgb32(160, 175, 195),
+        )
 
     def _build_scrub_station(self) -> None:
-        """A dedicated SCRUB pedestal just south of the console slab so
-        the player can void a scheduled launch without having to swing
-        over to the panel."""
+        """Dedicated SCRUB pedestal east of the doorway; cap goes hot
+        red when something's actually scheduled, dim red otherwise."""
         x = 4.0
-        z = -3.6
+        z = -ROOM_DEPTH / 2 + 0.9
         Entity(
             parent=self.root, model="cube",
             position=(x, 0.45, z), scale=(0.9, 0.9, 0.9),
@@ -360,7 +305,7 @@ class MCInterior:
         Text(
             text="SCRUB\nSCHEDULED",
             parent=self.root,
-            position=(x, 1.5, z),
+            position=(x, 1.55, z),
             scale=4.2, origin=(0, 0),
             billboard=True,
             color=color.rgb32(240, 200, 200),
@@ -400,9 +345,8 @@ class MCInterior:
             return
         scheduled = getattr(me, "scheduled_launch", None)
         scheduled_id = scheduled.mission_id if scheduled is not None else None
-        queued = client.queued_mission.value if (client and client.queued_mission) else None
 
-        # Scrub pedestal cap: hot red when something's scheduled, dim red otherwise.
+        # Scrub pedestal cap recolour.
         scrub_cap = getattr(self, "_scrub_cap", None)
         if scrub_cap is not None:
             scrub_cap.color = (
@@ -410,139 +354,153 @@ class MCInterior:
                 else color.rgb32(80, 55, 55)
             )
 
-        # Mission pedestals: if something is on the manifest, light only
-        # that cap (amber for "scheduled, not green-queued"); every other
-        # cap goes dim red since nothing else can be queued.
-        visible_ids = {m.id.value for m in visible_missions(me)}
-        for mid, cap in self._mission_caps.items():
-            if scheduled_id is not None:
-                if mid == scheduled_id:
-                    cap.color = color.rgb32(240, 170, 60)
-                else:
-                    cap.color = color.rgb32(55, 40, 45)
-                continue
-            if mid == queued:
-                cap.color = color.rgb32(70, 170, 90)
-            elif mid in visible_ids:
-                cap.color = color.rgb32(70, 75, 95)
-            else:
-                cap.color = color.rgb32(70, 40, 40)  # unavailable
+        self._sync_briefing(me, state, client, scheduled_id)
+        self._sync_pad_dashboard(me)
 
-        # Briefing TV — prefer the scheduled mission (next to fly) over
-        # whatever the player may have been previewing with pending clicks.
+    def _sync_briefing(
+        self, me: Any, state: Any, client: Any, scheduled_id: str | None,
+    ) -> None:
+        # Prefer the scheduled mission (next to fly) over whatever the
+        # player's previewing in the open MC panel.
         display_mid: str | None = None
         if scheduled_id is not None:
             display_mid = scheduled_id
         elif client and client.queued_mission is not None:
             display_mid = client.queued_mission.value
+        m = None
         if display_mid is not None:
             try:
                 m = MISSIONS_BY_ID[MissionId(display_mid)]
             except (ValueError, KeyError):
                 m = None
-        else:
-            m = None
-        if m is not None:
-            eff_rocket = effective_rocket(me, m)
-            eff_cost = effective_launch_cost(me, m)
-            base_s = effective_base_success(me, m)
-            rel_bonus = (
-                (me.rocket_reliability(eff_rocket) - 50) * RELIABILITY_SWING_PER_POINT
-            )
-            crew_b = 0.0
-            compat_b = 0.0
-            if m.manned:
-                preview_crew = _preview_crew_selection(me.active_astronauts(), m)
-                if preview_crew:
-                    crew_b = _crew_bonus_from(preview_crew, m)
-                    compat_b = crew_compatibility_bonus(preview_crew)
-            recon_bonus, lm_penalty = effective_lunar_modifier(me, m)
-            eff = base_s + crew_b + compat_b + rel_bonus + recon_bonus - lm_penalty
-            prefix = "SCHEDULED: " if scheduled_id is not None else ""
-            self.briefing_title.text = prefix + m.name.upper()
-            self.briefing_rocket.text = f"Rocket:  {rocket_display_name(eff_rocket, me.side)}"
-            self.briefing_cost.text = f"Cost:    {eff_cost} MB"
-            if recon_bonus > 0 or lm_penalty > 0:
-                # Stash the base modifier line into the 'base' row for
-                # the lunar landing so recon + LM penalty are visible.
-                self.briefing_base.text = (
-                    f"Base:    {base_s:+.2f}   Recon {recon_bonus:+.3f}"
-                )
-                self.briefing_crew.text = (
-                    f"Crew:    {crew_b:+.2f}   LM {-lm_penalty:+.3f}"
-                )
-            else:
-                self.briefing_base.text = f"Base:    {base_s:+.2f}"
-                self.briefing_crew.text = (
-                    f"Crew:    {crew_b:+.2f}" if m.manned else "Crew:    —"
-                )
-            if compat_b:
-                self.briefing_crew.text += f"   Cmpt {compat_b:+.3f}"
-            self.briefing_rel.text = f"Rel'ty:  {rel_bonus:+.3f}"
-            self.briefing_effective.text = (
-                f"EFFECTIVE  {eff:.2f}  (~{int(max(0, min(1, eff)) * 100)}%)"
-            )
-            if m.manned:
-                self.briefing_effective.color = (
-                    color.rgb32(110, 200, 120) if eff >= 0.6
-                    else color.rgb32(240, 200, 90) if eff >= 0.4
-                    else color.rgb32(220, 90, 90)
-                )
-            else:
-                self.briefing_effective.color = color.rgb32(110, 200, 120)
-            from baris.resolver import missing_modules
-            missing_mods = missing_modules(me, m)
-            if missing_mods:
-                self.briefing_status.text = (
-                    "NEED: " + " + ".join(mod.value for mod in missing_mods)
-                )
-                self.briefing_status.color = color.rgb32(220, 90, 90)
-            elif m.id.value not in state.first_completed:
-                self.briefing_status.text = "FIRST!"
-                self.briefing_status.color = color.rgb32(240, 200, 90)
-            else:
-                self.briefing_status.text = ""
-        else:
+        if m is None:
             self.briefing_title.text = "(no mission queued)"
             for t in (
-                self.briefing_rocket, self.briefing_cost, self.briefing_base,
-                self.briefing_crew, self.briefing_rel, self.briefing_effective,
-                self.briefing_status,
+                self.briefing_rocket, self.briefing_cost, self.briefing_pad,
+                self.briefing_base, self.briefing_crew, self.briefing_rel,
+                self.briefing_effective, self.briefing_status,
             ):
                 if t is not None:
                     t.text = ""
+            return
 
-        # Objective pedestals: enable those applicable to the queued
-        # mission; disable (dim) the rest.
-        allowed: set[str] = set()
-        queued_objs: set[str] = set()
-        if client is not None and client.queued_mission is not None:
-            allowed = {o.id.value for o in objectives_for(client.queued_mission)}
-            queued_objs = {o.value for o in client.queued_objectives}
-        for oid, cap in self._objective_caps.items():
-            if oid not in allowed:
-                cap.color = color.rgb32(70, 40, 40)
-            elif oid in queued_objs:
-                cap.color = color.rgb32(70, 170, 90)
+        eff_rocket = effective_rocket(me, m)
+        eff_cost = effective_launch_cost(me, m)
+        base_s = effective_base_success(me, m)
+        rel_bonus = (
+            (me.rocket_reliability(eff_rocket) - 50) * RELIABILITY_SWING_PER_POINT
+        )
+        crew_b = 0.0
+        compat_b = 0.0
+        if m.manned:
+            preview = _preview_crew_selection(me.active_astronauts(), m)
+            if preview:
+                crew_b = _crew_bonus_from(preview, m)
+                compat_b = crew_compatibility_bonus(preview)
+        recon_bonus, lm_penalty = effective_lunar_modifier(me, m)
+        eff = base_s + crew_b + compat_b + rel_bonus + recon_bonus - lm_penalty
+
+        prefix = "SCHEDULED: " if scheduled_id is not None else ""
+        self.briefing_title.text = prefix + m.name.upper()
+        self.briefing_rocket.text = (
+            f"Rocket:  {rocket_display_name(eff_rocket, me.side)}"
+        )
+        self.briefing_cost.text = f"Cost:    {eff_cost} MB"
+        # Pad assignment line — if a mission is already scheduled it tells
+        # you which pad's holding it; otherwise it previews where the
+        # currently-queued mission would land.
+        if scheduled_id is not None:
+            holding_pad = next(
+                (p for p in me.pads
+                 if p.scheduled_launch is not None
+                 and p.scheduled_launch.mission_id == scheduled_id),
+                None,
+            )
+            pad_id = holding_pad.pad_id if holding_pad else "?"
+            self.briefing_pad.text = f"Pad:     {pad_id} (assembled)"
+            self.briefing_pad.color = color.rgb32(240, 200, 90)
+        else:
+            next_pad = me.available_pad()
+            if next_pad is not None:
+                self.briefing_pad.text = f"Pad:     {next_pad.pad_id} (next free)"
+                self.briefing_pad.color = color.rgb32(220, 225, 235)
             else:
-                cap.color = color.rgb32(70, 95, 75)
-            lbl = self._objective_labels.get(oid)
-            if lbl is not None:
-                lbl.color = (
-                    color.rgb32(220, 225, 235) if oid in allowed
-                    else color.rgb32(140, 100, 100)
+                self.briefing_pad.text = "Pad:     ALL BUSY — won't fly"
+                self.briefing_pad.color = color.rgb32(220, 90, 90)
+        if recon_bonus > 0 or lm_penalty > 0:
+            self.briefing_base.text = (
+                f"Base:    {base_s:+.2f}   Recon {recon_bonus:+.3f}"
+            )
+            self.briefing_crew.text = (
+                f"Crew:    {crew_b:+.2f}   LM {-lm_penalty:+.3f}"
+            )
+        else:
+            self.briefing_base.text = f"Base:    {base_s:+.2f}"
+            self.briefing_crew.text = (
+                f"Crew:    {crew_b:+.2f}" if m.manned else "Crew:    —"
+            )
+        if compat_b:
+            self.briefing_crew.text += f"   Cmpt {compat_b:+.3f}"
+        self.briefing_rel.text = f"Rel'ty:  {rel_bonus:+.3f}"
+        self.briefing_effective.text = (
+            f"EFF  {eff:.2f}  (~{int(max(0, min(1, eff)) * 100)}%)"
+        )
+        if m.manned:
+            self.briefing_effective.color = (
+                color.rgb32(110, 200, 120) if eff >= 0.6
+                else color.rgb32(240, 200, 90) if eff >= 0.4
+                else color.rgb32(220, 90, 90)
+            )
+        else:
+            self.briefing_effective.color = color.rgb32(110, 200, 120)
+        from baris.resolver import missing_modules
+        missing_mods = missing_modules(me, m)
+        if missing_mods:
+            self.briefing_status.text = (
+                "NEED: " + " + ".join(mod.value for mod in missing_mods)
+            )
+            self.briefing_status.color = color.rgb32(220, 90, 90)
+        elif m.id.value not in state.first_completed:
+            self.briefing_status.text = "FIRST!"
+            self.briefing_status.color = color.rgb32(240, 200, 90)
+        else:
+            self.briefing_status.text = ""
+
+    def _sync_pad_dashboard(self, me: Any) -> None:
+        """Walk the player's three pads in order and recolour the lamp
+        and update the two text lines for each one."""
+        for i, row in enumerate(self._pad_status_rows):
+            if i >= len(me.pads):
+                row["state"].text = ""
+                row["mission"].text = ""
+                row["lamp"].color = color.rgb32(80, 80, 100)
+                continue
+            pad = me.pads[i]
+            if pad.damaged:
+                row["lamp"].color = color.rgb32(220, 80, 80)
+                row["state"].text = (
+                    f"REPAIR — {pad.repair_turns_remaining} season"
+                    f"{'s' if pad.repair_turns_remaining != 1 else ''} left"
                 )
-
-        # Architecture pedestals.
-        can_pick = me.is_tier_unlocked(ProgramTier.THREE) and me.architecture is None
-        committed = me.architecture
-        for arch_val, cap in self._arch_caps.items():
-            if committed == arch_val:
-                cap.color = color.rgb32(240, 200, 90)
-            elif can_pick:
-                cap.color = color.rgb32(70, 95, 75)
+                row["state"].color = color.rgb32(220, 130, 130)
+                row["mission"].text = ""
+            elif pad.scheduled_launch is not None:
+                row["lamp"].color = color.rgb32(240, 200, 90)
+                row["state"].text = "ASSEMBLED — flies next turn"
+                row["state"].color = color.rgb32(240, 200, 90)
+                try:
+                    name = MISSIONS_BY_ID[MissionId(
+                        pad.scheduled_launch.mission_id
+                    )].name
+                except (ValueError, KeyError):
+                    name = pad.scheduled_launch.mission_id
+                row["mission"].text = name
+                row["mission"].color = color.rgb32(220, 225, 235)
             else:
-                cap.color = color.rgb32(60, 60, 70)
+                row["lamp"].color = color.rgb32(110, 200, 120)
+                row["state"].text = "IDLE — ready to receive"
+                row["state"].color = color.rgb32(160, 200, 170)
+                row["mission"].text = ""
 
     def nearby_button(self, world_xz: tuple[float, float]) -> str | None:
         if not self.root.enabled:
