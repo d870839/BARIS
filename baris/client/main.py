@@ -1330,8 +1330,9 @@ class Client:
         side_label = me.side.value if me.side else "?"
         draw_text(self.screen, f"YOUR ROSTER — {side_label}", (cx, cy), size=18,
                   color=side_color(me.side), bold=True)
+        from baris.state import character_portrait
         header = (
-            f"{'Name':<14}{'Capsule':<9}{'LM':<6}{'EVA':<6}{'Dock':<6}{'Endure':<8}{'Mood':<6}{'Cp':<4}Status"
+            f"   {'Name':<24}{'Capsule':<9}{'LM':<6}{'EVA':<6}{'Dock':<6}{'Endure':<8}{'Mood':<6}{'Cp':<4}Status"
         )
         draw_text(self.screen, header, (cx, cy + 32), size=14, color=DIM)
         y = cy + 58
@@ -1348,8 +1349,14 @@ class Client:
             else:
                 status = "ready"
                 color = FG
+            glyph, swatch_rgb = character_portrait(astro.name)
+            # Coloured swatch chip in the leftmost column.
+            pygame.draw.rect(
+                self.screen, swatch_rgb,
+                (cx, y + 4, 14, 14), border_radius=3,
+            )
             row = (
-                f"{astro.name:<14}"
+                f"   {glyph} {astro.name[:20]:<22}"
                 f"{astro.capsule:<9}{astro.lm_pilot:<6}"
                 f"{astro.eva:<6}{astro.docking:<6}{astro.endurance:<8}"
                 f"{astro.mood:<6}{astro.compatibility:<4}"
@@ -1374,8 +1381,10 @@ class Client:
                   color=RED if kia else DIM)
         draw_text(self.screen, "Known names:", (ox, oy + 90), size=14, color=DIM)
         ry = oy + 112
+        from baris.state import character_portrait as _portrait
         for astro in opp.astronauts:
-            line = f"{astro.name}{' +' if not astro.active else ''}"
+            glyph, _ = _portrait(astro.name)
+            line = f"{glyph} {astro.name}{' +' if not astro.active else ''}"
             draw_text(self.screen, line, (ox, ry), size=14,
                       color=FG if astro.active else RED)
             ry += 20

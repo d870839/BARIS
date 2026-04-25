@@ -199,16 +199,18 @@ def test_start_game_generates_starting_roster() -> None:
 
 
 def test_historical_roster_contents() -> None:
-    """Protects the small historical fact set from accidental regressions."""
+    """Sanity-check the (now-divergent) starting rosters: 7 per side,
+    every name has a portrait, and the two sides don't overlap."""
+    from baris.state import CHARACTER_PORTRAITS, character_portrait
     usa = HISTORICAL_ROSTERS[Side.USA.value]
     ussr = HISTORICAL_ROSTERS[Side.USSR.value]
-    # Mercury Seven.
-    assert set(usa) == {"Shepard", "Grissom", "Glenn", "Carpenter",
-                        "Schirra", "Cooper", "Slayton"}
-    # Soviet first group + Tereshkova (first woman in space, 1963).
-    assert "Tereshkova" in ussr
-    assert "Gagarin" in ussr
+    assert len(usa) == 7
     assert len(ussr) == 7
+    assert not (set(usa) & set(ussr))   # no shared names
+    for name in (*usa, *ussr):
+        assert name in CHARACTER_PORTRAITS, f"missing portrait for {name}"
+        glyph, rgb = character_portrait(name)
+        assert glyph and len(rgb) == 3
 
 
 def test_fresh_player_sees_no_missions() -> None:

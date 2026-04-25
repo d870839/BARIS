@@ -343,34 +343,136 @@ class RecruitmentGroup:
 
 
 RECRUITMENT_GROUPS: tuple[RecruitmentGroup, ...] = (
-    # Group 1 — starting roster. USA: Mercury Seven (selected 1959).
-    # USSR: first-group cosmonauts (1960) plus Tereshkova.
+    # Group 1 — starting roster (7 each side). The astronaut pool is
+    # drawn from "Italian Brainrot" meme characters rather than the
+    # real Mercury Seven / first-Vostok cosmonaut cohorts. The two
+    # sides have a vibe split: USA team leans bombers / soldiers /
+    # banditos; USSR team leans bestiary / botanical / surreal.
     RecruitmentGroup(
         number=1, size=7, cost=0, earliest_year=1957,
-        us_names=("Shepard", "Grissom", "Glenn", "Carpenter",
-                  "Schirra", "Cooper", "Slayton"),
-        ussr_names=("Gagarin", "Titov", "Tereshkova", "Komarov",
-                    "Leonov", "Nikolayev", "Popovich"),
+        us_names=(
+            "Bombardiro Crocodilo", "Bombombini Gusini",
+            "Tung Tung Tung Sahur", "Bobrito Bandito",
+            "Cappuccino Assassino", "Glorbo Fruttodrillo",
+            "Trippi Troppi",
+        ),
+        ussr_names=(
+            "Tralalero Tralala", "Lirili Larila",
+            "Brr Brr Patapim", "Frigo Camelo",
+            "Boneca Ambalabu", "Chimpanzini Bananini",
+            "Ballerina Cappuccina",
+        ),
     ),
-    # Group 2 — "New Nine" era (1962) / Soyuz-era cosmonauts.
+    # Group 2 — five reinforcements per side.
     RecruitmentGroup(
         number=2, size=5, cost=25, earliest_year=1962,
-        us_names=("Armstrong", "Borman", "Conrad", "Lovell", "Young"),
-        ussr_names=("Belyayev", "Bykovsky", "Khrunov", "Volynov", "Zaikin"),
+        us_names=(
+            "Espresso Esecutore", "Calzone Cannoniere",
+            "Pizzaiolo Maranello", "Vespa Velocissima",
+            "Ferrari Furioso",
+        ),
+        ussr_names=(
+            "Burbaloni Luliloli", "Trulimero Trulichina",
+            "Crocodillo Bombardillo", "Patapim Patapum",
+            "Coccodrillo Tropicale",
+        ),
     ),
-    # Group 3 — "The Fourteen" (1963).
+    # Group 3 — five more.
     RecruitmentGroup(
         number=3, size=5, cost=35, earliest_year=1963,
-        us_names=("Aldrin", "Cernan", "Collins", "Scott", "Bean"),
-        ussr_names=("Artyukhin", "Gubarev", "Klimuk", "Sevastyanov", "Kubasov"),
+        us_names=(
+            "Mortadella Maresciallo", "Limoncello Letale",
+            "Cannolo Capitano", "Granita Granaderiotto",
+            "Risotto Razziatore",
+        ),
+        ussr_names=(
+            "Spaghettino Spaghettoni", "Pesto Pestilenziale",
+            "Mozzarella Misteriosa", "Tortellino Tornado",
+            "Pollo Polletto",
+        ),
     ),
-    # Group 4 — "The Nineteen" (1966).
+    # Group 4 — five elites.
     RecruitmentGroup(
         number=4, size=5, cost=50, earliest_year=1966,
-        us_names=("Mattingly", "Mitchell", "Pogue", "Roosa", "Worden"),
-        ussr_names=("Grechko", "Kovalyonok", "Romanenko", "Strekalov", "Savinykh"),
+        us_names=(
+            "Lasagna Comandante", "Carbonara Catastrofica",
+            "Negroni Notturno", "Polpetta Predatrice",
+            "Tiramisu Terrificante",
+        ),
+        ussr_names=(
+            "Gelato Glaciale", "Vino Visionario",
+            "Olive Oltretomba", "Salami Stratosferico",
+            "Bresaola Boreale",
+        ),
     ),
 )
+
+
+# Per-character portrait flavour: an emoji glyph + a colour swatch.
+# Both 2D and 3D clients render this next to the character's name on
+# rosters / portrait walls. Names not in this table fall back to a
+# generic "?" glyph and a neutral grey swatch via character_portrait().
+CHARACTER_PORTRAITS: dict[str, tuple[str, tuple[int, int, int]]] = {
+    # USA team — Group 1
+    "Bombardiro Crocodilo":   ("🐊", (90, 130, 70)),
+    "Bombombini Gusini":      ("🦢", (200, 200, 220)),
+    "Tung Tung Tung Sahur":   ("🪵", (140, 95, 50)),
+    "Bobrito Bandito":        ("🦫", (120, 80, 50)),
+    "Cappuccino Assassino":   ("☕", (130, 90, 60)),
+    "Glorbo Fruttodrillo":    ("🍎", (200, 60, 60)),
+    "Trippi Troppi":          ("🐈", (180, 130, 80)),
+    # USSR team — Group 1
+    "Tralalero Tralala":      ("🦈", (80, 130, 200)),
+    "Lirili Larila":          ("🌵", (90, 160, 110)),
+    "Brr Brr Patapim":        ("🌳", (60, 130, 80)),
+    "Frigo Camelo":           ("🐪", (200, 180, 130)),
+    "Boneca Ambalabu":        ("💀", (220, 220, 230)),
+    "Chimpanzini Bananini":   ("🐵", (230, 200, 80)),
+    "Ballerina Cappuccina":   ("🩰", (220, 150, 180)),
+    # USA — Group 2
+    "Espresso Esecutore":     ("☕", (90, 60, 40)),
+    "Calzone Cannoniere":     ("🥪", (220, 180, 100)),
+    "Pizzaiolo Maranello":    ("🍕", (220, 100, 60)),
+    "Vespa Velocissima":      ("🛵", (180, 50, 50)),
+    "Ferrari Furioso":        ("🏎",  (210, 30, 30)),
+    # USSR — Group 2
+    "Burbaloni Luliloli":     ("🥥", (160, 110, 70)),
+    "Trulimero Trulichina":   ("🐟", (120, 170, 200)),
+    "Crocodillo Bombardillo": ("🐊", (110, 150, 90)),
+    "Patapim Patapum":        ("🌴", (80, 140, 90)),
+    "Coccodrillo Tropicale":  ("🌺", (220, 110, 130)),
+    # USA — Group 3
+    "Mortadella Maresciallo": ("🥩", (190, 90, 100)),
+    "Limoncello Letale":      ("🍋", (240, 220, 80)),
+    "Cannolo Capitano":       ("🥧", (220, 200, 150)),
+    "Granita Granaderiotto":  ("🍧", (180, 220, 240)),
+    "Risotto Razziatore":     ("🍚", (230, 220, 200)),
+    # USSR — Group 3
+    "Spaghettino Spaghettoni": ("🍝", (220, 180, 90)),
+    "Pesto Pestilenziale":    ("🌿", (90, 160, 70)),
+    "Mozzarella Misteriosa":  ("🧀", (240, 230, 200)),
+    "Tortellino Tornado":     ("🥟", (220, 200, 160)),
+    "Pollo Polletto":         ("🐔", (220, 180, 90)),
+    # USA — Group 4
+    "Lasagna Comandante":     ("🥧", (200, 130, 90)),
+    "Carbonara Catastrofica": ("🥓", (200, 110, 110)),
+    "Negroni Notturno":       ("🍸", (200, 90, 90)),
+    "Polpetta Predatrice":    ("🥩", (160, 90, 90)),
+    "Tiramisu Terrificante":  ("🍰", (180, 140, 100)),
+    # USSR — Group 4
+    "Gelato Glaciale":        ("🍨", (200, 220, 240)),
+    "Vino Visionario":        ("🍷", (140, 50, 80)),
+    "Olive Oltretomba":       ("🫒", (140, 150, 90)),
+    "Salami Stratosferico":   ("🥓", (170, 90, 90)),
+    "Bresaola Boreale":       ("🥩", (180, 100, 100)),
+}
+
+
+def character_portrait(name: str) -> tuple[str, tuple[int, int, int]]:
+    """Look up a character's glyph + RGB swatch. Unknown names fall
+    back to a neutral '?' grey so a custom or backfilled astronaut
+    still renders without crashing the UI."""
+    return CHARACTER_PORTRAITS.get(name, ("?", (160, 160, 170)))
 
 
 # Historical starting rosters, derived from Group 1 so there's one source

@@ -167,6 +167,7 @@ def build_astro_panel(client: "BarisClient", parent: Entity) -> Entity:
         scale=0.9, color=color.rgb32(160, 170, 195),
     )
     y = 0.25
+    from baris.state import character_portrait
     for astro in me.astronauts:
         if astro.status == "kia":
             status = "KIA"
@@ -174,8 +175,11 @@ def build_astro_panel(client: "BarisClient", parent: Entity) -> Entity:
             status = "retired"
         else:
             status = "active"
-        row = "{:<14}{:>8}{:>5}{:>5}{:>6}{:>8}{:>6}{:>4}   {}".format(
-            astro.name, astro.capsule, astro.lm_pilot, astro.eva,
+        glyph, _ = character_portrait(astro.name)
+        row = "{}{:<22}{:>8}{:>5}{:>5}{:>6}{:>8}{:>6}{:>4}   {}".format(
+            f"{glyph} ",
+            astro.name[:20],
+            astro.capsule, astro.lm_pilot, astro.eva,
             astro.docking, astro.endurance, astro.mood, astro.compatibility,
             status,
         )
@@ -305,10 +309,12 @@ def build_training_panel(client: "BarisClient", parent: Entity) -> Entity:
     )
 
     # For each astronaut: one info row + a row of train/cancel buttons.
+    from baris.state import character_portrait as _portrait
     row_y = 0.19
     for astro in me.astronauts:
+        glyph, _ = _portrait(astro.name)
         skills_text = (
-            f"{astro.name[:12]:<12}"
+            f"{glyph} {astro.name[:12]:<12}"
             f"{astro.capsule:>4}{astro.lm_pilot:>4}"
             f"{astro.eva:>4}{astro.docking:>4}{astro.endurance:>4}"
         )

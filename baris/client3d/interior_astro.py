@@ -312,7 +312,10 @@ class AstroInterior:
                     s.text = ""
                 continue
             astro = roster[i]
-            slot["name"].text = astro.name
+            from baris.state import character_portrait
+            glyph, swatch_rgb = character_portrait(astro.name)
+            slot["name"].text = f"{glyph} {astro.name}"
+            slot["name"].color = color.rgb32(*swatch_rgb)
             if astro.status == "kia":
                 slot["status"].text = "KIA"
                 slot["status"].color = color.rgb32(220, 90, 90)
