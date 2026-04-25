@@ -493,6 +493,20 @@ INTEL_COST                 = 10
 INTEL_RELIABILITY_NOISE    = 15
 INTEL_RUMOR_ACCURATE       = 0.8
 
+# Phase M — Government Review. Fires once at every Winter→Spring
+# transition (i.e. once per game-year). Each player's "review score"
+# for the year just ended is:
+#   prestige_gained_in_year
+#     + REVIEW_SUCCESS_BONUS * successful_launches
+#     - REVIEW_KIA_PENALTY   * astronauts_KIA
+# A score below REVIEW_PASS_THRESHOLD adds a warning. Reach
+# REVIEW_FIRE_AT_WARNINGS warnings and the player is dismissed —
+# game ends with the opponent declared the winner.
+REVIEW_PASS_THRESHOLD       = 3
+REVIEW_SUCCESS_BONUS        = 2
+REVIEW_KIA_PENALTY          = 3
+REVIEW_FIRE_AT_WARNINGS     = 2
+
 # Phase D — Lunar reconnaissance + LM (Lunar Module) points.
 #
 # Lunar recon tracks how thoroughly the moon has been surveyed before
@@ -662,6 +676,12 @@ class Player:
     # of the most recent request so the server can enforce "one per season".
     latest_intel: "IntelReport | None" = None
     intel_requested_on: str = ""
+    # Phase M — Government Review. Each warning is a sub-par year; reach
+    # REVIEW_FIRE_AT_WARNINGS and the player is dismissed. last_review_year
+    # is the most-recent year already reviewed so resolve_turn knows not
+    # to double-review on a single transition.
+    warnings: int = 0
+    last_review_year: int = 0
 
     def rocket_reliability(self, rocket: Rocket) -> int:
         return self.reliability.get(rocket.value, 0)
@@ -839,6 +859,9 @@ def _player_from_dict(d: dict[str, Any]) -> Player:
         _intel_report_from_dict(raw_intel) if raw_intel else None
     )
     data.setdefault("intel_requested_on", "")
+    # Phase M — legacy saves predate Government Review.
+    data.setdefault("warnings", 0)
+    data.setdefault("last_review_year", 0)
     return Player(**data)
 
 

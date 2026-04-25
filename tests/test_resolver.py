@@ -78,7 +78,12 @@ from baris.state import (
     INTEL_RELIABILITY_NOISE,
     IntelReport,
     MissionHistoryEntry,
+    Phase,
     PrestigeSnapshot,
+    REVIEW_FIRE_AT_WARNINGS,
+    REVIEW_KIA_PENALTY,
+    REVIEW_PASS_THRESHOLD,
+    REVIEW_SUCCESS_BONUS,
     RECRUIT_SKILL_MAX,
     RECRUIT_SKILL_MIN,
     RECRUITMENT_GROUPS,
@@ -2924,3 +2929,145 @@ def test_legacy_state_dict_backfills_museum_fields() -> None:
     restored = GameState.from_dict(raw)
     assert restored.mission_history == []
     assert restored.prestige_timeline == []
+
+
+# ----------------------------------------------------------------------
+# Phase M — Government Review
+# ----------------------------------------------------------------------
+
+
+def _seed_year_start_prestige(
+    state: GameState, year: int, usa_prestige: int = 0, ussr_prestige: int = 0,
+) -> None:
+    """Helper: drop a Spring snapshot so the review knows the year-start
+    prestige for the year about to be reviewed."""
+    state.prestige_timeline.append(PrestigeSnapshot(
+        year=year, season="Spring",
+        usa_prestige=usa_prestige, ussr_prestige=ussr_prestige,
+    ))
+
+
+def _record_flight(
+    state: GameState, year: int, side_value: str,
+    success: bool = True, deaths: int = 0,
+) -> None:
+    state.mission_history.append(MissionHistoryEntry(
+        year=year, season="Summer", side=side_value,
+        mission_id="suborbital", mission_name="Test flight",
+        rocket="Redstone", manned=False, success=success,
+        prestige_delta=0, deaths=["X"] * deaths,
+    ))
+
+
+def test_review_passes_a_solid_year() -> None:
+    from baris.resolver import _run_government_review
+    state = _two_player_state()
+    start_game(state, rng=random.Random(1))
+    _seed_year_start_prestige(state, year=1957)
+    p = state.players[0]
+    p.prestige = 6           # +6 delta from start
+    _record_flight(state, 1957, p.side.value, success=True)
+    _record_flight(state, 1957, p.side.value, success=True)
+    _run_government_review(state, ended_year=1957)
+    assert p.warnings == 0
+    assert state.phase == Phase.PLAYING
+
+
+def test_review_warns_on_underperformance() -> None:
+    from baris.resolver import _run_government_review
+    state = _two_player_state()
+    start_game(state, rng=random.Random(1))
+    _seed_year_start_prestige(state, year=1957)
+    p = state.players[0]
+    # No flights, no prestige → score 0, below threshold of 3.
+    _run_government_review(state, ended_year=1957)
+    assert p.warnings == 1
+    assert state.phase == Phase.PLAYING
+
+
+def test_review_fires_player_after_two_warnings() -> None:
+    from baris.resolver import _run_government_review
+    state = _two_player_state()
+    start_game(state, rng=random.Random(1))
+    p = state.players[0]
+    opp = state.players[1]
+    _seed_year_start_prestige(state, year=1957)
+    _seed_year_start_prestige(state, year=1958)
+    # Year 1: bad → warning 1. Year 2: bad → warning 2 → fired.
+    _run_government_review(state, ended_year=1957)
+    _run_government_review(state, ended_year=1958)
+    assert p.warnings >= REVIEW_FIRE_AT_WARNINGS
+    assert state.phase == Phase.ENDED
+    assert state.winner == opp.side
+
+
+def test_review_kia_penalty_drags_score_down() -> None:
+    from baris.resolver import _run_government_review
+    state = _two_player_state()
+    start_game(state, rng=random.Random(1))
+    _seed_year_start_prestige(state, year=1957)
+    p = state.players[0]
+    p.prestige = 4   # would otherwise pass
+    _record_flight(state, 1957, p.side.value, success=False, deaths=2)
+    # score = 4 + 0 - 3*2 = -2 → below threshold.
+    _run_government_review(state, ended_year=1957)
+    assert p.warnings == 1
+
+
+def test_review_idempotent_on_same_year() -> None:
+    from baris.resolver import _run_government_review
+    state = _two_player_state()
+    start_game(state, rng=random.Random(1))
+    _seed_year_start_prestige(state, year=1957)
+    p = state.players[0]
+    # Bad year: review once → 1 warning.
+    _run_government_review(state, ended_year=1957)
+    _run_government_review(state, ended_year=1957)
+    assert p.warnings == 1     # second call short-circuits
+
+
+def test_review_runs_at_year_advance() -> None:
+    """Drive through four resolve_turns to roll Spring → Spring and
+    confirm the year-end review fires automatically."""
+    state = _two_player_state()
+    start_game(state, rng=random.Random(1))
+    me = state.players[0]
+    me.prestige = 0  # no progress all year
+    with _no_news():
+        for _ in range(4):  # Spring → Summer → Fall → Winter → Spring
+            for p in state.players:
+                submit_turn(p, rd_rocket=None, rd_spend=0, launch=None)
+            resolve_turn(state, rng=random.Random(0))
+    # We should be in the new year, and at least one review entry
+    # should be in the log.
+    assert state.year > 1957
+    assert any("REVIEW 1957" in line for line in state.log)
+    # Both players had a zero-progress year → both should have a warning.
+    assert me.warnings == 1
+    assert state.players[1].warnings == 1
+
+
+def test_review_warnings_dict_roundtrip() -> None:
+    state = _two_player_state()
+    start_game(state, rng=random.Random(1))
+    p = state.players[0]
+    p.warnings = 1
+    p.last_review_year = 1958
+    restored = GameState.from_dict(state.to_dict())
+    rp = restored.players[0]
+    assert rp.warnings == 1
+    assert rp.last_review_year == 1958
+
+
+def test_legacy_player_dict_backfills_review_fields() -> None:
+    from baris.state import _player_from_dict
+    raw = {
+        "player_id": "x", "username": "X",
+        "side": Side.USA.value, "budget": 30, "prestige": 0,
+        "ready": True, "astronauts": [],
+        "mission_successes": {}, "architecture": None,
+        "turn_submitted": False,
+    }
+    p = _player_from_dict(raw)
+    assert p.warnings == 0
+    assert p.last_review_year == 0

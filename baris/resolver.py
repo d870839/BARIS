@@ -56,6 +56,10 @@ from baris.state import (
     LaunchReport,
     MissionHistoryEntry,
     PrestigeSnapshot,
+    REVIEW_FIRE_AT_WARNINGS,
+    REVIEW_KIA_PENALTY,
+    REVIEW_PASS_THRESHOLD,
+    REVIEW_SUCCESS_BONUS,
     MIN_RELIABILITY_TO_LAUNCH,
     MISSION_OBJECTIVES,
     MISSIONS_BY_ID,
@@ -566,8 +570,13 @@ def resolve_turn(state: GameState, rng: random.Random | None = None) -> None:
     _check_victory(state)
 
     if state.phase == Phase.PLAYING:
+        prev_year = state.year
         state.season, state.year = next_season(state.season, state.year)
         state.log.append(f"Advancing to {state.season.value} {state.year}.")
+        if state.year > prev_year:
+            # We just rolled Winter→Spring of a new year. Run the
+            # Government Review on the year just ended.
+            _run_government_review(state, ended_year=prev_year)
         _roll_season_news(state, rng)
         _snapshot_prestige(state)
 
@@ -1515,6 +1524,75 @@ _NEWS_POOL: tuple[tuple[str, int, Any], ...] = (
 # no-op. Lets targeted tests (e.g. mood-drop assertions) isolate the
 # mechanic they're exercising from random news-card side effects.
 _news_enabled: bool = True
+
+
+def _run_government_review(state: GameState, ended_year: int) -> None:
+    """Phase M — once per game-year, score each player on the year just
+    ended. Below REVIEW_PASS_THRESHOLD adds a warning; reach
+    REVIEW_FIRE_AT_WARNINGS warnings and the player is dismissed,
+    ending the game with the opponent declared winner. Idempotent: a
+    player is only reviewed for a given year once, even if the function
+    is called twice in a row by accident."""
+    if state.phase != Phase.PLAYING:
+        return
+    fired_player: Player | None = None
+    for player in state.players:
+        if fired_player is not None:
+            # First dismissal ends the game; don't review anyone else
+            # this year. Their next review picks up from the new year.
+            break
+        if player.last_review_year >= ended_year:
+            continue
+        player.last_review_year = ended_year
+        # Year-start prestige came from the Spring snapshot of `ended_year`.
+        year_start_prestige = 0
+        for snap in state.prestige_timeline:
+            if snap.year == ended_year and snap.season == "Spring":
+                if player.side == Side.USA:
+                    year_start_prestige = snap.usa_prestige
+                elif player.side == Side.USSR:
+                    year_start_prestige = snap.ussr_prestige
+                break
+        prestige_delta = player.prestige - year_start_prestige
+        my_side = player.side.value if player.side else ""
+        flights = [
+            m for m in state.mission_history
+            if m.year == ended_year and m.side == my_side
+        ]
+        successes = sum(1 for m in flights if m.success)
+        kia = sum(len(m.deaths) for m in flights)
+        score = (
+            prestige_delta
+            + REVIEW_SUCCESS_BONUS * successes
+            - REVIEW_KIA_PENALTY * kia
+        )
+        side_label = my_side or "?"
+        if score < REVIEW_PASS_THRESHOLD:
+            player.warnings += 1
+            if player.warnings >= REVIEW_FIRE_AT_WARNINGS:
+                state.log.append(
+                    f"REVIEW {ended_year}: {player.username} ({side_label}) "
+                    f"score {score} — DISMISSED. Opponent wins."
+                )
+                fired_player = player
+            else:
+                state.log.append(
+                    f"REVIEW {ended_year}: {player.username} ({side_label}) "
+                    f"score {score} — WARNING "
+                    f"({player.warnings}/{REVIEW_FIRE_AT_WARNINGS})."
+                )
+        else:
+            state.log.append(
+                f"REVIEW {ended_year}: {player.username} ({side_label}) "
+                f"score {score} — passed."
+            )
+    if fired_player is not None:
+        opponent = next(
+            (p for p in state.players if p.player_id != fired_player.player_id),
+            None,
+        )
+        state.phase = Phase.ENDED
+        state.winner = opponent.side if opponent and opponent.side else None
 
 
 def _snapshot_prestige(state: GameState) -> None:
