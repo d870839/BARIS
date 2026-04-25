@@ -150,8 +150,10 @@ class BarisClient(Entity):
             color=color.rgb32(210, 205, 195),
             texture="white_cube", texture_scale=(13, 13),
         )
-        # Painted taxi lines from the plaza out to each building (thin
-        # low-lying rectangles so they read as striping without a texture).
+        # Painted taxi lines from the plaza out to each building. Cardinal
+        # paths (N/S/E/W) get rectangular stripes so they read as runways;
+        # the two diagonal paths to Intelligence (SE) and Museum (NW) use a
+        # short cube-chain so they don't fight with the cardinal lines.
         for (x, z) in ((0, 14), (0, -14), (14, 0), (-14, 0)):
             Entity(
                 model="cube",
@@ -159,6 +161,18 @@ class BarisClient(Entity):
                 scale=(1.0 if z == 0 else 0.5, 0.02, 1.0 if x == 0 else 0.5),
                 color=color.rgb32(240, 225, 120),
             )
+        # Diagonals — small dashes laid down the line from the plaza edge
+        # towards each diagonal building. Five dashes at 4-unit spacing
+        # land within the plaza-to-building gap (~14 units).
+        for (sign_x, sign_z) in ((1, -1), (-1, 1)):  # SE, NW
+            for step in range(1, 6):
+                d = step * 2.0
+                Entity(
+                    model="cube",
+                    position=(sign_x * d, 0.03, sign_z * d),
+                    scale=(0.5, 0.02, 0.5),
+                    color=color.rgb32(240, 225, 120),
+                )
 
         self.buildings: dict[str, Entity] = {}
         for bid, label, (x, z), roof, interactive in BUILDINGS:
@@ -227,10 +241,59 @@ class BarisClient(Entity):
             color=color.rgb32(240, 240, 245),
         )
 
-        # Launch pad + a rocket silhouette per class. Only one is visible
-        # at a time; whichever matches the queued mission / R&D target
-        # shows on the pad so the player always sees what's about to fly.
-        self.pad = launch_scene.build_launch_pad()
+        # Plaza ambience — perimeter lamp posts at the four corners of the
+        # 26x26 plaza, and a pair of ceremonial flagpoles flanking the
+        # SUBMIT TURN pedestal (USA blue + USSR red, for joint-mission
+        # flavour). All decorative; no gameplay effect.
+        for (lx, lz) in ((10, 10), (-10, 10), (10, -10), (-10, -10)):
+            Entity(  # pole
+                model="cube",
+                position=(lx, 1.7, lz),
+                scale=(0.16, 3.4, 0.16),
+                color=color.rgb32(70, 70, 80),
+            )
+            Entity(  # arm extending toward the plaza
+                model="cube",
+                position=(lx * 0.9, 3.3, lz * 0.9),
+                scale=(0.5, 0.08, 0.5),
+                color=color.rgb32(70, 70, 80),
+            )
+            Entity(  # lamp head
+                model="cube",
+                position=(lx * 0.85, 3.1, lz * 0.85),
+                scale=(0.45, 0.28, 0.45),
+                color=color.rgb32(240, 230, 160),
+            )
+        for (fx, fz, flag_color) in (
+            (-2.5, 6.0, color.rgb32(80, 140, 220)),    # USA blue
+            ( 2.5, 6.0, color.rgb32(220, 90,  90)),    # USSR red
+        ):
+            Entity(  # pole
+                model="cube",
+                position=(fx, 2.5, fz),
+                scale=(0.08, 5.0, 0.08),
+                color=color.rgb32(220, 220, 230),
+            )
+            Entity(  # flag
+                model="cube",
+                position=(fx + 0.55, 4.4, fz),
+                scale=(1.0, 0.6, 0.02),
+                color=flag_color,
+            )
+
+        # Three launch pads laid out west-to-east north of Mission Control.
+        # Pad A (centre) carries the active rocket silhouette + animates
+        # liftoff during the launch sequence; B and C are visual siblings
+        # whose status markers live-recolour to mirror their pad state.
+        self.pad = launch_scene.build_launch_pad(
+            launch_scene.PAD_POSITION, pad_label="A",
+        )
+        self.pad_b = launch_scene.build_launch_pad(
+            launch_scene.PAD_B_POSITION, pad_label="B",
+        )
+        self.pad_c = launch_scene.build_launch_pad(
+            launch_scene.PAD_C_POSITION, pad_label="C",
+        )
         self.rockets: dict[str, Entity] = {}
         self.flames: dict[str, Entity] = {}
         for cls in ("Light", "Medium", "Heavy"):
@@ -266,6 +329,7 @@ class BarisClient(Entity):
         self._update_prompt()
         self._update_pad_rocket()
         self._tick_submit_button()
+        self._tick_pad_status()
         # Once the player has committed the turn, there's nothing useful
         # to do inside a room — kick them back out so they see the rocket
         # + submit lamp and can't tap the physical buttons.
@@ -297,6 +361,31 @@ class BarisClient(Entity):
             cap.color = color.rgb32(110, 115, 125)
             return
         cap.color = color.rgb32(90, 200, 110)
+
+    def _tick_pad_status(self) -> None:
+        """Light each pad's status marker so a player walking by can read
+        the state of A / B / C without opening Mission Control:
+          * green  — idle, ready to accept a launch.
+          * amber  — a launch is scheduled and will fly next turn.
+          * red    — pad is damaged, repair countdown still running.
+        Also tints the deck red for damaged pads."""
+        if self.state is None or self.state.phase != Phase.PLAYING:
+            return
+        me = self.me()
+        if me is None:
+            return
+        pad_visuals = (self.pad, self.pad_b, self.pad_c)
+        # Pads in the player state are ordered A, B, C.
+        for pad_data, visual in zip(me.pads, pad_visuals):
+            if pad_data.damaged:
+                visual._status_marker.color = color.rgb32(220, 80, 80)
+                visual.color = color.rgb32(120, 80, 80)
+            elif pad_data.scheduled_launch is not None:
+                visual._status_marker.color = color.rgb32(240, 200, 90)
+                visual.color = visual._deck_color
+            else:
+                visual._status_marker.color = color.rgb32(110, 200, 120)
+                visual.color = visual._deck_color
 
     def _near_submit_button(self) -> bool:
         sx, _, sz = self.submit_button_pos

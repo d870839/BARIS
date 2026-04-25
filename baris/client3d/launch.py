@@ -10,10 +10,14 @@ from __future__ import annotations
 from ursina import Entity, color
 
 
-# Pad is placed north of Mission Control so the player can see it while
-# queueing a launch. Coordinates picked to keep the rocket inside the
-# ground plane and not collide with any building.
+# Pad A is the active pad — placed north of Mission Control so the
+# player can see it while queueing a launch and watch the liftoff
+# animation. Pads B and C are decorative siblings flanking it, drawn
+# the same way but without their own rocket silhouettes (V1: only
+# Pad A's scheduled mission shows a rocket on the apron).
 PAD_POSITION: tuple[float, float, float] = (0.0, 0.0, 40.0)
+PAD_B_POSITION: tuple[float, float, float] = (-12.0, 0.0, 40.0)
+PAD_C_POSITION: tuple[float, float, float] = (12.0, 0.0, 40.0)
 PAD_HEIGHT: float = 0.6
 APEX_Y: float = 120.0         # how high the liftoff animation rises
 LIFTOFF_DURATION: float = 2.4
@@ -38,15 +42,29 @@ def _initial_y_for(body_h: float) -> float:
     return PAD_POSITION[1] + PAD_HEIGHT / 2 + body_h / 2
 
 
-def build_launch_pad() -> Entity:
-    """Concrete apron + four red-striped scaffold arms — Saturn-V LC-39 vibes."""
-    px, py, pz = PAD_POSITION
+def build_launch_pad(
+    position: tuple[float, float, float] = PAD_POSITION,
+    pad_label: str = "A",
+) -> Entity:
+    """Concrete apron + four red-striped scaffold arms — Saturn-V LC-39 vibes.
+
+    Returns the pad-deck Entity. Surfaces a couple of attributes the caller
+    uses to recolour for state changes:
+      * `_deck_color`: the original deck colour (so we can restore from
+        damaged-red back to concrete).
+      * `_label`: which pad this is — "A" / "B" / "C".
+      * `_status_marker`: a small cube sitting just above the deck,
+        recoloured per state (idle/scheduled/damaged).
+      * `_pad_label_text`: floating "PAD A" sign the caller can leave alone."""
+    px, py, pz = position
     pad = Entity(
         model="cube",
         position=(px, py, pz),
         scale=(5, PAD_HEIGHT, 5),
         color=color.rgb32(165, 165, 175),
     )
+    pad._deck_color = pad.color
+    pad._label = pad_label
     # Pad edge trim (black-and-yellow caution stripe).
     Entity(
         model="cube",
@@ -84,6 +102,23 @@ def build_launch_pad() -> Entity:
             scale=(0.2, 0.2, 4.8),
             color=color.rgb32(210, 210, 215),
         )
+    # Status marker — small disk on the deck, recolour-driven.
+    pad._status_marker = Entity(
+        model="cube",
+        position=(px, py + PAD_HEIGHT / 2 + 0.05, pz - 1.6),
+        scale=(1.6, 0.08, 0.4),
+        color=color.rgb32(120, 200, 120),  # default: idle / OK
+    )
+    # Floating "PAD X" sign that billboards toward the camera.
+    from ursina import Text
+    pad._pad_label_text = Text(
+        text=f"PAD {pad_label}",
+        parent=pad,
+        y=PAD_HEIGHT / 2 + 6.5,
+        scale=4, origin=(0, 0),
+        billboard=True,
+        color=color.rgb32(40, 40, 50),
+    )
     return pad
 
 
