@@ -4,6 +4,7 @@ import random
 import uuid
 from typing import Any
 
+from baris.chatter import chatter_react
 from baris.state import (
     ADVANCED_TRAINING_COST,
     ADVANCED_TRAINING_SKILL_GAIN,
@@ -368,6 +369,10 @@ def recruit_next_group(
         added += 1
     player.budget -= group.cost
     player.next_recruitment_group += 1
+    chatter_react(
+        state.log, "recruit_group", rng,
+        character=_chatter_character(player, rng),
+    )
     return True
 
 
@@ -641,7 +646,7 @@ def resolve_turn(state: GameState, rng: random.Random | None = None) -> None:
         if state.year > prev_year:
             # We just rolled Winter→Spring of a new year. Run the
             # Government Review on the year just ended.
-            _run_government_review(state, ended_year=prev_year)
+            _run_government_review(state, ended_year=prev_year, rng=rng)
         _roll_season_news(state, rng)
         _snapshot_prestige(state)
 
@@ -891,6 +896,11 @@ def _resolve_pad_launch(
         )
         if mission.manned and crew:
             _bump_crew_mood(crew, MOOD_SUCCESS_BUMP)
+        chatter_react(
+            state.log, "launch_success", rng,
+            character=_chatter_character(player, rng),
+            rocket=report.rocket,
+        )
     else:
         _handle_mission_failure(player, mission, crew, state, rng, eff_rocket, report)
         _grant_lunar_progress(player, mission, success=False, state=state)
@@ -899,6 +909,18 @@ def _resolve_pad_launch(
             _bump_crew_mood(crew, -MOOD_FAILURE_DROP)
             if report.deaths:
                 _bump_crew_mood(crew, -MOOD_KIA_CREW_DROP * len(report.deaths))
+        chatter_react(
+            state.log, "launch_failure", rng,
+            character=_chatter_character(player, rng),
+            rocket=report.rocket,
+            phase=report.failed_phase or "stage I",
+        )
+        if report.deaths:
+            chatter_react(
+                state.log, "kia", rng,
+                character=_chatter_character(player, rng),
+                names=", ".join(report.deaths),
+            )
     report.reliability_after = player.rocket_reliability(eff_rocket)
     report.prestige_delta = player.prestige - prestige_start
     # Pad damage: if the flight killed crew or any objective triggered a
@@ -1119,6 +1141,16 @@ def _next_tier(tier: ProgramTier) -> ProgramTier:
     order = [ProgramTier.ONE, ProgramTier.TWO, ProgramTier.THREE]
     idx = order.index(tier)
     return order[min(idx + 1, len(order) - 1)]
+
+
+def _chatter_character(player: Player, rng: random.Random) -> str:
+    """Pick a random alive astronaut name on the player's roster for
+    chatter `{character}` substitution. Falls back to the player's
+    username if the roster is empty (e.g. before start_game seeds it)."""
+    pool = [a.name for a in player.astronauts if a.active]
+    if not pool:
+        return player.username
+    return rng.choice(pool)
 
 
 def _select_crew(player: Player, mission: Mission) -> list[Astronaut] | None:
@@ -1696,6 +1728,14 @@ def execute_sabotage(
         )
         return False
     state.log.append(f"DIRTY TRICKS: {fired_headline}")
+    chatter_react(
+        state.log, "sabotage_outgoing", rng,
+        character=_chatter_character(player, rng),
+    )
+    chatter_react(
+        state.log, "sabotage_incoming", rng,
+        character=_chatter_character(opponent, rng),
+    )
     return True
 
 
@@ -1855,7 +1895,10 @@ def memorial_roll(state: GameState) -> list[tuple[str, str, int, str, str]]:
     return roll
 
 
-def _run_government_review(state: GameState, ended_year: int) -> None:
+def _run_government_review(
+    state: GameState, ended_year: int,
+    rng: random.Random | None = None,
+) -> None:
     """Phase M — once per game-year, score each player on the year just
     ended. Below REVIEW_PASS_THRESHOLD adds a warning; reach
     REVIEW_FIRE_AT_WARNINGS warnings and the player is dismissed,
@@ -1864,6 +1907,7 @@ def _run_government_review(state: GameState, ended_year: int) -> None:
     is called twice in a row by accident."""
     if state.phase != Phase.PLAYING:
         return
+    rng = rng or random.Random()
     fired_player: Player | None = None
     for player in state.players:
         if fired_player is not None:
@@ -1910,10 +1954,18 @@ def _run_government_review(state: GameState, ended_year: int) -> None:
                     f"score {score} — WARNING "
                     f"({player.warnings}/{REVIEW_FIRE_AT_WARNINGS})."
                 )
+                chatter_react(
+                    state.log, "review_warn", rng,
+                    character=_chatter_character(player, rng),
+                )
         else:
             state.log.append(
                 f"REVIEW {ended_year}: {player.username} ({side_label}) "
                 f"score {score} — passed."
+            )
+            chatter_react(
+                state.log, "review_pass", rng,
+                character=_chatter_character(player, rng),
             )
     if fired_player is not None:
         opponent = next(

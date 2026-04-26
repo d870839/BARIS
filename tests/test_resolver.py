@@ -159,6 +159,26 @@ def _no_news():
         _r._news_enabled = prev
 
 
+@contextmanager
+def _no_chatter():
+    """Suppress radio chatter rolls so tests with deterministic
+    fixed-sequence RNGs don't have their values drained."""
+    from baris import chatter as _c
+    prev = _c._chatter_enabled
+    _c._chatter_enabled = False
+    try:
+        yield
+    finally:
+        _c._chatter_enabled = prev
+
+
+@contextmanager
+def _no_flavor():
+    """Convenience: suppress both news and chatter."""
+    with _no_news(), _no_chatter():
+        yield
+
+
 def _fire_scheduled_launch(state: GameState, rng) -> None:
     """Phase B helper: after a player submits a launch and the turn resolves,
     the mission goes into scheduled_launch (assembly paid). Call this to
@@ -3711,3 +3731,83 @@ def test_legacy_player_dict_backfills_stand_tests_used() -> None:
     }
     p = _player_from_dict(raw)
     assert p.stand_tests_used == {}
+
+
+# ----------------------------------------------------------------------
+# Radio chatter — divergence flavour
+# ----------------------------------------------------------------------
+
+
+@contextmanager
+def _enable_chatter():
+    from baris import chatter
+    prev = chatter._chatter_enabled
+    chatter._chatter_enabled = True
+    try:
+        yield
+    finally:
+        chatter._chatter_enabled = prev
+
+
+def test_chatter_react_appends_radio_line_to_log() -> None:
+    from baris.chatter import chatter_react
+    with _enable_chatter():
+        log: list[str] = []
+        chatter_react(
+            log, "launch_success", random.Random(0),
+            chance=1.0,  # force the line
+            character="Bombardiro Crocodilo", rocket="Saturn V",
+        )
+    assert log and log[0].startswith("📻 ")
+
+
+def test_chatter_react_silent_on_unknown_event() -> None:
+    from baris.chatter import chatter_react
+    with _enable_chatter():
+        log: list[str] = []
+        chatter_react(log, "no_such_event", random.Random(0), chance=1.0)
+    assert log == []
+
+
+def test_chatter_react_falls_back_when_format_kwargs_missing() -> None:
+    """If a template references {character} but the caller didn't pass
+    one, we should NOT leak the raw '{character}' string into the log."""
+    from baris import chatter
+    from baris.chatter import chatter_react
+    with _enable_chatter():
+        # Replace the launch_success pool with a single placeholder-only
+        # template + a no-placeholder fallback.
+        prev_pool = chatter.CHATTER_BANK.get("launch_success", ())
+        chatter.CHATTER_BANK["launch_success"] = (
+            "{character} radios in.",
+            "Mission complete.",
+        )
+        try:
+            log: list[str] = []
+            # No `character=` kwarg → first template would KeyError;
+            # we expect the fallback line to fire instead.
+            for _ in range(20):
+                chatter_react(log, "launch_success", random.Random(0), chance=1.0)
+        finally:
+            chatter.CHATTER_BANK["launch_success"] = prev_pool
+    for line in log:
+        assert "{character}" not in line
+
+
+def test_chatter_react_respects_global_disable() -> None:
+    from baris import chatter
+    from baris.chatter import chatter_react
+    # Default state in tests is disabled (via conftest fixture).
+    log: list[str] = []
+    chatter_react(
+        log, "launch_success", random.Random(0),
+        chance=1.0, character="X", rocket="Y",
+    )
+    assert log == []
+    # Re-enabling fires the line.
+    with _enable_chatter():
+        chatter_react(
+            log, "launch_success", random.Random(0),
+            chance=1.0, character="X", rocket="Y",
+        )
+    assert log and log[0].startswith("📻 ")

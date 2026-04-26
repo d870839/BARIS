@@ -962,6 +962,15 @@ class Client:
                 f"NEWS: {self.state.current_news}",
                 (260, 14), size=14, color=HIGHLIGHT,
             )
+        # Radio chatter ticker — most recent 📻 line from the log so the
+        # comedic flavour is visible without switching to the log tab.
+        for line in reversed(self.state.log):
+            if line.startswith("📻"):
+                draw_text(
+                    self.screen, line[:120],
+                    (260, 36), size=13, color=DIM,
+                )
+                break
 
     def _render_bottom_bar(self, me: Player | None) -> None:
         pygame.draw.rect(self.screen, BG_DEEP, (0, 860, WINDOW_SIZE[0], 80))
@@ -1395,12 +1404,16 @@ class Client:
         side_label = me.side.value if me.side else "?"
         draw_text(self.screen, f"YOUR ROSTER — {side_label}", (cx, cy), size=18,
                   color=side_color(me.side), bold=True)
-        from baris.state import character_portrait
+        from baris.state import character_portrait, character_bio
         header = (
             f"   {'Name':<24}{'Capsule':<9}{'LM':<6}{'EVA':<6}{'Dock':<6}{'Endure':<8}{'Mood':<6}{'Cp':<4}Status"
         )
         draw_text(self.screen, header, (cx, cy + 32), size=14, color=DIM)
         y = cy + 58
+        # Track row rectangles so we can pick the hovered astronaut
+        # for the bio readout below.
+        hovered_astro: Astronaut | None = None
+        mx, my = pygame.mouse.get_pos()
         for astro in me.astronauts:
             if astro.status == "kia":
                 status = "KIA"
@@ -1428,7 +1441,48 @@ class Client:
                 f"{status}"
             )
             draw_text(self.screen, row, (cx, y), size=15, color=color)
-            y += 28
+            # Hover detection for the bio panel.
+            row_rect = pygame.Rect(cx - 4, y - 2, card_w, 24)
+            if row_rect.collidepoint(mx, my):
+                hovered_astro = astro
+                pygame.draw.rect(
+                    self.screen, BORDER, row_rect, 1, border_radius=3,
+                )
+            y += 24
+        # Bio readout — fills with the hovered astronaut's flavour
+        # text, or the first roster member's bio when nothing is hovered.
+        bio_focus = hovered_astro or (me.astronauts[0] if me.astronauts else None)
+        if bio_focus is not None:
+            bio_y = cy + card_h - 76
+            pygame.draw.rect(
+                self.screen, BG_DEEP,
+                (cx - 4, bio_y, card_w, 64), border_radius=4,
+            )
+            pygame.draw.rect(
+                self.screen, BORDER,
+                (cx - 4, bio_y, card_w, 64), 1, border_radius=4,
+            )
+            glyph, _ = character_portrait(bio_focus.name)
+            draw_text(
+                self.screen,
+                f"{glyph} {bio_focus.name}",
+                (cx + 6, bio_y + 6),
+                size=15, color=HIGHLIGHT, bold=True,
+            )
+            # Wrap the bio across two lines.
+            bio = character_bio(bio_focus.name)
+            words = bio.split()
+            line1, line2 = "", ""
+            for w in words:
+                if len(line1) + len(w) + 1 <= 90:
+                    line1 = (line1 + " " + w).strip()
+                else:
+                    line2 = (line2 + " " + w).strip()
+            draw_text(self.screen, line1, (cx + 6, bio_y + 26),
+                      size=13, color=FG)
+            if line2:
+                draw_text(self.screen, line2, (cx + 6, bio_y + 44),
+                          size=13, color=FG)
 
         # Opponent roster — compact
         if opp is None:

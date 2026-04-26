@@ -574,6 +574,119 @@ def character_portrait(name: str) -> tuple[str, tuple[int, int, int]]:
     return CHARACTER_PORTRAITS.get(name, ("?", (160, 160, 170)))
 
 
+# Per-character one-liner. Shown in the rosters / panels so each
+# brainrot recruit gets a flavourful introduction beyond just a name
+# and a glyph. Unknown names fall back to a generic line via
+# character_bio() below.
+CHARACTER_BIOS: dict[str, str] = {
+    # Group 1 — USA team (bombers / soldiers / banditos)
+    "Bombardiro Crocodilo":
+        "Sub-Saharan bomber pilot who absorbed his own airframe. Eats engineering manuals for protein.",
+    "Bombombini Gusini":
+        "Smaller cousin of Bombardiro. Honks instead of speaks. Dangerous in formation.",
+    "Tung Tung Tung Sahur":
+        "Wooden being who knows three things: midnight, baseball bats, and the value of a shrill alarm.",
+    "Bobrito Bandito":
+        "Reformed dam-saboteur turned crew chief. Will not stop chewing on the umbilical.",
+    "Cappuccino Assassino":
+        "Espresso-themed contract killer. Brings his own milk frother to orbit.",
+    "Glorbo Fruttodrillo":
+        "Crocodile-pomegranate hybrid. Bites with seeds, swims like a felon.",
+    "Trippi Troppi":
+        "Cat in a fish's body, or maybe the other way around. Speaks only in lateral spirals.",
+    # Group 1 — USSR team (bestiary / botanical / surreal)
+    "Tralalero Tralala":
+        "Three-legged shark in tactical Nikes. Has very loud opinions about the ocean.",
+    "Lirili Larila":
+        "Cactus-headed elephant. Alarmingly chill for someone with that many spines.",
+    "Brr Brr Patapim":
+        "Half tree, half monkey. Will not stop quoting his own meme.",
+    "Frigo Camelo":
+        "Refrigerator-shaped camel from a desert dairy plant. Snores cold air.",
+    "Boneca Ambalabu":
+        "Articulated skeleton doll. Exclusively responds in clattering sounds.",
+    "Chimpanzini Bananini":
+        "Banana-suited primate. Has yet to lose a peeling contest.",
+    "Ballerina Cappuccina":
+        "Elegant coffee-cup dancer. Pirouettes at zero-G for pleasure.",
+    # Group 2 — USA
+    "Espresso Esecutore":
+        "Tactical-grade barista. Closes deals with one shot, stirred not poured.",
+    "Calzone Cannoniere":
+        "Folded-pastry artilleryman. Argues that calzones ARE pizzas, just shy.",
+    "Pizzaiolo Maranello":
+        "Drives a wood-fired Ferrari to the launch pad. Insists the dough rises better at altitude.",
+    "Vespa Velocissima":
+        "Sportbike scooter, fully sentient. Honks once for yes, twice for caffeine.",
+    "Ferrari Furioso":
+        "Self-aware F40 with anger management issues. Won't enter the capsule without a tifosi crowd.",
+    # Group 2 — USSR
+    "Burbaloni Luliloli":
+        "Coconut-bodied hippo. Floats first, asks questions never.",
+    "Trulimero Trulichina":
+        "A fish with dachshund legs. Makes excellent decisions, all of them in the wrong direction.",
+    "Crocodillo Bombardillo":
+        "Sport-crocodile who carries small bombs as a personal trainer.",
+    "Patapim Patapum":
+        "Elder cousin of Brr Brr Patapim. Quieter, leafier, slightly more cursed.",
+    "Coccodrillo Tropicale":
+        "Hibiscus-flowered crocodile. Smells faintly of mango.",
+    # Group 3 — USA
+    "Mortadella Maresciallo":
+        "Field-marshal of cured meats. Demands a 21-salami salute on every launch.",
+    "Limoncello Letale":
+        "Smiling pitcher of lethal aperitivo. Toasts the void.",
+    "Cannolo Capitano":
+        "Captain shaped like a pastry tube. Refuses to fly until the ricotta is set.",
+    "Granita Granaderiotto":
+        "Slushy-cone soldier. Brings his own ice retreat protocol.",
+    "Risotto Razziatore":
+        "Stew-pot raider. Loots culinary stations on principle.",
+    # Group 3 — USSR
+    "Spaghettino Spaghettoni":
+        "Pasta with self-image issues. Vacillates between thin and thick depending on barometric pressure.",
+    "Pesto Pestilenziale":
+        "Basil-cloud commando. Smells like a Genoese kitchen at any altitude.",
+    "Mozzarella Misteriosa":
+        "Buffalo-mozzarella flight surgeon. Diagnoses with a single squeak.",
+    "Tortellino Tornado":
+        "Tornado of pasta packets. Spins clockwise in the northern hemisphere.",
+    "Pollo Polletto":
+        "A chicken plus a smaller chicken. They swap identities mid-mission.",
+    # Group 4 — USA
+    "Lasagna Comandante":
+        "Layered authority figure. Each layer outranks the one below it.",
+    "Carbonara Catastrofica":
+        "Egg-and-pancetta pilot. Avoids cream at all costs.",
+    "Negroni Notturno":
+        "Twilight cocktail commander. Operates exclusively after sundown.",
+    "Polpetta Predatrice":
+        "Hunter-killer meatball. Rolls down corridors for sport.",
+    "Tiramisu Terrificante":
+        "Dessert with abandonment issues. Frosting may detach during ascent.",
+    # Group 4 — USSR
+    "Gelato Glaciale":
+        "Glacial ice-cream pilot. Communicates in temperature differentials.",
+    "Vino Visionario":
+        "Vintage wine prophet. Predicts launch weather via tannin content.",
+    "Olive Oltretomba":
+        "Olive of the underworld. Garnishes the styx.",
+    "Salami Stratosferico":
+        "Cured-meat altitude record holder. Currently reigning at 110 km.",
+    "Bresaola Boreale":
+        "Northern-lights bresaola. Photographs unusually well.",
+}
+
+
+def character_bio(name: str) -> str:
+    """Look up a character's flavour bio. Falls back to a generic
+    line for any name not in the catalogue (custom roster, etc.)."""
+    return CHARACTER_BIOS.get(
+        name,
+        "An astronaut of indeterminate origin and uncertain morale.",
+    )
+
+
 # Historical starting rosters, derived from Group 1 so there's one source
 # of truth. Kept as a name for older call-sites that reference it.
 HISTORICAL_ROSTERS: dict[str, tuple[str, ...]] = {

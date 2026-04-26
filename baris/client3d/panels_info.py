@@ -167,7 +167,7 @@ def build_astro_panel(client: "BarisClient", parent: Entity) -> Entity:
         scale=0.9, color=color.rgb32(160, 170, 195),
     )
     y = 0.25
-    from baris.state import character_portrait
+    from baris.state import character_bio, character_portrait
     for astro in me.astronauts:
         if astro.status == "kia":
             status = "KIA"
@@ -193,7 +193,14 @@ def build_astro_panel(client: "BarisClient", parent: Entity) -> Entity:
                 else color.rgb32(220, 225, 235)
             ),
         )
-        y -= 0.04
+        # Bio sub-line: small italic-ish dim copy below the row.
+        Text(
+            text=character_bio(astro.name)[:88],
+            parent=root, position=(-0.36, y - 0.018),
+            origin=(-0.5, 0.5), z=-0.01,
+            scale=0.65, color=color.rgb32(150, 155, 175),
+        )
+        y -= 0.052
 
     Text(
         text="Top-skilled active astronauts are auto-selected for manned missions.",
