@@ -36,17 +36,31 @@ class Module(str, Enum):
     `requires_modules` tuple; the resolver rejects a launch whose
     required modules aren't built.
 
-    Phase Q split ROCKET-only research into per-component tracks. The
-    last three (CAPSULE / PROBE / LM) are SOFT inputs to effective
-    success — they contribute reliability bonuses on relevant flights
-    but aren't gating prereqs, so current balance still holds and
-    existing missions keep flying with default starting values."""
+    Phase Q split ROCKET-only research into per-component tracks; the
+    Q-deep pass further split the single LUNAR_KICKER into three tiered
+    kickers (A/B/C — lighter to heavier injection burns) and added the
+    SERVICE_MODULE as a manned-lunar prereq, matching the original
+    game's hardware tree. The CAPSULE / PROBE / LM tracks remain SOFT
+    inputs (success bonuses, not gates).
+
+    LUNAR_KICKER stays in the enum as a deprecated/legacy alias so old
+    save files load without exploding; no current mission references
+    it. _player_from_dict migrates its reliability into the three new
+    tiered kickers on load."""
     DOCKING = "Docking Module"
-    LUNAR_KICKER = "Lunar Kicker"
+    LUNAR_KICKER = "Lunar Kicker"        # legacy — see KICKER_A/B/C
     EVA_SUIT = "EVA Suit"
     CAPSULE = "Capsule"           # Phase Q — manned-flight component
     PROBE = "Probe"               # Phase Q — unmanned-flight component
     LM = "Lunar Module"           # Phase Q — lunar-landing component
+    # Q-deep — tiered injection stages. A is the lightest (small
+    # probes); C is the heaviest (lunar landing, outer-planet probes).
+    KICKER_A = "Kicker A"
+    KICKER_B = "Kicker B"
+    KICKER_C = "Kicker C"
+    # Q-deep — Service Module gates all manned lunar work. Fails on the
+    # CSM-class missions until research clears MIN_RELIABILITY_TO_LAUNCH.
+    SERVICE_MODULE = "Service Module"
 
 
 class Skill(str, Enum):
@@ -240,27 +254,27 @@ MISSIONS: tuple[Mission, ...] = (
             crew_roles=(Skill.CAPSULE, Skill.EVA)),
     Mission(MissionId.LUNAR_PASS,           "Lunar flyby",          Rocket.MEDIUM,12, 0.60, 10, 3,  5,
             tier=ProgramTier.TWO,
-            requires_modules=(Module.LUNAR_KICKER,),
+            requires_modules=(Module.KICKER_B,),
             phases=(MissionPhase.LAUNCH, MissionPhase.TLI)),
     Mission(MissionId.LUNAR_ORBIT,          "Lunar orbit",          Rocket.HEAVY, 18, 0.50, 15, 4,  7,
             tier=ProgramTier.TWO,
-            requires_modules=(Module.LUNAR_KICKER,),
+            requires_modules=(Module.KICKER_B,),
             phases=(MissionPhase.LAUNCH, MissionPhase.TLI, MissionPhase.LOI)),
     # Tier 3 — Apollo / Soyuz
     Mission(MissionId.LUNAR_LANDING,        "Lunar landing",        Rocket.HEAVY, 25, 0.35, 20, 5, 10,
             tier=ProgramTier.THREE,
-            requires_modules=(Module.LUNAR_KICKER,),
+            requires_modules=(Module.KICKER_C,),
             phases=(MissionPhase.LAUNCH, MissionPhase.TLI, MissionPhase.DESCENT)),
     Mission(MissionId.MANNED_LUNAR_ORBIT,   "Manned lunar orbit",   Rocket.HEAVY, 25, 0.40, 20, 6,  9,
             tier=ProgramTier.THREE, manned=True, crew_size=2, primary_skill=Skill.CAPSULE,
-            requires_modules=(Module.LUNAR_KICKER,),
+            requires_modules=(Module.KICKER_B, Module.SERVICE_MODULE),
             phases=(MissionPhase.LAUNCH, MissionPhase.ORBIT_INSERTION,
                     MissionPhase.TLI, MissionPhase.LOI,
                     MissionPhase.TEI, MissionPhase.REENTRY),
             crew_roles=(Skill.CAPSULE, Skill.ENDURANCE)),
     Mission(MissionId.MANNED_LUNAR_LANDING, "Manned lunar landing", Rocket.HEAVY, 35, 0.25, 35, 8, 15,
             tier=ProgramTier.THREE, manned=True, crew_size=3, primary_skill=Skill.LM_PILOT,
-            requires_modules=(Module.LUNAR_KICKER, Module.EVA_SUIT),
+            requires_modules=(Module.KICKER_C, Module.SERVICE_MODULE, Module.EVA_SUIT),
             phases=(MissionPhase.LAUNCH, MissionPhase.ORBIT_INSERTION,
                     MissionPhase.TLI, MissionPhase.LOI,
                     MissionPhase.DESCENT, MissionPhase.SURFACE,
@@ -282,31 +296,32 @@ MISSIONS: tuple[Mission, ...] = (
             crew_roles=(Skill.CAPSULE, Skill.LM_PILOT)),
     Mission(MissionId.LM_LUNAR_TEST,        "LM test (lunar orbit)", Rocket.HEAVY, 30, 0.40, 18, 6,  8,
             tier=ProgramTier.THREE, manned=True, crew_size=2, primary_skill=Skill.LM_PILOT,
-            requires_modules=(Module.LUNAR_KICKER,),
+            requires_modules=(Module.KICKER_B, Module.SERVICE_MODULE),
             phases=(MissionPhase.LAUNCH, MissionPhase.TLI,
                     MissionPhase.LOI, MissionPhase.REENTRY),
             crew_roles=(Skill.CAPSULE, Skill.LM_PILOT)),
-    # Phase G — interplanetary probes. All need the Lunar Kicker's
-    # deep-space injection stage. Distance ≈ difficulty.
+    # Phase G — interplanetary probes. Q-deep tiers them onto separate
+    # injection stages: small inner-planet → A, energy-hungry Mercury
+    # → B, outer planets → C.
     Mission(MissionId.VENUS_FLYBY,          "Venus flyby",          Rocket.MEDIUM,14, 0.55,  8, 3,  4,
             tier=ProgramTier.TWO,
-            requires_modules=(Module.LUNAR_KICKER,),
+            requires_modules=(Module.KICKER_A,),
             phases=(MissionPhase.LAUNCH, MissionPhase.INJECTION_BURN)),
     Mission(MissionId.MARS_FLYBY,           "Mars flyby",           Rocket.MEDIUM,16, 0.50,  9, 3,  5,
             tier=ProgramTier.TWO,
-            requires_modules=(Module.LUNAR_KICKER,),
+            requires_modules=(Module.KICKER_A,),
             phases=(MissionPhase.LAUNCH, MissionPhase.INJECTION_BURN)),
     Mission(MissionId.MERCURY_FLYBY,        "Mercury flyby",        Rocket.MEDIUM,18, 0.45,  9, 3,  5,
             tier=ProgramTier.THREE,
-            requires_modules=(Module.LUNAR_KICKER,),
+            requires_modules=(Module.KICKER_B,),
             phases=(MissionPhase.LAUNCH, MissionPhase.INJECTION_BURN)),
     Mission(MissionId.JUPITER_FLYBY,        "Jupiter flyby",        Rocket.HEAVY, 22, 0.40, 10, 4,  6,
             tier=ProgramTier.THREE,
-            requires_modules=(Module.LUNAR_KICKER,),
+            requires_modules=(Module.KICKER_C,),
             phases=(MissionPhase.LAUNCH, MissionPhase.INJECTION_BURN)),
     Mission(MissionId.SATURN_FLYBY,         "Saturn flyby",         Rocket.HEAVY, 25, 0.35, 12, 4,  7,
             tier=ProgramTier.THREE,
-            requires_modules=(Module.LUNAR_KICKER,),
+            requires_modules=(Module.KICKER_C,),
             phases=(MissionPhase.LAUNCH, MissionPhase.INJECTION_BURN)),
 )
 
@@ -383,12 +398,19 @@ RD_SPEED: dict[str, float] = {
     Rocket.MEDIUM.value:       0.5,
     Rocket.HEAVY.value:        0.3,
     Module.DOCKING.value:      0.7,
-    Module.LUNAR_KICKER.value: 0.5,
+    Module.LUNAR_KICKER.value: 0.5,   # legacy — no mission references it
     Module.EVA_SUIT.value:     0.8,
     # Phase Q — per-component R&D speeds.
     Module.CAPSULE.value:      0.8,
     Module.PROBE.value:        0.9,
     Module.LM.value:           0.4,
+    # Q-deep — tiered kickers + Service Module. Lighter kickers are
+    # easier to research; SM sits between Capsule (well-known tech)
+    # and LM (most complex).
+    Module.KICKER_A.value:        0.7,
+    Module.KICKER_B.value:        0.5,
+    Module.KICKER_C.value:        0.3,
+    Module.SERVICE_MODULE.value:  0.6,
 }
 RD_BATCH_COST = 3  # MB per roll
 
@@ -419,6 +441,14 @@ COMPONENT_STARTING_RELIABILITY: dict[str, int] = {
     Module.CAPSULE.value: 30,
     Module.PROBE.value:   30,
     Module.LM.value:      10,
+    # Q-deep — kickers + Service Module. Lighter kickers (A) seed a
+    # little higher to keep small probe missions reachable in early
+    # game; the heavy kicker + SM stay near zero so the moon push is
+    # gated on real research.
+    Module.KICKER_A.value:        20,
+    Module.KICKER_B.value:        10,
+    Module.KICKER_C.value:        0,
+    Module.SERVICE_MODULE.value:  10,
 }
 
 
@@ -1298,6 +1328,15 @@ def _player_from_dict(d: dict[str, Any]) -> Player:
     raw_reliability = data.get("reliability") or {}
     for r in Rocket:
         raw_reliability.setdefault(r.value, 0)
+    # Q-deep — old saves have a single LUNAR_KICKER score. Use it to
+    # seed each tiered kicker so the player doesn't lose research
+    # progress when loading a pre-split save. We only fill in tiered
+    # kickers that aren't already present so a save written *after*
+    # the split keeps its true per-tier values.
+    legacy_kicker = raw_reliability.get(Module.LUNAR_KICKER.value)
+    if legacy_kicker is not None and legacy_kicker > 0:
+        for k in (Module.KICKER_A, Module.KICKER_B, Module.KICKER_C):
+            raw_reliability.setdefault(k.value, legacy_kicker)
     for m in Module:
         raw_reliability.setdefault(
             m.value, COMPONENT_STARTING_RELIABILITY.get(m.value, 0),

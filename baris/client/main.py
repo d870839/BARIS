@@ -66,11 +66,16 @@ FPS = 60
 ROCKET_KEYS = {pygame.K_q: Rocket.LIGHT, pygame.K_w: Rocket.MEDIUM, pygame.K_e: Rocket.HEAVY}
 MODULE_KEYS = {
     pygame.K_r: Module.DOCKING,
-    pygame.K_t: Module.LUNAR_KICKER,
+    # Q-deep — the single Lunar Kicker hotkey now points at the
+    # medium-tier kicker (used by lunar flybys and orbits, the most
+    # common path). KICKER_A and KICKER_C still pickable via the R&D
+    # panel buttons.
+    pygame.K_t: Module.KICKER_B,
     pygame.K_y: Module.EVA_SUIT,
     pygame.K_u: Module.CAPSULE,
     pygame.K_i: Module.PROBE,
     pygame.K_o: Module.LM,
+    pygame.K_p: Module.SERVICE_MODULE,
 }
 OBJECTIVE_KEYS = {  # held-down toggle keys while on the Missions tab
     pygame.K_v: ObjectiveId.EVA,

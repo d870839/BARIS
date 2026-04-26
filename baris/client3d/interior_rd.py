@@ -12,13 +12,17 @@ from baris.state import MIN_RELIABILITY_TO_LAUNCH, Module, RELIABILITY_CAP, Rock
 
 
 # Targets rendered on the wall. Order matches the x-layout left-to-right.
-# Rockets first, then modules.
+# Rockets first, then modules. Q-deep dropped the legacy generic
+# Kicker slot in favour of the heavy KICKER_C (the moonshot stage)
+# since the wall is a flavour display, not the canonical R&D control.
+# All other tracks (KICKER_A/B, Service Module, etc.) live in the
+# R&D panel that the central console opens.
 INTERIOR_TARGETS: tuple[tuple[str, str], ...] = (
     (Rocket.LIGHT.value,        "LIGHT"),
     (Rocket.MEDIUM.value,       "MEDIUM"),
     (Rocket.HEAVY.value,        "HEAVY"),
     (Module.DOCKING.value,      "DOCKING"),
-    (Module.LUNAR_KICKER.value, "KICKER"),
+    (Module.KICKER_C.value,     "KICKER C"),
     (Module.EVA_SUIT.value,     "EVA"),
 )
 

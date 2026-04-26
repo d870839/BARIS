@@ -168,6 +168,14 @@ def applicable_components(mission: Mission) -> tuple[Module, ...]:
     return tuple(components)
 
 
+# Q-deep — missions that don't list SERVICE_MODULE in requires_modules
+# but still benefit from its reliability swing on flight day. Currently
+# overlaps with the manned-lunar set above; kept explicit so future
+# manned missions can opt in without becoming a hard gate.
+# (Manned lunar missions list SERVICE_MODULE as a hard requires_modules
+# entry, which means it's a launch gate rather than a soft bonus.)
+
+
 def component_reliability_bonus(player: Player, mission: Mission) -> float:
     """Average per-component reliability swing for this mission's
     applicable components. Centred on 50 (neutral) so unresearched

@@ -117,6 +117,21 @@ class _FixedRng:
         return self._r.choice(seq)
 
 
+def _arm_lunar_components(player, val: int = 70) -> None:
+    """Q-deep test helper. The single LUNAR_KICKER reliability slot got
+    split into KICKER_A/B/C plus SERVICE_MODULE for manned lunar work.
+    Most tests don't care about specifics — they just need every lunar-
+    component prereq satisfied — so this brings the whole set up to a
+    launch-ready value."""
+    for m in (
+        Module.KICKER_A,
+        Module.KICKER_B,
+        Module.KICKER_C,
+        Module.SERVICE_MODULE,
+    ):
+        player.reliability[m.value] = val
+
+
 def _two_player_state() -> GameState:
     state = GameState()
     state.players = [
@@ -447,7 +462,7 @@ def test_eor_lets_player_attempt_landing_with_only_medium() -> None:
     me.mission_successes[MissionId.SUBORBITAL.value] = 1
     me.mission_successes[MissionId.MULTI_CREW_ORBITAL.value] = 1
     me.reliability[Rocket.MEDIUM.value] = 70  # Heavy NOT built
-    me.reliability[Module.LUNAR_KICKER.value] = 70
+    _arm_lunar_components(me, 70)
     me.reliability[Module.EVA_SUIT.value] = 70
     me.budget = 500
     for a in me.astronauts:
@@ -676,7 +691,7 @@ def test_manned_landing_success_ends_game() -> None:
     me = state.players[0]
     me.reliability[Rocket.HEAVY.value] = 70
     me.reliability[Module.EVA_SUIT.value] = 70
-    me.reliability[Module.LUNAR_KICKER.value] = 70
+    _arm_lunar_components(me, 70)
     me.budget = 100
     me.mission_successes[MissionId.SUBORBITAL.value] = 1
     me.mission_successes[MissionId.MULTI_CREW_ORBITAL.value] = 1
@@ -698,7 +713,7 @@ def test_unmanned_landing_only_awards_prestige() -> None:
     start_game(state, rng=random.Random(1))
     me = state.players[0]
     me.reliability[Rocket.HEAVY.value] = 70
-    me.reliability[Module.LUNAR_KICKER.value] = 70
+    _arm_lunar_components(me, 70)
     me.budget = 100
     me.mission_successes[MissionId.SUBORBITAL.value] = 1
     me.mission_successes[MissionId.MULTI_CREW_ORBITAL.value] = 1
@@ -1315,7 +1330,7 @@ def test_manned_lunar_landing_success_marks_ended_game() -> None:
     me = state.players[0]
     me.reliability[Rocket.HEAVY.value] = 70
     me.reliability[Module.EVA_SUIT.value] = 70
-    me.reliability[Module.LUNAR_KICKER.value] = 70
+    _arm_lunar_components(me, 70)
     me.budget = 100
     me.mission_successes[MissionId.SUBORBITAL.value] = 1
     me.mission_successes[MissionId.MULTI_CREW_ORBITAL.value] = 1
@@ -1425,7 +1440,7 @@ def test_assembly_cost_is_reserved_on_schedule() -> None:
     start_game(state, rng=random.Random(1))
     me = state.players[0]
     me.reliability[Rocket.HEAVY.value] = 70
-    me.reliability[Module.LUNAR_KICKER.value] = 70
+    _arm_lunar_components(me, 70)
     me.mission_successes[MissionId.SUBORBITAL.value] = 1
     me.mission_successes[MissionId.MULTI_CREW_ORBITAL.value] = 1
     me.budget = 200
@@ -1506,7 +1521,7 @@ def test_scrub_scheduled_refunds_half_of_assembly_and_clears_slot() -> None:
     start_game(state, rng=random.Random(1))
     me = state.players[0]
     me.reliability[Rocket.HEAVY.value] = 70
-    me.reliability[Module.LUNAR_KICKER.value] = 70
+    _arm_lunar_components(me, 70)
     me.mission_successes[MissionId.SUBORBITAL.value] = 1
     me.mission_successes[MissionId.MULTI_CREW_ORBITAL.value] = 1
     me.budget = 200
@@ -1784,7 +1799,7 @@ def test_successful_lunar_flyby_bumps_recon() -> None:
     me = state.players[0]
     me.mission_successes[MissionId.SUBORBITAL.value] = 1  # unlock Tier 2
     me.reliability[Rocket.MEDIUM.value] = 70
-    me.reliability[Module.LUNAR_KICKER.value] = 70
+    _arm_lunar_components(me, 70)
     me.budget = 200
 
     submit_turn(me, rd_rocket=None, rd_spend=0, launch=MissionId.LUNAR_PASS)
@@ -1800,7 +1815,7 @@ def test_successful_unmanned_landing_bumps_recon_and_lm() -> None:
     start_game(state, rng=random.Random(1))
     me = state.players[0]
     me.reliability[Rocket.HEAVY.value] = 70
-    me.reliability[Module.LUNAR_KICKER.value] = 70
+    _arm_lunar_components(me, 70)
     me.budget = 200
     me.mission_successes[MissionId.SUBORBITAL.value] = 1
     me.mission_successes[MissionId.MULTI_CREW_ORBITAL.value] = 1
@@ -1819,7 +1834,7 @@ def test_failed_unmanned_landing_still_bumps_recon() -> None:
     start_game(state, rng=random.Random(1))
     me = state.players[0]
     me.reliability[Rocket.HEAVY.value] = 70
-    me.reliability[Module.LUNAR_KICKER.value] = 70
+    _arm_lunar_components(me, 70)
     me.budget = 200
     me.mission_successes[MissionId.SUBORBITAL.value] = 1
     me.mission_successes[MissionId.MULTI_CREW_ORBITAL.value] = 1
@@ -1876,7 +1891,7 @@ def test_manned_landing_report_carries_recon_and_lm_modifiers() -> None:
     me = state.players[0]
     me.reliability[Rocket.HEAVY.value] = 70
     me.reliability[Module.EVA_SUIT.value] = 70
-    me.reliability[Module.LUNAR_KICKER.value] = 70
+    _arm_lunar_components(me, 70)
     me.budget = 100
     me.mission_successes[MissionId.SUBORBITAL.value] = 1
     me.mission_successes[MissionId.MULTI_CREW_ORBITAL.value] = 1
@@ -1904,7 +1919,7 @@ def test_recon_caps_at_LUNAR_RECON_CAP() -> None:
     me.lunar_recon = LUNAR_RECON_CAP - 1   # near the cap
     me.mission_successes[MissionId.SUBORBITAL.value] = 1
     me.reliability[Rocket.MEDIUM.value] = 70
-    me.reliability[Module.LUNAR_KICKER.value] = 70
+    _arm_lunar_components(me, 70)
     me.budget = 200
 
     submit_turn(me, rd_rocket=None, rd_spend=0, launch=MissionId.LUNAR_PASS)
@@ -2121,7 +2136,7 @@ def test_lunar_mission_without_kicker_is_rejected_at_submit() -> None:
     me.mission_successes[MissionId.SUBORBITAL.value] = 1  # unlock Tier 2
     me.reliability[Rocket.MEDIUM.value] = 70              # flyby uses Medium
     # No kicker built → submit_turn should reject the queue.
-    assert missing_modules(me, MISSIONS_BY_ID[MissionId.LUNAR_PASS]) == [Module.LUNAR_KICKER]
+    assert missing_modules(me, MISSIONS_BY_ID[MissionId.LUNAR_PASS]) == [Module.KICKER_B]
 
     submit_turn(me, rd_rocket=None, rd_spend=0, launch=MissionId.LUNAR_PASS)
     assert me.pending_launch is None
@@ -2133,7 +2148,7 @@ def test_lunar_mission_with_kicker_built_is_accepted() -> None:
     me = state.players[0]
     me.mission_successes[MissionId.SUBORBITAL.value] = 1
     me.reliability[Rocket.MEDIUM.value] = 70
-    me.reliability[Module.LUNAR_KICKER.value] = 70
+    _arm_lunar_components(me, 70)
 
     submit_turn(me, rd_rocket=None, rd_spend=0, launch=MissionId.LUNAR_PASS)
     assert me.pending_launch == MissionId.LUNAR_PASS.value
@@ -2150,11 +2165,14 @@ def test_manned_lunar_landing_needs_both_kicker_and_eva_suit() -> None:
     choose_architecture(me, Architecture.LOR)
     mll = MISSIONS_BY_ID[MissionId.MANNED_LUNAR_LANDING]
 
-    # No modules → both missing.
-    assert set(missing_modules(me, mll)) == {Module.LUNAR_KICKER, Module.EVA_SUIT}
+    # No modules → all three lunar prereqs missing (Q-deep added the
+    # tiered kicker + Service Module on top of the EVA suit).
+    assert set(missing_modules(me, mll)) == {
+        Module.KICKER_C, Module.SERVICE_MODULE, Module.EVA_SUIT,
+    }
 
     # Only kicker → EVA Suit still missing; still rejected.
-    me.reliability[Module.LUNAR_KICKER.value] = 70
+    _arm_lunar_components(me, 70)
     assert missing_modules(me, mll) == [Module.EVA_SUIT]
     submit_turn(me, rd_rocket=None, rd_spend=0, launch=MissionId.MANNED_LUNAR_LANDING)
     assert me.pending_launch is None
@@ -2226,7 +2244,7 @@ def test_venus_flyby_grants_prestige_without_lunar_recon() -> None:
     me = state.players[0]
     me.mission_successes[MissionId.SUBORBITAL.value] = 1  # unlock Tier 2
     me.reliability[Rocket.MEDIUM.value] = 70
-    me.reliability[Module.LUNAR_KICKER.value] = 70
+    _arm_lunar_components(me, 70)
     me.budget = 200
     recon_before = me.lunar_recon
     lm_before = me.lm_points
@@ -2270,7 +2288,7 @@ def test_lm_lunar_test_grants_two_lm_points_and_recon() -> None:
     me.mission_successes[MissionId.SUBORBITAL.value] = 1
     me.mission_successes[MissionId.MULTI_CREW_ORBITAL.value] = 1
     me.reliability[Rocket.HEAVY.value] = 70
-    me.reliability[Module.LUNAR_KICKER.value] = 70
+    _arm_lunar_components(me, 70)
     me.budget = 200
     recon_before = me.lunar_recon
 
@@ -3545,7 +3563,7 @@ def test_lunar_landing_failed_phase_drawn_from_full_timeline() -> None:
         start_game(state, rng=random.Random(seed))
         me = state.players[0]
         me.reliability[Rocket.HEAVY.value] = 40
-        me.reliability[Module.LUNAR_KICKER.value] = 60
+        _arm_lunar_components(me, 60)
         me.reliability[Module.EVA_SUIT.value] = 60
         me.budget = 500
         me.architecture = Architecture.DA.value
@@ -4115,7 +4133,7 @@ def test_real_phase_p_pinpoints_the_first_failed_phase() -> None:
     start_game(state, rng=random.Random(1))
     me = state.players[0]
     me.reliability[Rocket.HEAVY.value] = 80
-    me.reliability[Module.LUNAR_KICKER.value] = 80
+    _arm_lunar_components(me, 80)
     me.budget = 200
     me.mission_successes[MissionId.SUBORBITAL.value] = 1
     submit_turn(me, launch=MissionId.LUNAR_ORBIT)   # phases: LAUNCH, TLI, LOI
@@ -4163,7 +4181,7 @@ def test_post_mission_skill_bump_uses_each_seats_role() -> None:
     start_game(state, rng=random.Random(1))
     me = state.players[0]
     me.reliability[Rocket.HEAVY.value] = 90
-    me.reliability[Module.LUNAR_KICKER.value] = 80
+    _arm_lunar_components(me, 80)
     me.reliability[Module.EVA_SUIT.value] = 80
     me.reliability[Module.LM.value] = 80
     me.budget = 500
@@ -4266,6 +4284,85 @@ def test_phase_outcomes_aborted_returns_empty() -> None:
 
     report = _make_report(MissionId.SUBORBITAL, aborted=True)
     assert phase_outcomes(report) == ()
+
+
+def test_qdeep_kickers_tier_to_mission_difficulty() -> None:
+    """Q-deep — small probes need KICKER_A, lunar work needs B, lunar
+    landing + outer-planet probes need C. Each mission lists exactly
+    one tiered kicker so the tree forms a real progression rather
+    than 'one kicker rules them all'."""
+    from baris.resolver import missing_modules
+
+    state = _two_player_state()
+    start_game(state, rng=random.Random(1))
+    me = state.players[0]
+    me.reliability[Rocket.MEDIUM.value] = 70
+    me.reliability[Rocket.HEAVY.value] = 70
+
+    # KICKER_A only — Venus reachable, Lunar Orbit (B) and Lunar
+    # Landing (C) still gated.
+    me.reliability[Module.KICKER_A.value] = 70
+    assert missing_modules(me, MISSIONS_BY_ID[MissionId.VENUS_FLYBY]) == []
+    assert Module.KICKER_B in missing_modules(me, MISSIONS_BY_ID[MissionId.LUNAR_ORBIT])
+    assert Module.KICKER_C in missing_modules(me, MISSIONS_BY_ID[MissionId.LUNAR_LANDING])
+
+    # Add B — Lunar Orbit clears, Lunar Landing still gated on C.
+    me.reliability[Module.KICKER_B.value] = 70
+    assert missing_modules(me, MISSIONS_BY_ID[MissionId.LUNAR_ORBIT]) == []
+    assert Module.KICKER_C in missing_modules(me, MISSIONS_BY_ID[MissionId.LUNAR_LANDING])
+
+    # Add C — Lunar Landing + Saturn flyby clear.
+    me.reliability[Module.KICKER_C.value] = 70
+    assert missing_modules(me, MISSIONS_BY_ID[MissionId.LUNAR_LANDING]) == []
+    assert missing_modules(me, MISSIONS_BY_ID[MissionId.SATURN_FLYBY]) == []
+
+
+def test_qdeep_service_module_gates_manned_lunar_orbit() -> None:
+    """Q-deep — manned-lunar-orbit needs KICKER_B *and* SERVICE_MODULE.
+    Building only the kicker shouldn't unlock it; the SM is a
+    distinct tech track."""
+    from baris.resolver import missing_modules
+
+    state = _two_player_state()
+    start_game(state, rng=random.Random(1))
+    me = state.players[0]
+    me.reliability[Rocket.HEAVY.value] = 70
+    me.reliability[Module.KICKER_B.value] = 70
+    mlo = MISSIONS_BY_ID[MissionId.MANNED_LUNAR_ORBIT]
+    assert missing_modules(me, mlo) == [Module.SERVICE_MODULE]
+    me.reliability[Module.SERVICE_MODULE.value] = 70
+    assert missing_modules(me, mlo) == []
+
+
+def test_qdeep_legacy_lunar_kicker_save_seeds_new_kickers() -> None:
+    """A pre-Q-deep save has only Module.LUNAR_KICKER set in the
+    reliability dict. Loading that save should clone its value into
+    each tiered kicker so existing research progress carries over
+    instead of resetting to zero."""
+    from baris.state import COMPONENT_STARTING_RELIABILITY, _player_from_dict
+    raw = {
+        "player_id": "x", "username": "X",
+        "side": Side.USA.value, "budget": 30, "prestige": 0,
+        "ready": True, "astronauts": [],
+        "reliability": {
+            Rocket.LIGHT.value: 0,
+            Rocket.MEDIUM.value: 0,
+            Rocket.HEAVY.value: 0,
+            Module.DOCKING.value: 0,
+            Module.LUNAR_KICKER.value: 65,   # pre-split research
+            Module.EVA_SUIT.value: 0,
+        },
+        "mission_successes": {}, "architecture": None,
+        "turn_submitted": False,
+    }
+    p = _player_from_dict(raw)
+    assert p.module_reliability(Module.KICKER_A) == 65
+    assert p.module_reliability(Module.KICKER_B) == 65
+    assert p.module_reliability(Module.KICKER_C) == 65
+    # SERVICE_MODULE is a brand-new track; it doesn't inherit the
+    # legacy kicker value, just its own starting baseline.
+    assert p.module_reliability(Module.SERVICE_MODULE) == \
+        COMPONENT_STARTING_RELIABILITY[Module.SERVICE_MODULE.value]
 
 
 def test_phase_outcomes_unknown_failed_phase_skips_all() -> None:
