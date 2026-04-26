@@ -1955,7 +1955,10 @@ class Client:
     def _render_crew_picker(self, me: Player, pos: tuple[int, int]) -> None:
         """Crew picker shown when a manned mission is queued. Lists the
         flight-ready roster with Shift+digit hotkeys; ticks the chosen
-        crew. Empty pick = auto top-skilled (the legacy default)."""
+        crew. Empty pick = auto top-skilled (the legacy default).
+
+        Per-seat roles render in a small banner above the candidate list
+        so the player knows which slot they're filling next."""
         if self.queued_mission is None:
             return
         mission = MISSIONS_BY_ID.get(self.queued_mission)
@@ -1963,28 +1966,52 @@ class Client:
             return
         from baris.state import character_portrait
         x, y = pos
-        skill_attr = mission.primary_skill.value if mission.primary_skill else "capsule"
+        # Roles per seat — fall back to the mission's primary_skill for
+        # every slot when no explicit roles are declared.
+        roles: list[Skill] = list(mission.crew_roles) if mission.crew_roles else []
+        if not roles and mission.primary_skill is not None:
+            roles = [mission.primary_skill] * mission.crew_size
         title = (
             f"CREW (Shift+digit to toggle — pick {mission.crew_size}, "
             f"or leave empty for auto top-skilled)"
         )
         draw_text(self.screen, title, (x + 16, y), size=14, color=HIGHLIGHT, bold=True)
-        cy = y + 24
+        # Per-seat role banner with each slot's currently-picked pilot.
+        role_line_parts: list[str] = []
+        for slot_idx, role_skill in enumerate(roles):
+            if slot_idx < len(self.queued_crew):
+                aid = self.queued_crew[slot_idx]
+                pilot = next((a for a in me.astronauts if a.id == aid), None)
+                tag = pilot.name[:14] if pilot else "?"
+            else:
+                tag = "—"
+            role_line_parts.append(f"[{slot_idx + 1}] {role_skill.value.upper()}: {tag}")
+        role_line = "   ".join(role_line_parts)
+        draw_text(self.screen, role_line, (x + 16, y + 18), size=13, color=DIM)
+        cy = y + 42
         pool = self._flight_ready_pickable(me)
         if not pool:
             draw_text(self.screen, "(no flight-ready astronauts)",
                       (x + 16, cy), size=14, color=DIM)
             return
+        # The next-empty slot's role tells the player WHICH role each
+        # candidate's skill column shows. If all slots are full the
+        # column shows the FIRST role (cosmetic only).
+        next_slot = len(self.queued_crew)
+        col_role = roles[next_slot] if next_slot < len(roles) else (
+            roles[0] if roles else None
+        )
+        col_label = col_role.value if col_role else "skill"
         for idx, astro in enumerate(pool[:11]):  # match MISSION_KEYS span (1..0..-)
             picked = astro.id in self.queued_crew
             marker = "[X]" if picked else "[ ]"
             glyph, _ = character_portrait(astro.name)
-            primary = getattr(astro, skill_attr, 0)
+            col_value = astro.skill(col_role) if col_role else 0
             label_color = HIGHLIGHT if picked else FG
             hint = "0" if idx == 9 else ("-" if idx == 10 else str(idx + 1))
             line = (
                 f"{marker} (S+{hint}) {glyph} {astro.name}  "
-                f"{mission.primary_skill.value if mission.primary_skill else 'capsule'}: {primary}  "
+                f"{col_label}: {col_value}  "
                 f"mood {astro.mood} / {astro.compatibility}"
             )
             draw_text(self.screen, line, (x + 16, cy), size=14, color=label_color)

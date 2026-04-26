@@ -1169,12 +1169,28 @@ def _chatter_character(player: Player, rng: random.Random) -> str:
 def _select_crew(player: Player, mission: Mission) -> list[Astronaut] | None:
     """Pick the top-skilled FLIGHT-READY astronauts for this mission, or
     None if the flight-ready roster can't fill it. Astronauts currently
-    in basic training, advanced training, or the hospital are excluded."""
+    in basic training, advanced training, the hospital, or post-flight
+    rest are excluded.
+
+    When `mission.crew_roles` is set the resolver picks PER SLOT — a
+    greedy walk through the role list, each slot taking the best
+    not-yet-picked astronaut at that role's skill. This means the best
+    LM pilot gets the LM seat, the best capsule pilot gets the CMP
+    seat, etc., rather than dumping the top primary_skill scorers in
+    every slot."""
     if not mission.manned or mission.crew_size == 0:
         return []
     pool = player.flight_ready_astronauts()
     if len(pool) < mission.crew_size:
         return None
+    if mission.crew_roles and len(mission.crew_roles) == mission.crew_size:
+        chosen: list[Astronaut] = []
+        for role_skill in mission.crew_roles:
+            available = [a for a in pool if a not in chosen]
+            if not available:
+                return None
+            chosen.append(max(available, key=lambda a: a.skill(role_skill)))
+        return chosen
     skill_key = mission.primary_skill or Skill.CAPSULE
     ranked = sorted(pool, key=lambda a: a.skill(skill_key), reverse=True)
     return ranked[:mission.crew_size]
@@ -1207,7 +1223,21 @@ def _resolve_scheduled_crew(
 
 
 def _crew_bonus(crew: list[Astronaut], mission: Mission) -> float:
-    if not mission.manned or mission.primary_skill is None or not crew:
+    if not mission.manned or not crew:
+        return 0.0
+    # Per-role math when the mission declares roles AND the crew list
+    # length matches — each seat's skill in its own role contributes.
+    # Falls back to the legacy primary_skill average otherwise so
+    # missions without crew_roles set keep their existing balance.
+    if (
+        mission.crew_roles
+        and len(mission.crew_roles) == len(crew)
+    ):
+        avg = sum(
+            crew[i].skill(mission.crew_roles[i]) for i in range(len(crew))
+        ) / len(crew)
+        return (avg / 100.0) * CREW_MAX_BONUS
+    if mission.primary_skill is None:
         return 0.0
     avg = sum(a.skill(mission.primary_skill) for a in crew) / len(crew)
     return (avg / 100.0) * CREW_MAX_BONUS
@@ -1273,8 +1303,14 @@ def _handle_mission_success(
     crew_note = ""
     if crew:
         crew_note = f" [crew: {', '.join(a.name for a in crew)}]"
-        # successful mission gives crew a small experience bump in the mission's primary skill.
-        if mission.primary_skill is not None:
+        # Successful mission gives each crew member a small experience
+        # bump. When per-seat roles are defined, each pilot trains in
+        # their own role's skill (CMP gets capsule, LMP gets lm_pilot,
+        # EVA gets eva); otherwise everyone bumps the primary skill.
+        if mission.crew_roles and len(mission.crew_roles) == len(crew):
+            for i, a in enumerate(crew):
+                a.bump_skill(mission.crew_roles[i], 5)
+        elif mission.primary_skill is not None:
             for a in crew:
                 a.bump_skill(mission.primary_skill, 5)
     bonus_txt = f" +{bonus} FIRST!" if bonus else ""

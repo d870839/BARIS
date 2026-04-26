@@ -611,29 +611,63 @@ def test_manned_mission_rejected_without_enough_crew() -> None:
     assert me.pending_launch is None
 
 
-def test_select_crew_picks_top_skilled_by_primary() -> None:
+def test_select_crew_picks_top_skilled_per_role() -> None:
+    """Manned lunar orbit's roles are (CAPSULE, ENDURANCE), so the
+    selector should take the best capsule pilot for slot 1 then the
+    best endurance pilot from the remainder for slot 2."""
     me = Player(player_id="a", username="Alice", side=Side.USA)
     me.astronauts = [
-        _make_astronaut("A", capsule=10),
-        _make_astronaut("B", capsule=90),
-        _make_astronaut("C", capsule=50),
-        _make_astronaut("D", capsule=70),
+        _make_astronaut("A", capsule=10, endurance=10),
+        _make_astronaut("B", capsule=90, endurance=20),
+        _make_astronaut("C", capsule=50, endurance=80),
+        _make_astronaut("D", capsule=70, endurance=30),
     ]
-    mission = MISSIONS_BY_ID[MissionId.MANNED_LUNAR_ORBIT]  # crew_size=2, primary=Capsule
+    mission = MISSIONS_BY_ID[MissionId.MANNED_LUNAR_ORBIT]
     crew = _select_crew(me, mission)
     assert crew is not None
-    assert [a.name for a in crew] == ["B", "D"]
+    assert [a.name for a in crew] == ["B", "C"]
 
 
-def test_crew_bonus_scales_with_primary_skill() -> None:
+def test_crew_bonus_uses_role_skill_per_seat() -> None:
+    """Manned lunar landing roles are (CAPSULE, LM_PILOT, EVA), so the
+    bonus averages each pilot's skill in their assigned role rather
+    than collapsing on a single primary_skill."""
     mission = MISSIONS_BY_ID[MissionId.MANNED_LUNAR_LANDING]
-    crew_max = [_make_astronaut(f"X{i}", lm_pilot=100) for i in range(mission.crew_size)]
-    crew_zero = [_make_astronaut(f"Y{i}", lm_pilot=0) for i in range(mission.crew_size)]
-    crew_half = [_make_astronaut(f"Z{i}", lm_pilot=50) for i in range(mission.crew_size)]
-
+    # Each pilot maxed in EVERY skill — bonus should hit the cap.
+    crew_max = [
+        _make_astronaut(
+            f"X{i}", capsule=100, lm_pilot=100, eva=100, docking=100, endurance=100,
+        )
+        for i in range(mission.crew_size)
+    ]
+    crew_zero = [_make_astronaut(f"Y{i}") for i in range(mission.crew_size)]
+    crew_half = [
+        _make_astronaut(
+            f"Z{i}", capsule=50, lm_pilot=50, eva=50, docking=50, endurance=50,
+        )
+        for i in range(mission.crew_size)
+    ]
     assert _crew_bonus(crew_zero, mission) == 0.0
     assert abs(_crew_bonus(crew_max, mission) - CREW_MAX_BONUS) < 1e-9
     assert abs(_crew_bonus(crew_half, mission) - CREW_MAX_BONUS / 2) < 1e-9
+
+
+def test_crew_bonus_falls_back_to_primary_when_no_roles() -> None:
+    """Missions without crew_roles set keep the legacy behaviour."""
+    from baris.state import Mission, ProgramTier
+    legacy = Mission(
+        id=MissionId.MANNED_ORBITAL,   # arbitrary; we override fields
+        name="legacy", rocket=Rocket.MEDIUM, launch_cost=10,
+        base_success=0.5, prestige_success=1, prestige_fail=1, first_bonus=0,
+        tier=ProgramTier.ONE, manned=True, crew_size=2,
+        primary_skill=Skill.CAPSULE,
+        crew_roles=(),  # explicit empty
+    )
+    crew = [
+        _make_astronaut("A", capsule=100, eva=0),
+        _make_astronaut("B", capsule=100, eva=0),
+    ]
+    assert abs(_crew_bonus(crew, legacy) - CREW_MAX_BONUS) < 1e-9
 
 
 def test_manned_landing_success_ends_game() -> None:
@@ -4020,3 +4054,72 @@ def test_server_room_save_disabled_when_path_is_none() -> None:
     # Should be a quiet no-op rather than a crash.
     room.save_to_disk()
     assert not room.load_from_disk()
+
+
+# ----------------------------------------------------------------------
+# Crew roles within missions
+# ----------------------------------------------------------------------
+
+
+def test_manned_landing_declares_three_roles_in_pilot_skill_order() -> None:
+    """Sanity check: our flagship Apollo-style mission should ask for
+    CAPSULE, LM_PILOT, EVA in that order."""
+    mission = MISSIONS_BY_ID[MissionId.MANNED_LUNAR_LANDING]
+    assert mission.crew_roles == (Skill.CAPSULE, Skill.LM_PILOT, Skill.EVA)
+
+
+def test_role_based_pick_assigns_specialists_to_their_seats() -> None:
+    """Player has three pilots, each maxed in a different skill. The
+    selector should put each in their right seat."""
+    me = Player(player_id="a", username="Alice", side=Side.USA)
+    me.astronauts = [
+        _make_astronaut("CMP",  capsule=100, lm_pilot=10,  eva=10),
+        _make_astronaut("LMP",  capsule=10,  lm_pilot=100, eva=10),
+        _make_astronaut("EVA",  capsule=10,  lm_pilot=10,  eva=100),
+    ]
+    mission = MISSIONS_BY_ID[MissionId.MANNED_LUNAR_LANDING]
+    crew = _select_crew(me, mission)
+    assert crew is not None
+    assert [a.name for a in crew] == ["CMP", "LMP", "EVA"]
+
+
+def test_post_mission_skill_bump_uses_each_seats_role() -> None:
+    """A successful manned-lunar-landing should bump CMP's capsule,
+    LMP's lm_pilot, and EVA's eva — not all three in a single skill."""
+    state = _two_player_state()
+    start_game(state, rng=random.Random(1))
+    me = state.players[0]
+    me.reliability[Rocket.HEAVY.value] = 90
+    me.reliability[Module.LUNAR_KICKER.value] = 80
+    me.reliability[Module.EVA_SUIT.value] = 80
+    me.reliability[Module.LM.value] = 80
+    me.budget = 500
+    me.architecture = Architecture.DA.value
+    me.mission_successes[MissionId.SUBORBITAL.value] = 1
+    me.mission_successes[MissionId.MULTI_CREW_ORBITAL.value] = 1
+    # Reset roster to three known pilots so role-pick is deterministic.
+    me.astronauts = [
+        _make_astronaut("CMP", capsule=80, lm_pilot=10, eva=10, endurance=50),
+        _make_astronaut("LMP", capsule=10, lm_pilot=80, eva=10, endurance=50),
+        _make_astronaut("EVA", capsule=10, lm_pilot=10, eva=80, endurance=50),
+    ]
+    pre = {a.name: (a.capsule, a.lm_pilot, a.eva) for a in me.astronauts}
+    submit_turn(me, launch=MissionId.MANNED_LUNAR_LANDING)
+    submit_turn(state.players[1], launch=None)
+    with _no_news():
+        resolve_turn(state, rng=_FixedRng(0.0))
+        _fire_scheduled_launch(state, _FixedRng(0.0))
+    by_name = {a.name: a for a in me.astronauts}
+    # Passive seasonal training (+1/skill, +3 random) muddies absolute
+    # deltas, so compare each pilot's role-skill growth to their
+    # non-role-skill growth: the role seat should grow strictly more.
+    def deltas(name):
+        a = by_name[name]
+        c, l, e = pre[name]
+        return (a.capsule - c, a.lm_pilot - l, a.eva - e)
+    cmp_dc, cmp_dl, cmp_de = deltas("CMP")
+    lmp_dc, lmp_dl, lmp_de = deltas("LMP")
+    eva_dc, eva_dl, eva_de = deltas("EVA")
+    assert cmp_dc > cmp_dl and cmp_dc > cmp_de, "CMP capsule didn't outgrow its other skills"
+    assert lmp_dl > lmp_dc and lmp_dl > lmp_de, "LMP lm_pilot didn't outgrow its other skills"
+    assert eva_de > eva_dc and eva_de > eva_dl, "EVA eva didn't outgrow its other skills"

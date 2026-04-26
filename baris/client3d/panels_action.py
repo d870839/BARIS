@@ -352,9 +352,13 @@ def build_mc_panel(client: "BarisClient", parent: Entity) -> Entity:
 
         # Phase O — manual crew assignment. Inline picker beneath the
         # objectives column, only for manned missions. Empty list is
-        # the legacy "auto-pick top-skilled" default.
+        # the legacy "auto-pick top-skilled" default. Per-seat roles
+        # render as a small "[1] CAPSULE [2] LM_PILOT [3] EVA" banner.
         if m.manned:
-            from baris.state import character_portrait
+            from baris.state import Skill, character_portrait
+            roles: list[Skill] = list(m.crew_roles) if m.crew_roles else []
+            if not roles and m.primary_skill is not None:
+                roles = [m.primary_skill] * m.crew_size
             cy = oy - 0.02
             Text(
                 text=(
@@ -364,15 +368,32 @@ def build_mc_panel(client: "BarisClient", parent: Entity) -> Entity:
                 parent=root, position=(0.22, cy),
                 origin=(0, 0), z=-0.01, scale=0.85, color=color.rgb32(160, 170, 195),
             )
-            cy -= 0.04
+            cy -= 0.025
+            if roles:
+                role_text = "  ".join(
+                    f"[{i + 1}] {r.value}" for i, r in enumerate(roles)
+                )
+                Text(
+                    text=role_text,
+                    parent=root, position=(0.22, cy),
+                    origin=(0, 0), z=-0.01, scale=0.7,
+                    color=color.rgb32(140, 160, 195),
+                )
+                cy -= 0.025
             pool = [a for a in me.astronauts if a.flight_ready]
+            next_slot = len(client.queued_crew)
+            col_role = roles[next_slot] if next_slot < len(roles) else (
+                roles[0] if roles else None
+            )
             for astro in pool[:8]:
                 picked = astro.id in client.queued_crew
                 marker = "[x]" if picked else "[ ]"
                 glyph, _ = character_portrait(astro.name)
+                col_value = astro.skill(col_role) if col_role else 0
+                col_label = col_role.value[:3] if col_role else "skl"
                 btn = Button(
                     parent=root,
-                    text=f"{marker} {glyph} {astro.name[:18]}",
+                    text=f"{marker} {glyph} {astro.name[:14]}  {col_label} {col_value}",
                     position=(0.22, cy, -0.02), scale=(0.4, 0.034),
                     color=(
                         color.rgb32(80, 100, 60) if picked else color.rgb32(34, 44, 70)
