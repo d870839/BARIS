@@ -889,8 +889,27 @@ def _resolve_pad_launch(
     report.effective_success = success_chance
 
     prestige_start = player.prestige
-    roll = rng.random()
-    if roll < success_chance:
+    # Real Phase P — each phase rolls independently. The per-phase
+    # chance is success_chance ** (1/N) so the expected product
+    # equals our overall success_chance, preserving balance with the
+    # cosmetic-only earlier shipping. The loop short-circuits on the
+    # first failed phase, so failed_phase is the actual one that
+    # broke the mission rather than a uniform-random label. Missions
+    # without a declared phase list fall back to a single roll for
+    # safety (shouldn't happen — every catalog entry has phases now).
+    failed_at: MissionPhase | None = None
+    if mission.phases:
+        clamped = max(0.01, min(0.999, success_chance))
+        per_phase_chance = clamped ** (1.0 / len(mission.phases))
+        for phase in mission.phases:
+            if rng.random() > per_phase_chance:
+                failed_at = phase
+                break
+    else:
+        if rng.random() >= success_chance:
+            failed_at = MissionPhase.LAUNCH
+
+    if failed_at is None:
         report.success = True
         _bump_reliability(player, eff_rocket, RELIABILITY_GAIN_ON_SUCCESS)
         _handle_mission_success(player, mission, crew, state, report)
@@ -910,6 +929,7 @@ def _resolve_pad_launch(
             rocket=report.rocket,
         )
     else:
+        report.failed_phase = failed_at.value
         _handle_mission_failure(player, mission, crew, state, rng, eff_rocket, report)
         _grant_lunar_progress(player, mission, success=False, state=state)
         if mission.manned and crew:
@@ -1340,11 +1360,11 @@ def _handle_mission_failure(
 ) -> None:
     player.prestige = max(0, player.prestige - mission.prestige_fail)
 
-    # Phase P — pick which phase the failure happened in. Uniformly
-    # random across the mission's declared phases. Used purely for
-    # cinematic labelling in the launch report + log; doesn't change
-    # any of the consequence math below.
-    if mission.phases:
+    # Real Phase P — _resolve_pad_launch already set report.failed_phase
+    # to the actual phase whose roll failed. Fall back to a uniform-
+    # random pick only if nobody set it (e.g. a mission with no phases
+    # declared) so the log still reads sensibly.
+    if not report.failed_phase and mission.phases:
         report.failed_phase = rng.choice(list(mission.phases)).value
 
     phase_note = f" at {report.failed_phase}" if report.failed_phase else ""

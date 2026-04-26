@@ -985,9 +985,13 @@ def test_low_reliability_worsens_effective_success() -> None:
 
     submit_turn(me, rd_rocket=None, rd_spend=0, launch=MissionId.SUBORBITAL)
     submit_turn(state.players[1], rd_rocket=None, rd_spend=0, launch=None)
-    # base 0.85 - 0.06 = 0.79. Roll 0.80 should fail.
-    resolve_turn(state, rng=_FixedRng(0.80))
-    _fire_scheduled_launch(state, _FixedRng(0.80))
+    # Suborbital has 2 phases (LAUNCH + REENTRY). With low overall
+    # success the per-phase chance is also low, but we want a clean
+    # failure regardless — feed 0.99 so every phase roll trivially
+    # fails the cap.
+    with _no_news():
+        resolve_turn(state, rng=_FixedRng(0.99))
+        _fire_scheduled_launch(state, _FixedRng(0.99))
 
     # suborbital prestige_fail = 1
     assert me.prestige == 4
@@ -1165,9 +1169,15 @@ def test_failed_docking_can_destroy_ship() -> None:
         objectives=[ObjectiveId.DOCKING],
     )
     submit_turn(state.players[1], rd_spend=0, launch=None)
-    # Sequence: main success (0.0), docking fail (0.99), ship-loss roll low (0.01).
-    resolve_turn(state, rng=_SeqRng([0.0, 0.99, 0.01]))
-    _fire_scheduled_launch(state, _SeqRng([0.0, 0.99, 0.01]))
+    # MULTI_CREW_ORBITAL has 3 phases (LAUNCH, ORBIT_INSERTION,
+    # REENTRY). Real Phase P rolls each one separately, so we feed
+    # three 0.0s to pass them all, then 0.99 to fail the docking
+    # objective, then 0.01 to trigger the ship-loss roll on the
+    # failed objective. Tail padding covers any post-objective rolls.
+    seq = [0.0, 0.0, 0.0, 0.99, 0.01, 0.99, 0.99, 0.99]
+    with _no_news():
+        resolve_turn(state, rng=_SeqRng(seq))
+        _fire_scheduled_launch(state, _SeqRng(seq))
 
     # crew of 2 both dead from ship loss
     assert len(me.active_astronauts()) == STARTING_ASTRONAUTS - 2
@@ -3522,13 +3532,15 @@ def test_failed_launch_records_named_phase() -> None:
 
 
 def test_lunar_landing_failed_phase_drawn_from_full_timeline() -> None:
-    """Manned lunar landing has 9 phases — make sure the failure can
-    legitimately land on any of them when we feed varied rngs."""
+    """Manned lunar landing has 9 phases. With real Phase P each phase
+    rolls separately and the FIRST failure short-circuits, so failures
+    cluster on earlier phases — but with varied per-call RNGs we
+    should still hit several distinct phases across many seeds."""
     seen: set[str] = set()
     expected_pool = {
         p.value for p in MISSIONS_BY_ID[MissionId.MANNED_LUNAR_LANDING].phases
     }
-    for seed in range(1, 60):
+    for seed in range(1, 200):
         state = _two_player_state()
         start_game(state, rng=random.Random(seed))
         me = state.players[0]
@@ -3537,14 +3549,16 @@ def test_lunar_landing_failed_phase_drawn_from_full_timeline() -> None:
         me.reliability[Module.EVA_SUIT.value] = 60
         me.budget = 500
         me.architecture = Architecture.DA.value
-        # Tier-3 prereqs.
         me.mission_successes[MissionId.SUBORBITAL.value] = 1
         me.mission_successes[MissionId.MULTI_CREW_ORBITAL.value] = 1
         submit_turn(me, launch=MissionId.MANNED_LUNAR_LANDING)
         submit_turn(state.players[1], launch=None)
+        # Use a real Random per seed so each phase roll gets a fresh
+        # value (rather than _FixedRng which returns the same number
+        # every call and would always fail at the first phase).
         with _no_news():
-            resolve_turn(state, rng=_FixedRng(0.99, seed=seed))
-            _fire_scheduled_launch(state, _FixedRng(0.99, seed=seed))
+            resolve_turn(state, rng=random.Random(seed))
+            _fire_scheduled_launch(state, random.Random(seed * 7 + 11))
         report = next(
             (r for r in state.last_launches
              if r.mission_id == MissionId.MANNED_LUNAR_LANDING.value),
@@ -3552,10 +3566,8 @@ def test_lunar_landing_failed_phase_drawn_from_full_timeline() -> None:
         )
         if report is not None and report.failed_phase:
             seen.add(report.failed_phase)
-        if seen == expected_pool:
+        if len(seen) >= 4:
             break
-    # We should hit at least 4 different named phases across 60 seeds —
-    # if we only see 1, the random pick is broken.
     assert len(seen) >= 4, f"only saw {seen}"
 
 
@@ -4081,6 +4093,67 @@ def test_role_based_pick_assigns_specialists_to_their_seats() -> None:
     crew = _select_crew(me, mission)
     assert crew is not None
     assert [a.name for a in crew] == ["CMP", "LMP", "EVA"]
+
+
+def test_real_phase_p_pinpoints_the_first_failed_phase() -> None:
+    """Sequenced RNG: pass phases 1+2, fail phase 3. The report should
+    name the third phase (TLI for unmanned lunar orbit) as the failure
+    point — proves the per-phase loop short-circuits at the right step
+    rather than picking a random phase to label."""
+    class _SeqRng:
+        def __init__(self, values):
+            self.values = list(values)
+            self._r = random.Random(1)
+        def random(self) -> float:
+            return self.values.pop(0)
+        def randint(self, a, b):
+            return self._r.randint(a, b)
+        def choice(self, seq):
+            return self._r.choice(seq)
+
+    state = _two_player_state()
+    start_game(state, rng=random.Random(1))
+    me = state.players[0]
+    me.reliability[Rocket.HEAVY.value] = 80
+    me.reliability[Module.LUNAR_KICKER.value] = 80
+    me.budget = 200
+    me.mission_successes[MissionId.SUBORBITAL.value] = 1
+    submit_turn(me, launch=MissionId.LUNAR_ORBIT)   # phases: LAUNCH, TLI, LOI
+    submit_turn(state.players[1], launch=None)
+    with _no_news():
+        resolve_turn(state, rng=_SeqRng([0.99]))    # promote, no rolls used
+        # Pass LAUNCH, pass TLI, fail LOI. Tail padding handles any
+        # downstream consequence rolls.
+        _fire_scheduled_launch(
+            state, _SeqRng([0.0, 0.0, 0.99, 0.99, 0.99, 0.99]),
+        )
+    report = next(
+        r for r in state.last_launches
+        if r.mission_id == MissionId.LUNAR_ORBIT.value
+    )
+    assert not report.success
+    from baris.state import MissionPhase
+    assert report.failed_phase == MissionPhase.LOI.value
+
+
+def test_real_phase_p_all_phases_pass_means_success() -> None:
+    """Feed a stream of zeros so every phase roll trivially passes;
+    the mission should succeed regardless of how many phases it has."""
+    state = _two_player_state()
+    start_game(state, rng=random.Random(1))
+    me = state.players[0]
+    me.reliability[Rocket.LIGHT.value] = 80
+    submit_turn(me, launch=MissionId.SUBORBITAL)
+    submit_turn(state.players[1], launch=None)
+    with _no_news():
+        resolve_turn(state, rng=_FixedRng(0.0))
+        _fire_scheduled_launch(state, _FixedRng(0.0))
+    report = next(
+        r for r in state.last_launches
+        if r.mission_id == MissionId.SUBORBITAL.value
+    )
+    assert report.success
+    assert report.failed_phase == ""
 
 
 def test_post_mission_skill_bump_uses_each_seats_role() -> None:
