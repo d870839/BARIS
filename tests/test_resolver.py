@@ -119,15 +119,18 @@ class _FixedRng:
 
 def _arm_lunar_components(player, val: int = 70) -> None:
     """Q-deep test helper. The single LUNAR_KICKER reliability slot got
-    split into KICKER_A/B/C plus SERVICE_MODULE for manned lunar work.
-    Most tests don't care about specifics — they just need every lunar-
-    component prereq satisfied — so this brings the whole set up to a
-    launch-ready value."""
+    split into KICKER_A/B/C plus SERVICE_MODULE for manned lunar work,
+    and the Q-soft components (Capsule, Lunar Probe, LM) became hard
+    prereqs. Most tests don't care about specifics — they just need
+    every lunar-component prereq satisfied — so this brings the whole
+    set up to a launch-ready value."""
     for m in (
         Module.KICKER_A,
         Module.KICKER_B,
         Module.KICKER_C,
         Module.SERVICE_MODULE,
+        Module.LM,
+        Module.PROBE_LUNAR,
     ):
         player.reliability[m.value] = val
 
@@ -2136,7 +2139,12 @@ def test_lunar_mission_without_kicker_is_rejected_at_submit() -> None:
     me.mission_successes[MissionId.SUBORBITAL.value] = 1  # unlock Tier 2
     me.reliability[Rocket.MEDIUM.value] = 70              # flyby uses Medium
     # No kicker built → submit_turn should reject the queue.
-    assert missing_modules(me, MISSIONS_BY_ID[MissionId.LUNAR_PASS]) == [Module.KICKER_B]
+    # Q-deep — KICKER_B is the declared prereq; PROBE_LUNAR is the
+    # Q-soft component that's also a hard floor (starts at 20, below
+    # MIN_RELIABILITY_TO_LAUNCH). missing_modules surfaces both.
+    assert set(missing_modules(me, MISSIONS_BY_ID[MissionId.LUNAR_PASS])) == {
+        Module.KICKER_B, Module.PROBE_LUNAR,
+    }
 
     submit_turn(me, rd_rocket=None, rd_spend=0, launch=MissionId.LUNAR_PASS)
     assert me.pending_launch is None
@@ -2165,10 +2173,11 @@ def test_manned_lunar_landing_needs_both_kicker_and_eva_suit() -> None:
     choose_architecture(me, Architecture.LOR)
     mll = MISSIONS_BY_ID[MissionId.MANNED_LUNAR_LANDING]
 
-    # No modules → all three lunar prereqs missing (Q-deep added the
-    # tiered kicker + Service Module on top of the EVA suit).
+    # No modules → all four lunar prereqs missing. Q-deep made the
+    # LM a hard prereq (Q-soft + below floor), on top of the
+    # explicitly declared kicker + Service Module + EVA suit.
     assert set(missing_modules(me, mll)) == {
-        Module.KICKER_C, Module.SERVICE_MODULE, Module.EVA_SUIT,
+        Module.KICKER_C, Module.SERVICE_MODULE, Module.EVA_SUIT, Module.LM,
     }
 
     # Only kicker → EVA Suit still missing; still rejected.
@@ -4306,6 +4315,13 @@ def test_qdeep_kickers_tier_to_mission_difficulty() -> None:
     me = state.players[0]
     me.reliability[Rocket.MEDIUM.value] = 70
     me.reliability[Rocket.HEAVY.value] = 70
+    # Pre-seed every probe / LM track so the test only varies the
+    # kicker tier; otherwise the Q-soft hard-floor for PROBE_LUNAR /
+    # PROBE_OUTER / LM would mask the kicker progression.
+    for m in (
+        Module.PROBE_LUNAR, Module.PROBE_INNER, Module.PROBE_OUTER, Module.LM,
+    ):
+        me.reliability[m.value] = 70
 
     # KICKER_A only — Venus reachable, Lunar Orbit (B) and Lunar
     # Landing (C) still gated.
@@ -4323,6 +4339,55 @@ def test_qdeep_kickers_tier_to_mission_difficulty() -> None:
     me.reliability[Module.KICKER_C.value] = 70
     assert missing_modules(me, MISSIONS_BY_ID[MissionId.LUNAR_LANDING]) == []
     assert missing_modules(me, MISSIONS_BY_ID[MissionId.SATURN_FLYBY]) == []
+
+
+def test_qdeep_lm_must_be_built_before_lunar_landing() -> None:
+    """Q-deep — the LM is a hard prereq for any landing variant
+    (manned or unmanned). It starts at reliability 10, well below
+    MIN_RELIABILITY_TO_LAUNCH, so the player must research it
+    before attempting a landing — mirroring the original game's
+    'build the LM' gate."""
+    from baris.resolver import missing_modules
+
+    state = _two_player_state()
+    start_game(state, rng=random.Random(1))
+    me = state.players[0]
+    me.reliability[Rocket.HEAVY.value] = 70
+    # Satisfy every other hard prereq (kicker, probe family) but
+    # leave LM at its starting (sub-floor) value.
+    me.reliability[Module.KICKER_C.value] = 70
+    me.reliability[Module.PROBE_LUNAR.value] = 70
+    assert Module.LM in missing_modules(
+        me, MISSIONS_BY_ID[MissionId.LUNAR_LANDING],
+    )
+    me.reliability[Module.LM.value] = 70
+    assert missing_modules(
+        me, MISSIONS_BY_ID[MissionId.LUNAR_LANDING],
+    ) == []
+
+
+def test_qdeep_outer_probe_required_for_jupiter() -> None:
+    """Q-deep — outer-planet probes start at reliability 0 and must
+    be researched before Jupiter / Saturn can fly. Inner / lunar
+    probe research doesn't help; the families are distinct."""
+    from baris.resolver import missing_modules
+
+    state = _two_player_state()
+    start_game(state, rng=random.Random(1))
+    me = state.players[0]
+    me.reliability[Rocket.HEAVY.value] = 70
+    me.reliability[Module.KICKER_C.value] = 70
+    me.reliability[Module.PROBE_INNER.value] = 99
+    me.reliability[Module.PROBE_LUNAR.value] = 99
+    # Jupiter / Saturn need PROBE_OUTER specifically; other families
+    # don't subsidise the gate.
+    assert Module.PROBE_OUTER in missing_modules(
+        me, MISSIONS_BY_ID[MissionId.JUPITER_FLYBY],
+    )
+    me.reliability[Module.PROBE_OUTER.value] = 70
+    assert missing_modules(
+        me, MISSIONS_BY_ID[MissionId.JUPITER_FLYBY],
+    ) == []
 
 
 def test_qdeep_service_module_gates_manned_lunar_orbit() -> None:

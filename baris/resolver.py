@@ -241,11 +241,32 @@ def effective_lunar_modifier(player: Player, mission: Mission) -> tuple[float, f
 
 
 def missing_modules(player: Player, mission: Mission) -> list[Module]:
-    """Hardware modules the mission lists in `requires_modules` that the
-    player hasn't built yet. Empty list means every prereq module is
-    launch-ready. Used by the server to reject queueing and by UIs to
-    surface a 'need: X' status on each mission row."""
-    return [m for m in mission.requires_modules if not player.module_built(m)]
+    """Hardware modules the mission can't fly without. Returns the
+    ordered intersection of:
+
+    1. mission.requires_modules — explicitly declared prereqs
+       (kicker tier, EVA suit, Service Module, docking module).
+    2. applicable_components(mission) — Q-deep made these hard
+       gates as well: a manned mission needs a launch-ready Capsule;
+       an unmanned mission needs the right probe family; landings
+       need the LM. They're tracked in the same reliability table
+       as everything else and gate via player.module_built().
+
+    Empty list means every prereq module is launch-ready. Used by
+    the server to reject queueing and by UIs to surface 'need: X'
+    on each mission row.
+    """
+    missing: list[Module] = [
+        m for m in mission.requires_modules if not player.module_built(m)
+    ]
+    seen: set[Module] = set(missing)
+    for m in applicable_components(mission):
+        if m in seen:
+            continue
+        if not player.module_built(m):
+            missing.append(m)
+            seen.add(m)
+    return missing
 
 
 def meets_architecture_prereqs(player: Player, mission: Mission) -> bool:
