@@ -78,6 +78,8 @@ from baris.state import (
     FULL_UP_TEST_GAIN,
     FULL_UP_LOSS_CHANCE,
     FULL_UP_LOSS_PRESTIGE,
+    PhaseProfile,
+    phase_profile,
     get_sabotage_card,
     MIN_RELIABILITY_TO_LAUNCH,
     MISSION_OBJECTIVES,
@@ -1012,29 +1014,63 @@ def _resolve_pad_launch(
         )
     else:
         report.failed_phase = failed_at.value
-        _handle_mission_failure(player, mission, crew, state, rng, eff_rocket, report)
-        _grant_lunar_progress(player, mission, success=False, state=state)
-        if mission.manned and crew:
-            # Survivors take a morale hit plus an extra hit per crewmate KIA.
-            _bump_crew_mood(crew, -MOOD_FAILURE_DROP)
-            if report.deaths:
-                _bump_crew_mood(crew, -MOOD_KIA_CREW_DROP * len(report.deaths))
-            # Phase T — failed-flight survivors rest longer than a clean
-            # mission. KIA crew already have status=KIA so no rest needed.
-            for a in crew:
-                if a.active:
-                    a.rest_remaining = max(a.rest_remaining, REST_AFTER_FAILURE)
-        chatter_react(
-            state.log, "launch_failure", rng,
-            character=_chatter_character(player, rng),
-            rocket=report.rocket,
-            phase=report.failed_phase or "stage I",
-        )
-        if report.deaths:
+        # P-deep — split the failure into catastrophic vs partial.
+        # `casualty_chance` is a per-phase probability that the
+        # phase failure means losing the crew / vehicle. Anything
+        # else lands on the new partial-success path: mission ends
+        # early, crew comes home, a slice of prestige is awarded.
+        # Convention: high RNG roll = bad outcome, matching the
+        # existing per-phase roll. So catastrophic when the roll
+        # lands at-or-above (1 - casualty_chance) — equivalent
+        # probability to the intuitive "< casualty_chance" formula
+        # but consistent with the rest of the resolver and with
+        # how _FixedRng-using tests have always set up failures.
+        profile = phase_profile(failed_at)
+        catastrophic = rng.random() >= (1.0 - profile.casualty_chance)
+        if catastrophic:
+            _handle_mission_failure(
+                player, mission, crew, state, rng, eff_rocket, report,
+            )
+            _grant_lunar_progress(player, mission, success=False, state=state)
+            if mission.manned and crew:
+                # Survivors take a morale hit plus an extra hit per crewmate KIA.
+                _bump_crew_mood(crew, -MOOD_FAILURE_DROP)
+                if report.deaths:
+                    _bump_crew_mood(crew, -MOOD_KIA_CREW_DROP * len(report.deaths))
+                # Phase T — failed-flight survivors rest longer than a clean
+                # mission. KIA crew already have status=KIA so no rest needed.
+                for a in crew:
+                    if a.active:
+                        a.rest_remaining = max(a.rest_remaining, REST_AFTER_FAILURE)
             chatter_react(
-                state.log, "kia", rng,
+                state.log, "launch_failure", rng,
                 character=_chatter_character(player, rng),
-                names=", ".join(report.deaths),
+                rocket=report.rocket,
+                phase=report.failed_phase or "stage I",
+            )
+            if report.deaths:
+                chatter_react(
+                    state.log, "kia", rng,
+                    character=_chatter_character(player, rng),
+                    names=", ".join(report.deaths),
+                )
+        else:
+            _handle_mission_partial(
+                player, mission, crew, state, rng, eff_rocket, report,
+                profile,
+            )
+            if mission.manned and crew:
+                # Mood dip is gentler than a clean failure but still real;
+                # an aborted mission isn't a victory parade.
+                _bump_crew_mood(crew, -MOOD_FAILURE_DROP // 2)
+                for a in crew:
+                    if a.active:
+                        a.rest_remaining = max(a.rest_remaining, REST_AFTER_FLIGHT)
+            chatter_react(
+                state.log, "launch_failure", rng,
+                character=_chatter_character(player, rng),
+                rocket=report.rocket,
+                phase=report.failed_phase or "stage I",
             )
     # R-deep — the unit just flew. Mark it consumed regardless of
     # outcome (rockets aren't recoverable; even successful flights
@@ -1504,6 +1540,68 @@ def _handle_mission_failure(
         f"{player.username} — {mission.name}: FAILURE{phase_note} "
         f"(-{mission.prestige_fail} prestige{kia_note}{hosp_note}). "
         f"Program funding cut by {budget_cut} MB."
+    )
+
+
+def _handle_mission_partial(
+    player: Player,
+    mission: Mission,
+    crew: list[Astronaut],
+    state: GameState,
+    rng: random.Random,
+    eff_rocket: Rocket,
+    report: LaunchReport,
+    profile: PhaseProfile,
+) -> None:
+    """P-deep — partial-success path. Phase failed but the casualty
+    roll cleared, so crew (if any) is alive and the mission salvaged
+    *some* prestige. No KIA, no budget cut, gentler reliability hit
+    than a catastrophic failure (and no reliability hit at all on
+    truly recoverable phases like a pad scrub). Surviving manned
+    crew may still need a hospital stay from a hard re-entry."""
+    report.partial = True
+    report.abort_label = profile.abort_label
+
+    # Award a fraction of mission.prestige_pass. Round to int so the
+    # ledger stays clean. Even zero-fraction phases (e.g. pad scrub)
+    # tag the report as partial so the cinematic uses yellow rather
+    # than red.
+    partial_prestige = int(round(
+        mission.prestige_success * profile.partial_prestige_fraction
+    ))
+    if partial_prestige > 0:
+        player.prestige += partial_prestige
+
+    # Reliability: half the catastrophic loss. A pad scrub or a
+    # safely-aborted TLI is rough but not the same blow as losing
+    # the crew. Manned only — unmanned partials still teach you
+    # something via the existing UNMANNED_FAILURE_RD_GAIN path.
+    if mission.manned:
+        _bump_reliability(player, eff_rocket, -RELIABILITY_LOSS_ON_FAIL // 2)
+    else:
+        _bump_reliability(player, eff_rocket, UNMANNED_FAILURE_RD_GAIN)
+
+    # Hospital roll on surviving manned crew — no KIA on this path,
+    # but a rough ride home can still send you to the infirmary.
+    hospitalized: list[str] = []
+    if mission.manned:
+        for astro in crew:
+            if astro.status != AstronautStatus.ACTIVE.value:
+                continue
+            if rng.random() < HOSPITAL_CHANCE_ON_FAIL:
+                astro.hospital_remaining = HOSPITAL_STAY_TURNS
+                hospitalized.append(astro.name)
+    hosp_note = (
+        f", hospitalised: {', '.join(hospitalized)}" if hospitalized else ""
+    )
+    prestige_note = (
+        f"+{partial_prestige} prestige (partial)"
+        if partial_prestige > 0
+        else "no prestige (mission scrubbed)"
+    )
+    state.log.append(
+        f"{player.username} — {mission.name}: PARTIAL "
+        f"({profile.abort_label}, {prestige_note}{hosp_note})."
     )
 
 

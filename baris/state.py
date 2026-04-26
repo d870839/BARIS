@@ -245,6 +245,47 @@ class MissionPhase(str, Enum):
     REENTRY = "Re-entry"
 
 
+# P-deep — per-phase consequence tables. When a phase roll fails the
+# resolver rolls again against `casualty_chance` to decide whether the
+# failure is catastrophic (existing failure path: prestige hit, KIA
+# rolls, budget cut) or recoverable (new partial-success path: small
+# prestige award, no KIA, mission ends early). Every MissionPhase
+# value below appears in PHASE_PROFILES so phase_profile() never has
+# to invent a default. Numbers calibrated to the original game's
+# rough feel: pad scrubs are 50/50 catastrophic; lunar descent is 80%
+# catastrophic; ascent is brutal (90%) because there's no abort path
+# off the lunar surface in mid-flight.
+@dataclass(frozen=True)
+class PhaseProfile:
+    casualty_chance: float
+    partial_prestige_fraction: float
+    abort_label: str
+
+
+PHASE_PROFILES: dict[MissionPhase, PhaseProfile] = {
+    MissionPhase.LAUNCH:           PhaseProfile(0.50, 0.0,  "scrubbed on the pad"),
+    MissionPhase.ORBIT_INSERTION:  PhaseProfile(0.30, 0.0,  "aborted to Earth orbit"),
+    MissionPhase.EVA:              PhaseProfile(0.20, 0.50, "EVA cut short"),
+    MissionPhase.DOCKING:          PhaseProfile(0.25, 0.30, "docking aborted"),
+    MissionPhase.INJECTION_BURN:   PhaseProfile(0.40, 0.0,  "probe lost en route"),
+    MissionPhase.TLI:              PhaseProfile(0.30, 0.0,  "aborted to Earth orbit"),
+    MissionPhase.LOI:              PhaseProfile(0.40, 0.10, "aborted to free-return"),
+    MissionPhase.DESCENT:          PhaseProfile(0.80, 0.10, "abort-to-orbit"),
+    MissionPhase.SURFACE:          PhaseProfile(0.30, 0.40, "surface ops cut short"),
+    MissionPhase.ASCENT:           PhaseProfile(0.90, 0.0,  "stranded on the surface"),
+    MissionPhase.TEI:              PhaseProfile(0.60, 0.10, "stuck in lunar orbit"),
+    MissionPhase.REENTRY:          PhaseProfile(0.70, 0.30, "rough landing"),
+}
+
+
+def phase_profile(phase: MissionPhase) -> PhaseProfile:
+    """Return the consequence profile for `phase`. Defensive default
+    (50/50 catastrophic, zero partial credit) if a phase ever shows
+    up that PHASE_PROFILES doesn't enumerate — shouldn't happen, but
+    a future enum addition shouldn't crash mid-launch."""
+    return PHASE_PROFILES.get(phase, PhaseProfile(0.5, 0.0, "aborted"))
+
+
 # Ordered catalog — UI iterates this to build the mission list (indices map to keys 1-0 and -).
 MISSIONS: tuple[Mission, ...] = (
     # Tier 1 — Mercury / Vostok
@@ -1561,6 +1602,12 @@ class LaunchReport:
     # class-level reliability if the unit was stand-tested).
     unit_id: str = ""
     unit_reliability: int = 0
+    # P-deep — partial-success path. Set when a phase failed but the
+    # casualty roll cleared, so the crew came home and a slice of the
+    # mission's prestige was awarded. abort_label is the cinematic
+    # caption ("aborted to Earth orbit", "rough landing").
+    partial: bool = False
+    abort_label: str = ""
 
 
 def _launch_report_from_dict(d: dict[str, Any]) -> LaunchReport:
@@ -1575,6 +1622,9 @@ def _launch_report_from_dict(d: dict[str, Any]) -> LaunchReport:
     # R-deep — older saves predate per-unit launch reporting.
     data.setdefault("unit_id", "")
     data.setdefault("unit_reliability", 0)
+    # P-deep — older saves predate partial successes.
+    data.setdefault("partial", False)
+    data.setdefault("abort_label", "")
     return LaunchReport(**data)
 
 
@@ -1585,6 +1635,7 @@ def _launch_report_from_dict(d: dict[str, Any]) -> LaunchReport:
 PHASE_OUTCOME_PASS = "PASS"
 PHASE_OUTCOME_FAIL = "FAIL"
 PHASE_OUTCOME_SKIP = "SKIP"
+PHASE_OUTCOME_PARTIAL = "PARTIAL"
 
 
 def phase_outcomes(report: LaunchReport) -> tuple[tuple[str, str], ...]:
@@ -1604,12 +1655,18 @@ def phase_outcomes(report: LaunchReport) -> tuple[tuple[str, str], ...]:
         if name == report.failed_phase:
             fail_idx = i
             break
+    # P-deep — a partial outcome paints the failed phase yellow
+    # instead of red so the cinematic shows "aborted, but home
+    # safe" distinctly from "lost the crew".
+    fail_outcome = (
+        PHASE_OUTCOME_PARTIAL if report.partial else PHASE_OUTCOME_FAIL
+    )
     rows: list[tuple[str, str]] = []
     for i, name in enumerate(phases):
         if i < fail_idx:
             rows.append((name, PHASE_OUTCOME_PASS))
         elif i == fail_idx:
-            rows.append((name, PHASE_OUTCOME_FAIL))
+            rows.append((name, fail_outcome))
         else:
             rows.append((name, PHASE_OUTCOME_SKIP))
     if fail_idx == -1:

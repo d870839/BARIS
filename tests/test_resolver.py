@@ -785,9 +785,11 @@ def test_manned_failure_with_low_death_roll_kills_crew() -> None:
     submit_turn(me, rd_rocket=None, rd_spend=0, launch=MissionId.MANNED_ORBITAL)
     submit_turn(state.players[1], rd_rocket=None, rd_spend=0, launch=None)
 
-    # manned_orbital: crew_size=1. Sequence: success roll high (fail), death roll low (dies).
+    # manned_orbital: crew_size=1.
+    # Sequence: phase roll high (fails phase 1), casualty roll high
+    # (catastrophic — see P-deep), death roll low (dies).
     resolve_turn(state, rng=_SeqRng([0.99, 0.01]))
-    _fire_scheduled_launch(state, _SeqRng([0.99, 0.01]))
+    _fire_scheduled_launch(state, _SeqRng([0.99, 0.99, 0.01]))
 
     # 20 - 4 (fail) - 3 (KIA) = 13
     assert me.prestige == 13
@@ -1146,9 +1148,11 @@ def test_failed_eva_can_kill_astronaut() -> None:
         objectives=[ObjectiveId.EVA],
     )
     submit_turn(state.players[1], rd_spend=0, launch=None)
-    # Sequence: main success (0.0), EVA objective fail (0.99), death roll low (0.05).
+    # Sequence: phase 1 passes (0.0), phase 2 fails (0.99), casualty
+    # roll high → catastrophic (0.99 — see P-deep), death roll low
+    # (0.05) → KIA.
     resolve_turn(state, rng=_SeqRng([0.0, 0.99, 0.05]))
-    _fire_scheduled_launch(state, _SeqRng([0.0, 0.99, 0.05]))
+    _fire_scheduled_launch(state, _SeqRng([0.0, 0.99, 0.99, 0.05]))
 
     # one crew member died
     assert len(me.active_astronauts()) == STARTING_ASTRONAUTS - 1
@@ -1315,9 +1319,10 @@ def test_failed_manned_launch_captures_deaths_and_budget_cut() -> None:
 
     submit_turn(me, rd_rocket=None, rd_spend=0, launch=MissionId.MANNED_ORBITAL)
     submit_turn(state.players[1], rd_rocket=None, rd_spend=0, launch=None)
-    # success roll high (fail), death roll low (crew dies).
+    # phase roll high (fails phase 1), casualty roll high
+    # (catastrophic — see P-deep), death roll low (crew dies).
     resolve_turn(state, rng=_SeqRng([0.99, 0.01]))
-    _fire_scheduled_launch(state, _SeqRng([0.99, 0.01]))
+    _fire_scheduled_launch(state, _SeqRng([0.99, 0.99, 0.01]))
 
     r = state.last_launches[0]
     assert r.success is False
@@ -1732,10 +1737,11 @@ def test_manned_failure_can_send_survivor_to_hospital() -> None:
 
     submit_turn(me, rd_rocket=None, rd_spend=0, launch=MissionId.MANNED_ORBITAL)
     submit_turn(state.players[1], rd_rocket=None, rd_spend=0, launch=None)
-    # Success roll (0.99 → fail), death roll (0.99 → survive),
+    # Phase roll (0.99 → fails phase 1), casualty roll (0.99 →
+    # catastrophic — see P-deep), death roll (0.99 → survive),
     # hospital roll (0.01 → yes) for the single crew member.
     resolve_turn(state, rng=_SeqRng([0.99]))
-    _fire_scheduled_launch(state, _SeqRng([0.99, 0.99, 0.01]))
+    _fire_scheduled_launch(state, _SeqRng([0.99, 0.99, 0.99, 0.01]))
 
     # Nobody died, but the pilot is in the hospital.
     assert len(me.active_astronauts()) == STARTING_ASTRONAUTS
@@ -2058,10 +2064,11 @@ def test_catastrophic_failure_damages_launching_pad() -> None:
 
     submit_turn(me, rd_rocket=None, rd_spend=0, launch=MissionId.MANNED_ORBITAL)
     submit_turn(state.players[1], rd_rocket=None, rd_spend=0, launch=None)
-    # Force failure (0.99) + force death (0.01) + skip hospital (0.99).
+    # P-deep — force phase fail (0.99) + casualty roll high → catastrophic
+    # (0.99) + force death (0.01) + skip hospital (0.99).
     resolve_turn(state, rng=_FixedRng(0.99))
     _fire_scheduled_launch(
-        state, _SeqRngTrain([0.99, 0.01, 0.99]),
+        state, _SeqRngTrain([0.99, 0.99, 0.01, 0.99]),
     )
     pad_a = me.pads[0]
     assert pad_a.scheduled_launch is None
@@ -2460,11 +2467,14 @@ def test_crew_kia_drops_survivor_mood_extra() -> None:
 
     submit_turn(me, rd_rocket=None, rd_spend=0, launch=MissionId.MULTI_CREW_ORBITAL)
     submit_turn(state.players[1], rd_rocket=None, rd_spend=0, launch=None)
-    # Success roll high (fail), first death roll low (kill crew[0]), second
-    # death roll high (spare crew[1]), hospital rolls high (no hospital).
+    # Phase roll high (fail phase 1), casualty roll high → catastrophic
+    # (P-deep), first death roll low (kill crew[0]), second death roll
+    # high (spare crew[1]), hospital rolls high (no hospital).
     with _no_news():
         resolve_turn(state, rng=_FixedRng(0.0))
-        _fire_scheduled_launch(state, _SeqRng([0.99, 0.01, 0.99, 0.99, 0.99]))
+        _fire_scheduled_launch(
+            state, _SeqRng([0.99, 0.99, 0.01, 0.99, 0.99, 0.99]),
+        )
 
     kia_count = sum(1 for a in me.astronauts if a.status == "kia")
     assert kia_count == 1
@@ -4699,3 +4709,168 @@ def test_rdeep_save_load_round_trips_units() -> None:
     assert p.units[0].class_name == Rocket.LIGHT.value
     assert p.units[0].reliability == 65
     assert p.units[0].status == "active"
+
+
+# -----------------------------------------------------------------------
+# P-deep — partial successes + per-phase consequence tables
+# -----------------------------------------------------------------------
+def test_pdeep_recoverable_phase_failure_leaves_crew_alive() -> None:
+    """Phase fails, casualty roll lands BELOW threshold → partial path:
+    crew comes home, no KIA, no budget cut, partial prestige (or none
+    on a recoverable-but-zero-credit phase like a pad scrub)."""
+    from baris.state import phase_profile, MissionPhase
+
+    class _SeqRng:
+        def __init__(self, values):
+            self.values = list(values)
+            self._r = random.Random(1)
+        def random(self) -> float:
+            return self.values.pop(0)
+        def randint(self, a, b):
+            return self._r.randint(a, b)
+        def choice(self, seq):
+            return self._r.choice(seq)
+
+    state = _two_player_state()
+    start_game(state, rng=random.Random(1))
+    me = state.players[0]
+    me.reliability[Rocket.MEDIUM.value] = 70
+    me.budget = 200
+    me.prestige = 30
+    for a in me.astronauts:
+        a.capsule = 50
+    submit_turn(me, launch=MissionId.MANNED_ORBITAL)
+    submit_turn(state.players[1], launch=None)
+    # Phase 1 passes (0.0), phase 2 fails (0.99), casualty roll LOW
+    # (0.01 — below threshold → partial), hospital roll high (skip).
+    with _no_news():
+        resolve_turn(state, rng=_SeqRng([0.99]))
+        _fire_scheduled_launch(state, _SeqRng([0.0, 0.99, 0.01, 0.99]))
+    report = state.last_launches[0]
+    assert report.success is False
+    assert report.partial is True
+    assert report.deaths == []
+    assert report.budget_cut == 0
+    # ORBIT_INSERTION's partial_prestige_fraction = 0.0, so no credit
+    # awarded — but the path itself ran. Check prestige didn't drop
+    # by the full prestige_fail amount (it's net-zero on this phase).
+    assert me.prestige == 30
+
+
+def test_pdeep_partial_credits_prestige_when_phase_late() -> None:
+    """Failing during REENTRY (partial_prestige_fraction = 0.30) on a
+    successful flight up to that point should award a fraction of the
+    mission's prestige_success."""
+    from baris.state import MISSIONS_BY_ID
+
+    class _SeqRng:
+        def __init__(self, values):
+            self.values = list(values)
+            self._r = random.Random(1)
+        def random(self) -> float:
+            return self.values.pop(0)
+        def randint(self, a, b):
+            return self._r.randint(a, b)
+        def choice(self, seq):
+            return self._r.choice(seq)
+
+    state = _two_player_state()
+    start_game(state, rng=random.Random(1))
+    me = state.players[0]
+    me.reliability[Rocket.MEDIUM.value] = 70
+    me.budget = 200
+    me.prestige = 30
+    for a in me.astronauts:
+        a.capsule = 50
+    submit_turn(me, launch=MissionId.MANNED_ORBITAL)
+    submit_turn(state.players[1], launch=None)
+    # Pass phase 1 + 2, fail phase 3 (REENTRY, casualty 0.70, partial
+    # credit 0.30). Casualty roll LOW (0.01) → partial, hospital high.
+    with _no_news():
+        resolve_turn(state, rng=_SeqRng([0.99]))
+        _fire_scheduled_launch(state, _SeqRng([0.0, 0.0, 0.99, 0.01, 0.99]))
+    report = state.last_launches[0]
+    mission = MISSIONS_BY_ID[MissionId.MANNED_ORBITAL]
+    expected_partial = int(round(mission.prestige_success * 0.30))
+    assert report.partial is True
+    assert report.failed_phase == "Re-entry"
+    assert me.prestige == 30 + expected_partial
+
+
+def test_pdeep_phase_outcomes_paints_partial_yellow_not_red() -> None:
+    """phase_outcomes() should mark the failed phase PARTIAL on a
+    partial-success report, distinct from a hard FAIL on catastrophe."""
+    from baris.state import (
+        LaunchReport,
+        MissionPhase,
+        PHASE_OUTCOME_FAIL,
+        PHASE_OUTCOME_PARTIAL,
+        PHASE_OUTCOME_PASS,
+        phase_outcomes,
+    )
+
+    base = dict(
+        side="USA", username="X",
+        mission_id=MissionId.LUNAR_ORBIT.value,
+        mission_name="Lunar orbit",
+        rocket="Saturn", rocket_class=Rocket.HEAVY.value,
+        success=False, failed_phase=MissionPhase.TLI.value,
+    )
+    catastrophic = LaunchReport(**base, partial=False)
+    partial = LaunchReport(**base, partial=True)
+    cat_rows = phase_outcomes(catastrophic)
+    par_rows = phase_outcomes(partial)
+    # Same phase ordering, same PASS / SKIP positions, but the failure
+    # cell colour differs.
+    assert [r[1] for r in cat_rows] == [
+        PHASE_OUTCOME_PASS, PHASE_OUTCOME_FAIL, "SKIP",
+    ]
+    assert [r[1] for r in par_rows] == [
+        PHASE_OUTCOME_PASS, PHASE_OUTCOME_PARTIAL, "SKIP",
+    ]
+
+
+def test_pdeep_descent_phase_is_mostly_catastrophic() -> None:
+    """The DESCENT phase carries an 80% casualty chance — much higher
+    than ORBIT_INSERTION's 30% — so a borderline casualty roll that
+    survives orbit insertion would still be a coin-flip on descent.
+    Validates the per-phase consequence table is wired up."""
+    from baris.state import phase_profile, MissionPhase
+    desc = phase_profile(MissionPhase.DESCENT)
+    orbit = phase_profile(MissionPhase.ORBIT_INSERTION)
+    assert desc.casualty_chance > orbit.casualty_chance
+    assert desc.casualty_chance >= 0.7
+
+
+def test_pdeep_unmanned_partial_still_bumps_reliability() -> None:
+    """Unmanned partial — like a probe whose injection burn underran
+    but salvaged some result — still teaches the program. Reliability
+    creeps up via UNMANNED_FAILURE_RD_GAIN, no budget cut."""
+    from baris.state import UNMANNED_FAILURE_RD_GAIN
+
+    class _SeqRng:
+        def __init__(self, values):
+            self.values = list(values)
+            self._r = random.Random(1)
+        def random(self) -> float:
+            return self.values.pop(0)
+        def randint(self, a, b):
+            return self._r.randint(a, b)
+        def choice(self, seq):
+            return self._r.choice(seq)
+
+    state = _two_player_state()
+    start_game(state, rng=random.Random(1))
+    me = state.players[0]
+    me.reliability[Rocket.LIGHT.value] = 60
+    me.budget = 200
+    submit_turn(me, launch=MissionId.SUBORBITAL)
+    submit_turn(state.players[1], launch=None)
+    # Phase 1 fails, casualty roll LOW (partial path).
+    with _no_news():
+        resolve_turn(state, rng=_SeqRng([0.99]))
+        _fire_scheduled_launch(state, _SeqRng([0.99, 0.01]))
+    report = state.last_launches[0]
+    assert report.partial is True
+    # Reliability still ticked up from post-flight analysis.
+    assert me.reliability[Rocket.LIGHT.value] == 60 + UNMANNED_FAILURE_RD_GAIN

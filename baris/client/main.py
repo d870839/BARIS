@@ -43,6 +43,7 @@ from baris.state import (
     Module,
     ObjectiveId,
     PHASE_OUTCOME_FAIL,
+    PHASE_OUTCOME_PARTIAL,
     PHASE_OUTCOME_PASS,
     PHASE_OUTCOME_SKIP,
     Phase,
@@ -2412,6 +2413,20 @@ class Client:
                 f"FIRST!" if report.first_claimed else
                 f"Effective {report.effective_success:.2f}"
             )
+        elif report.partial:
+            # P-deep — recoverable phase failure. Crew came home; some
+            # prestige (or none on a pad scrub) was awarded. Yellow
+            # banner so it reads distinctly from a hard failure.
+            banner = "PARTIAL"
+            banner_color = HIGHLIGHT
+            label = report.abort_label or "aborted"
+            if report.failed_phase:
+                sub = (
+                    f"{label} after {report.failed_phase}  "
+                    f"(eff {report.effective_success:.2f})"
+                )
+            else:
+                sub = label
         else:
             banner = "FAILURE"
             banner_color = RED
@@ -2523,6 +2538,9 @@ class Client:
                     glyph, line_color = "+", GREEN
                 elif outcome == PHASE_OUTCOME_FAIL:
                     glyph, line_color = "X", RED
+                elif outcome == PHASE_OUTCOME_PARTIAL:
+                    # P-deep — yellow ! for the recoverable abort point.
+                    glyph, line_color = "!", HIGHLIGHT
                 else:
                     glyph, line_color = "-", DIM
                 draw_text(self.screen, f"{glyph}  {phase_name}", (tx, ty),

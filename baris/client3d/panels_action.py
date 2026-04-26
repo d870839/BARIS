@@ -27,6 +27,7 @@ from baris.state import (
     Module,
     ObjectiveId,
     PHASE_OUTCOME_FAIL,
+    PHASE_OUTCOME_PARTIAL,
     PHASE_OUTCOME_PASS,
     PHASE_OUTCOME_SKIP,
     ProgramTier,
@@ -541,6 +542,20 @@ def build_result_panel(
             f"Effective {report.effective_success:.2f}"
             + ("  —  FIRST!" if report.first_claimed else "")
         )
+    elif report.partial:
+        # P-deep — partial-success path: phase failed but the casualty
+        # roll cleared, so the crew came home and a slice of prestige
+        # was awarded. Distinct yellow banner so the player can tell
+        # this from a hard FAILURE at a glance.
+        banner = "PARTIAL"
+        bcolor = (240, 200, 90)
+        if report.failed_phase:
+            sub = (
+                f"{report.abort_label or 'aborted'} after {report.failed_phase}  "
+                f"(eff {report.effective_success:.2f})"
+            )
+        else:
+            sub = report.abort_label or "mission aborted, crew safe"
     else:
         banner = "FAILURE"
         bcolor = (220, 90, 90)
@@ -647,6 +662,9 @@ def build_result_panel(
                     line, tone = f"+  {phase_name}", (110, 200, 120)
                 elif outcome == PHASE_OUTCOME_FAIL:
                     line, tone = f"X  {phase_name}", (220, 90, 90)
+                elif outcome == PHASE_OUTCOME_PARTIAL:
+                    # P-deep — yellow ! for the recoverable abort point.
+                    line, tone = f"!  {phase_name}", (240, 200, 90)
                 else:
                     line, tone = f"-  {phase_name}", (110, 110, 130)
 
