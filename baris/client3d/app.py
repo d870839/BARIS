@@ -293,6 +293,16 @@ class BarisClient(Entity):
             color=color.rgb32(240, 240, 245),
         )
 
+        # Turn-docket billboard — wide flat sign just north of the
+        # SUBMIT TURN pedestal so the player passes it on the way to
+        # commit. Shows "what happens next turn" at a glance: each
+        # pad's scheduled launch, queued mission, R&D target, etc.
+        # Text content is refreshed every frame by _sync_turn_docket()
+        # off the live state. The body Text entity is one big
+        # multi-line string rather than per-line entities so the
+        # update is a single .text assignment.
+        self._build_turn_docket()
+
         # Plaza ambience — perimeter lamp posts at the four corners of the
         # 26x26 plaza, and a pair of ceremonial flagpoles flanking the
         # SUBMIT TURN pedestal (USA blue + USSR red, for joint-mission
@@ -729,6 +739,7 @@ class BarisClient(Entity):
         self._update_pad_rocket()
         self._tick_submit_button()
         self._tick_pad_status()
+        self._sync_turn_docket()
         # Pygame overlay — forward the live mouse position so any
         # interactive panel sees hover state, then run one overlay
         # render + GPU upload (the host skips the upload when the
@@ -767,6 +778,129 @@ class BarisClient(Entity):
             cap.color = color.rgb32(110, 115, 125)
             return
         cap.color = color.rgb32(90, 200, 110)
+
+    # ------------------------------------------------------------------
+    # Turn-docket billboard
+    # ------------------------------------------------------------------
+    _DOCKET_POS = (0.0, 0.0, 9.0)   # north of the SUBMIT TURN pedestal
+
+    def _build_turn_docket(self) -> None:
+        """Wide flat sign in the plaza summarising the next turn.
+        Frame + post + a multi-line body Text. The body's .text is
+        refreshed each frame by _sync_turn_docket() so pad changes
+        and R&D queue tweaks reflect live without rebuilding any
+        entities."""
+        bx, _, bz = self._DOCKET_POS
+        # Post.
+        Entity(
+            model="cube",
+            position=(bx, 1.4, bz),
+            scale=(0.18, 2.8, 0.18),
+            color=color.rgb32(70, 75, 90),
+        )
+        # Backing board — slightly tilted forward so glare doesn't
+        # bury the text from the player's eye level.
+        self.docket_backing = Entity(
+            model="cube",
+            position=(bx, 3.4, bz),
+            scale=(5.4, 3.0, 0.12),
+            color=color.rgb32(28, 36, 60),
+            rotation=(8, 0, 0),
+        )
+        Entity(  # frame outline (slightly larger cube behind the board)
+            model="cube",
+            parent=self.docket_backing,
+            position=(0, 0, 0.02),
+            scale=(1.04, 1.06, 1.0),
+            color=color.rgb32(110, 130, 170),
+        )
+        # Title — billboarded so the player can read it from any angle.
+        Text(
+            text="TURN DOCKET",
+            parent=self.docket_backing,
+            position=(0, 0.42, -0.02),
+            scale=8, origin=(0, 0),
+            color=color.rgb32(240, 200, 90),
+        )
+        # Body text — assigned per frame by _sync_turn_docket.
+        self.docket_body = Text(
+            text="",
+            parent=self.docket_backing,
+            position=(-0.40, 0.20, -0.02),
+            scale=4.5, origin=(-0.5, 0.5),
+            color=color.rgb32(220, 225, 235),
+            line_height=1.15,
+        )
+
+    def _sync_turn_docket(self) -> None:
+        """Refresh the docket billboard's body text from the live
+        player state. Called every frame from update(); the
+        underlying Text only repaints when its .text actually
+        changes so the cost is a string compare per tick."""
+        if not hasattr(self, "docket_body"):
+            return
+        if self.state is None:
+            self.docket_body.text = "Connecting..."
+            return
+        me = self.me()
+        if me is None:
+            self.docket_body.text = "Pick a side in the lobby."
+            return
+        lines: list[str] = []
+        # Calendar.
+        end_year = getattr(self.state, "end_year", None)
+        deadline = f"  (deadline {end_year})" if end_year else ""
+        lines.append(
+            f"{self.state.season.value} {self.state.year}{deadline}"
+        )
+        # Pads.
+        for pad in me.pads:
+            if pad.repair_turns_remaining > 0:
+                lines.append(
+                    f"Pad {pad.pad_id}: REPAIR  "
+                    f"({pad.repair_turns_remaining} seasons left)"
+                )
+                continue
+            sl = pad.scheduled_launch
+            if sl is None:
+                lines.append(f"Pad {pad.pad_id}: empty")
+                continue
+            try:
+                from baris.state import MissionId, MISSIONS_BY_ID
+                mission = MISSIONS_BY_ID.get(MissionId(sl.mission_id))
+                name = mission.name if mission else sl.mission_id
+            except (ValueError, KeyError):
+                name = sl.mission_id
+            crew_note = (
+                f"  [{len(sl.crew)} crew]" if getattr(sl, "crew", None) else ""
+            )
+            lines.append(f"Pad {pad.pad_id}: {name}{crew_note}")
+        # Pending launch (this turn — not yet on a pad).
+        if me.pending_launch:
+            try:
+                from baris.state import MissionId, MISSIONS_BY_ID
+                mission = MISSIONS_BY_ID.get(MissionId(me.pending_launch))
+                name = mission.name if mission else me.pending_launch
+            except (ValueError, KeyError):
+                name = me.pending_launch
+            lines.append(f"Queued: {name}")
+        # R&D queue.
+        if me.pending_rd_target and me.pending_rd_spend > 0:
+            lines.append(
+                f"R&D: {me.pending_rd_target} +{me.pending_rd_spend} MB"
+            )
+        else:
+            lines.append("R&D: idle")
+        # Manual crew picks (Phase O).
+        if me.pending_crew:
+            crew_names = []
+            for aid in me.pending_crew:
+                a = next((x for x in me.astronauts if x.id == aid), None)
+                crew_names.append(a.name if a else aid)
+            lines.append(f"Crew: {', '.join(crew_names)}")
+        text = "\n".join(lines)
+        if self.docket_body.text != text:
+            self.docket_body.text = text
 
     def _tick_pad_status(self) -> None:
         """Light each pad's status marker so a player walking by can read
