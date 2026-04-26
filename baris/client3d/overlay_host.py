@@ -39,10 +39,13 @@ class OverlayHost:
             parent=camera.ui,
             model="quad",
             scale=(ui_w, ui_h),
-            texture=self.tex,
-            color=(1, 1, 1, 1),
             z=-9,   # render in front of every other camera.ui child
         )
+        # Set the texture via Panda3D's NodePath API rather than
+        # Ursina's Entity(texture=...) — Ursina's setter expects a
+        # filename or its own Texture wrapper, not a raw Panda3D
+        # Texture, so we bypass it.
+        self.entity.set_texture(self.tex)
         self.entity.set_transparency(TransparencyAttrib.M_alpha)
 
         # First frame: the overlay's _dirty defaults to True so a
