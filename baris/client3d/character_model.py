@@ -32,6 +32,24 @@ _BOB_AMPLITUDE = 0.05      # metres
 _BOB_PERIOD_S = 2.4        # seconds for a full bob cycle
 
 
+def _ascii_face_glyph(glyph: str, name: str) -> str:
+    """Pick a glyph that Panda3D's default font can actually render.
+
+    The 2D portrait emoji (🐊 🦢 etc.) trip a per-frame
+    "No definition for character" warning when used as Ursina
+    Text — Panda3D's default font ships a Latin-only set. Map any
+    non-ASCII portrait glyph to the character's first letter
+    uppercased, falling back to '?' for unnamed astronauts. The 2D
+    UI keeps the emoji because pygame's font path supports them
+    fine."""
+    if glyph and glyph.isascii() and glyph.strip():
+        return glyph
+    cleaned = (name or "").strip()
+    if cleaned:
+        return cleaned[0].upper()
+    return "?"
+
+
 class FruitCharacter(Entity):
     """Spherical fruit-bodied astronaut. Driven entirely by the
     character_portrait() table (glyph + RGB swatch) so each meme
@@ -57,6 +75,14 @@ class FruitCharacter(Entity):
         self._glyph = glyph
         self._swatch = swatch
         self._t0 = self._now()
+        # Panda3D's default font doesn't ship glyphs for the brainrot
+        # portrait emoji (🐊 🦢 🪵 etc.) — using them straight prints
+        # a "No definition for character" warning per frame. Fall
+        # back to the first letter of the character's name in
+        # uppercase for the 3D body so the face still reads. The
+        # 2D portrait wall keeps the original emoji because pygame's
+        # font path renders them fine.
+        face_label = _ascii_face_glyph(glyph, name)
 
         body_color = color.rgb32(*swatch)
 
@@ -83,7 +109,7 @@ class FruitCharacter(Entity):
         )
         # Glyph as a Text entity parented to the face.
         self.face_text = Text(
-            text=glyph,
+            text=face_label,
             parent=self.face,
             origin=(0, 0),
             scale=12,                     # Text scale lives in text-units
@@ -91,9 +117,11 @@ class FruitCharacter(Entity):
             color=color.rgb32(40, 40, 60),
         )
 
-        # Stem: tiny brown cylinder on top.
+        # Stem: tiny brown nub on top. Was a cylinder originally,
+        # but not every Ursina build bundles the cylinder primitive
+        # — fall back to a thin cube which reads fine at this scale.
         self.stem = Entity(
-            parent=self, model="cylinder",
+            parent=self, model="cube",
             scale=(radius * 0.18, radius * 0.25, radius * 0.18),
             position=(0, radius * 2 + 0.1, 0),
             color=color.rgb32(95, 65, 40),
@@ -108,10 +136,11 @@ class FruitCharacter(Entity):
             double_sided=True,
         )
 
-        # Base: short brown cylinder so they have something to stand
-        # on rather than floating awkwardly above the floor.
+        # Base: short brown disc so they have something to stand on
+        # rather than floating awkwardly above the floor. Cube for
+        # portability with Ursina builds that don't bundle cylinder.
         self.base = Entity(
-            parent=self, model="cylinder",
+            parent=self, model="cube",
             scale=(radius * 0.6, 0.08, radius * 0.6),
             position=(0, 0.04, 0),
             color=color.rgb32(70, 65, 60),

@@ -392,24 +392,25 @@ class AstroInterior:
         models for each ACTIVE astronaut. KIA + retired astronauts
         are filtered out so the room only shows the working roster.
         Lays them out in two rows along the south wall facing the
-        portrait wall, evenly spaced."""
+        portrait wall, evenly spaced.
+
+        sync_state() runs every frame, so we cache the active-roster
+        signature (a tuple of names) and skip the rebuild when it
+        hasn't changed. Otherwise we'd re-mint every fruit Entity
+        each frame — leaking references, spamming font / model
+        warnings, and tanking the framerate."""
         from baris.client3d.character_model import FruitCharacter
         active = [a for a in roster if getattr(a, "status", "active") == "active"]
-        # Wipe the current set and rebuild whenever the active count
-        # changes — cheaper than diffing and the room only repopulates
-        # on roster events.
-        if len(active) == len(self._fruit_chars):
-            # Same count; just refresh names / colours in-place via
-            # rebuild — keeps the implementation simple while still
-            # picking up renames or recruitment swaps that don't
-            # change count.
-            pass
+        signature = tuple(getattr(a, "name", "") for a in active)
+        if signature == getattr(self, "_fruit_signature", None):
+            return
         for fc in self._fruit_chars:
             try:
                 fc.disable()
             except Exception:
                 pass
         self._fruit_chars.clear()
+        self._fruit_signature = signature
 
         if not active:
             return

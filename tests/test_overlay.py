@@ -283,3 +283,19 @@ def test_unknown_character_falls_back_to_neutral_swatch() -> None:
     glyph, swatch = character_portrait("Definitely Not A Real Brainrot Name")
     assert glyph == "?"
     assert swatch == (160, 160, 170)
+
+
+def test_fruit_face_glyph_falls_back_for_non_ascii() -> None:
+    """Panda3D's default font lacks glyphs for the brainrot
+    portrait emoji, so the 3D fruit body falls back to the first
+    letter of the character's name (uppercased). ASCII glyphs
+    pass through unchanged."""
+    from baris.client3d.character_model import _ascii_face_glyph
+    # Emoji portrait → first letter of name.
+    assert _ascii_face_glyph("🐊", "Bombardiro Crocodilo") == "B"
+    assert _ascii_face_glyph("🦫", "Tralalero Tralala") == "T"
+    # ASCII glyph → keep as-is.
+    assert _ascii_face_glyph("?", "Unknown Pilot") == "?"
+    assert _ascii_face_glyph("X", "X-Pilot") == "X"
+    # Empty + nameless astronaut → '?' fallback.
+    assert _ascii_face_glyph("", "") == "?"
