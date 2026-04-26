@@ -257,3 +257,29 @@ def test_result_panel_renders_partial_banner_with_abort_label() -> None:
     overlay.render()
     sample = overlay.surface.get_at((640, 230))
     assert sample.a > 0
+
+
+# -----------------------------------------------------------------------
+# Fruit-character data lookups (engine-agnostic parts of FruitCharacter)
+# -----------------------------------------------------------------------
+def test_known_character_returns_canonical_glyph_and_swatch() -> None:
+    """The fruit-character model reads its colour + glyph straight
+    from CHARACTER_PORTRAITS. Every brainrot recruit should have
+    an entry there; this verifies one well-known name resolves to
+    a real swatch (RGB tuple, all values in 0-255)."""
+    from baris.state import character_portrait
+    glyph, swatch = character_portrait("Bombardiro Crocodilo")
+    assert isinstance(glyph, str) and len(glyph) >= 1
+    assert isinstance(swatch, tuple) and len(swatch) == 3
+    for ch in swatch:
+        assert 0 <= ch <= 255
+
+
+def test_unknown_character_falls_back_to_neutral_swatch() -> None:
+    """An astronaut whose name isn't in CHARACTER_PORTRAITS still
+    renders — the model just paints a grey '?' fruit. Keeps roster
+    refresh from crashing on hand-rolled or migrated saves."""
+    from baris.state import character_portrait
+    glyph, swatch = character_portrait("Definitely Not A Real Brainrot Name")
+    assert glyph == "?"
+    assert swatch == (160, 160, 170)

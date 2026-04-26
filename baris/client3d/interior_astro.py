@@ -50,6 +50,10 @@ class AstroInterior:
         self.buttons: dict[str, Entity] = {}
         self.news_texts: list[Text] = []
         self._last_roster_len = 0
+        # Procedural fruit-character models — one per active astronaut.
+        # Lazily built / rebuilt on each sync_state() so a roster
+        # change (KIA, recruit, dismiss) reflects in the room.
+        self._fruit_chars: list[Any] = []
 
         self._build_room()
         self._build_portraits()
@@ -304,6 +308,7 @@ class AstroInterior:
             return
         self._sync_news(state)
         roster = me.astronauts
+        self._sync_fruit_characters(roster)
         for i, slot in enumerate(self.portraits):
             if i >= len(roster):
                 slot["name"].text = "—"
@@ -378,3 +383,52 @@ class AstroInterior:
 
     def hide(self) -> None:
         self.root.enabled = False
+
+    # ------------------------------------------------------------------
+    # Fruit characters
+    # ------------------------------------------------------------------
+    def _sync_fruit_characters(self, roster: list[Any]) -> None:
+        """Build / refresh the procedural fruit-bodied character
+        models for each ACTIVE astronaut. KIA + retired astronauts
+        are filtered out so the room only shows the working roster.
+        Lays them out in two rows along the south wall facing the
+        portrait wall, evenly spaced."""
+        from baris.client3d.character_model import FruitCharacter
+        active = [a for a in roster if getattr(a, "status", "active") == "active"]
+        # Wipe the current set and rebuild whenever the active count
+        # changes — cheaper than diffing and the room only repopulates
+        # on roster events.
+        if len(active) == len(self._fruit_chars):
+            # Same count; just refresh names / colours in-place via
+            # rebuild — keeps the implementation simple while still
+            # picking up renames or recruitment swaps that don't
+            # change count.
+            pass
+        for fc in self._fruit_chars:
+            try:
+                fc.disable()
+            except Exception:
+                pass
+        self._fruit_chars.clear()
+
+        if not active:
+            return
+
+        # Layout: up to 8 characters per row, two rows max. Row 1
+        # closer to the portrait wall; row 2 a metre back. Spread
+        # across the room width minus a margin.
+        per_row = min(8, max(1, (len(active) + 1) // 2 if len(active) > 8 else len(active)))
+        margin = 1.4
+        usable = ROOM_WIDTH - margin * 2
+        spacing = usable / max(per_row - 1, 1) if per_row > 1 else 0.0
+        for i, astro in enumerate(active):
+            row = 0 if i < per_row else 1
+            col = i if row == 0 else (i - per_row)
+            x = -ROOM_WIDTH / 2 + margin + col * spacing
+            z = ROOM_DEPTH / 2 - 3.5 - row * 1.4
+            fc = FruitCharacter(
+                name=astro.name,
+                parent=self.root,
+                position=(x, 0.0, z),
+            )
+            self._fruit_chars.append(fc)
