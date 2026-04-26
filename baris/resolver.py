@@ -57,6 +57,8 @@ from baris.state import (
     LaunchReport,
     MissionHistoryEntry,
     PrestigeSnapshot,
+    REST_AFTER_FAILURE,
+    REST_AFTER_FLIGHT,
     REVIEW_FIRE_AT_WARNINGS,
     REVIEW_KIA_PENALTY,
     REVIEW_PASS_THRESHOLD,
@@ -647,8 +649,11 @@ def resolve_turn(state: GameState, rng: random.Random | None = None) -> None:
             # We just rolled Winter→Spring of a new year. Run the
             # Government Review on the year just ended.
             _run_government_review(state, ended_year=prev_year, rng=rng)
-        _roll_season_news(state, rng)
-        _snapshot_prestige(state)
+        _check_historical_milestones(state)
+        _check_calendar_deadline(state)
+        if state.phase == Phase.PLAYING:
+            _roll_season_news(state, rng)
+            _snapshot_prestige(state)
 
 
 # ----------------------------------------------------------------------
@@ -896,6 +901,9 @@ def _resolve_pad_launch(
         )
         if mission.manned and crew:
             _bump_crew_mood(crew, MOOD_SUCCESS_BUMP)
+            # Phase T — successful crew earn a normal post-flight rest.
+            for a in crew:
+                a.rest_remaining = max(a.rest_remaining, REST_AFTER_FLIGHT)
         chatter_react(
             state.log, "launch_success", rng,
             character=_chatter_character(player, rng),
@@ -909,6 +917,11 @@ def _resolve_pad_launch(
             _bump_crew_mood(crew, -MOOD_FAILURE_DROP)
             if report.deaths:
                 _bump_crew_mood(crew, -MOOD_KIA_CREW_DROP * len(report.deaths))
+            # Phase T — failed-flight survivors rest longer than a clean
+            # mission. KIA crew already have status=KIA so no rest needed.
+            for a in crew:
+                if a.active:
+                    a.rest_remaining = max(a.rest_remaining, REST_AFTER_FAILURE)
         chatter_react(
             state.log, "launch_failure", rng,
             character=_chatter_character(player, rng),
@@ -1384,6 +1397,10 @@ def _tick_training_and_recovery(player: Player, state: GameState) -> None:
                 state.log.append(
                     f"{player.username}: {astro.name} is released from the hospital."
                 )
+        # Phase T — post-flight rest tick. Silent on completion to keep
+        # the log uncluttered; routine recovery doesn't need a headline.
+        if astro.rest_remaining > 0:
+            astro.rest_remaining -= 1
         if astro.advanced_training_remaining > 0:
             astro.advanced_training_remaining -= 1
             if astro.advanced_training_remaining == 0:
@@ -1893,6 +1910,71 @@ def memorial_roll(state: GameState) -> list[tuple[str, str, int, str, str]]:
                 entry.season, entry.side,
             ))
     return roll
+
+
+# Phase S — historical milestone events. Each fires at most once per
+# game when (year, season) hits and prerequisites are met. Tone is
+# flavour-only; no balance shifts. The id strings are stored in
+# state.milestones_fired so each milestone plays exactly once.
+_HISTORICAL_MILESTONES: tuple[
+    tuple[str, int, str, str], ...
+] = (
+    ("sputnik_1957", 1957, "Fall",
+     "📅 1957: A satellite-shaped object beeps over the rooftops. Nobody is sure whose."),
+    ("yuri_1961",    1961, "Spring",
+     "📅 1961: A first man in space, and somewhere a barber loses business."),
+    ("kennedy_1962", 1962, "Fall",
+     "📅 1962: A speech is given. The decade is now on the clock."),
+    ("apollo_1_1967", 1967, "Winter",
+     "📅 1967: Sombre headlines about a fire on the pad. Both sides go quiet."),
+    ("decade_1970",  1970, "Spring",
+     "📅 1970: The decade ended without a landing. Pundits revise their forecasts."),
+)
+
+
+def _check_historical_milestones(state: GameState) -> None:
+    """Phase S — fire any (year, season)-matching headline that hasn't
+    already played. Pure flavour; appends to state.log only."""
+    season = state.season.value
+    for mid, m_year, m_season, headline in _HISTORICAL_MILESTONES:
+        if mid in state.milestones_fired:
+            continue
+        if state.year == m_year and season == m_season:
+            state.milestones_fired.append(mid)
+            state.log.append(headline)
+
+
+def _check_calendar_deadline(state: GameState) -> None:
+    """Phase S — when state.year exceeds end_year, end the game with a
+    prestige tiebreaker. The current year is still in-bounds; the game
+    ends as soon as we'd be advancing PAST it."""
+    if state.phase != Phase.PLAYING:
+        return
+    if state.year <= state.end_year:
+        return
+    # Past the deadline. Pick the highest-prestige player; tie goes
+    # to the side with more total mission successes; then to USA by
+    # default if everything is identical.
+    if not state.players:
+        state.phase = Phase.ENDED
+        return
+    ranked = sorted(
+        state.players,
+        key=lambda p: (
+            p.prestige,
+            sum(p.mission_successes.values()),
+            -1 if p.side == Side.USA else 0,
+        ),
+        reverse=True,
+    )
+    winner = ranked[0]
+    state.phase = Phase.ENDED
+    state.winner = winner.side
+    side_label = winner.side.value if winner.side else "?"
+    state.log.append(
+        f"📅 {state.end_year} closes — {winner.username} ({side_label}) "
+        f"wins on prestige ({winner.prestige})."
+    )
 
 
 def _run_government_review(

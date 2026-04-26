@@ -3811,3 +3811,149 @@ def test_chatter_react_respects_global_disable() -> None:
             chance=1.0, character="X", rocket="Y",
         )
     assert log and log[0].startswith("📻 ")
+
+
+# ----------------------------------------------------------------------
+# Phase S — calendar deadline + historical milestones
+# ----------------------------------------------------------------------
+
+
+def _advance_one_season(state: GameState) -> None:
+    for p in state.players:
+        submit_turn(p, rd_rocket=None, rd_spend=0, launch=None)
+    with _no_news():
+        resolve_turn(state, rng=random.Random(1))
+
+
+def test_calendar_deadline_ends_game_after_end_year() -> None:
+    state = _two_player_state()
+    start_game(state, rng=random.Random(1))
+    me = state.players[0]
+    opp = state.players[1]
+    me.prestige = 25
+    opp.prestige = 12
+    state.end_year = state.year     # immediate next-year rollover ends it
+    # Roll Spring → Summer → Fall → Winter → Spring (next year).
+    for _ in range(4):
+        if state.phase != Phase.PLAYING:
+            break
+        _advance_one_season(state)
+    assert state.phase == Phase.ENDED
+    assert state.winner == me.side
+
+
+def test_calendar_deadline_tiebreaks_on_total_successes() -> None:
+    state = _two_player_state()
+    start_game(state, rng=random.Random(1))
+    me = state.players[0]
+    opp = state.players[1]
+    me.prestige = 10
+    opp.prestige = 10
+    me.mission_successes[MissionId.SUBORBITAL.value] = 1   # me has more
+    state.end_year = state.year
+    for _ in range(4):
+        if state.phase != Phase.PLAYING:
+            break
+        _advance_one_season(state)
+    assert state.winner == me.side
+
+
+def test_historical_milestone_fires_once_per_game() -> None:
+    state = _two_player_state()
+    start_game(state, rng=random.Random(1))
+    # Sputnik is keyed to (1957, "Fall"). The game starts at Spring
+    # 1957 — advance two seasons to land on Fall.
+    _advance_one_season(state)   # Spring → Summer
+    _advance_one_season(state)   # Summer → Fall
+    sputnik_lines = [l for l in state.log if "1957" in l and "satellite" in l.lower()]
+    assert sputnik_lines, "expected Sputnik milestone after Spring → Summer → Fall"
+    assert "sputnik_1957" in state.milestones_fired
+
+
+def test_legacy_state_dict_backfills_phase_s_fields() -> None:
+    state = _two_player_state()
+    start_game(state, rng=random.Random(1))
+    raw = state.to_dict()
+    raw.pop("end_year", None)
+    raw.pop("milestones_fired", None)
+    restored = GameState.from_dict(raw)
+    from baris.state import DEFAULT_END_YEAR
+    assert restored.end_year == DEFAULT_END_YEAR
+    assert restored.milestones_fired == []
+
+
+# ----------------------------------------------------------------------
+# Phase T — astronaut rest after a flight
+# ----------------------------------------------------------------------
+
+
+def test_successful_manned_launch_marks_crew_for_rest() -> None:
+    state = _two_player_state()
+    start_game(state, rng=random.Random(1))
+    me = state.players[0]
+    me.reliability[Rocket.MEDIUM.value] = 80
+    me.budget = 200
+    submit_turn(me, launch=MissionId.MANNED_ORBITAL)
+    submit_turn(state.players[1], launch=None)
+    with _no_news():
+        resolve_turn(state, rng=_FixedRng(0.0))
+        _fire_scheduled_launch(state, _FixedRng(0.0))
+    flown = [a for a in me.astronauts if a.rest_remaining > 0]
+    assert flown, "expected at least one crew member to be marked for rest"
+    from baris.state import REST_AFTER_FLIGHT
+    # Counter ticks down once per resolve, so the survivor has
+    # REST_AFTER_FLIGHT - 1 left after the resolve that set it.
+    for a in flown:
+        assert a.rest_remaining <= REST_AFTER_FLIGHT
+
+
+def test_resting_astronaut_is_not_flight_ready() -> None:
+    a = Astronaut(id="x", name="X")
+    a.rest_remaining = 1
+    assert not a.flight_ready
+    assert "resting" in a.busy_reason
+
+
+def test_failed_manned_launch_rests_survivors_longer() -> None:
+    """Failure path: surviving crew get REST_AFTER_FAILURE >
+    REST_AFTER_FLIGHT, so they're sidelined longer than after a clean
+    mission."""
+    from baris.state import REST_AFTER_FAILURE, REST_AFTER_FLIGHT
+    assert REST_AFTER_FAILURE > REST_AFTER_FLIGHT
+    state = _two_player_state()
+    start_game(state, rng=random.Random(1))
+    me = state.players[0]
+    me.reliability[Rocket.MEDIUM.value] = 70
+    me.budget = 200
+    for a in me.astronauts:
+        a.capsule = 50
+    submit_turn(me, launch=MissionId.MANNED_ORBITAL)
+    submit_turn(state.players[1], launch=None)
+    with _no_news():
+        resolve_turn(state, rng=_FixedRng(0.99))    # forced failure
+        _fire_scheduled_launch(state, _FixedRng(0.99))
+    survivors = [a for a in me.astronauts if a.active]
+    rested = [a for a in survivors if a.rest_remaining > 0]
+    assert rested, "failed-mission survivors should still be marked for rest"
+
+
+def test_rest_counter_ticks_down_each_turn() -> None:
+    state = _two_player_state()
+    start_game(state, rng=random.Random(1))
+    me = state.players[0]
+    me.astronauts[0].rest_remaining = 2
+    _advance_one_season(state)
+    assert me.astronauts[0].rest_remaining == 1
+    _advance_one_season(state)
+    assert me.astronauts[0].rest_remaining == 0
+
+
+def test_legacy_astronaut_dict_backfills_rest_remaining() -> None:
+    from baris.state import _astronaut_from_dict
+    raw = {
+        "id": "x", "name": "X",
+        "capsule": 0, "lm_pilot": 0, "eva": 0, "docking": 0, "endurance": 0,
+        "status": "active",
+    }
+    a = _astronaut_from_dict(raw)
+    assert a.rest_remaining == 0

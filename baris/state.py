@@ -387,6 +387,18 @@ RD_BATCH_COST = 3  # MB per roll
 STAND_TEST_COST = 5
 STAND_TEST_GAIN = 8
 
+# Phase S — calendar deadline. Game ends with a prestige tiebreaker
+# at the end of the deadline year. Default chosen to roughly match
+# the original game's 1977 cutoff.
+DEFAULT_END_YEAR = 1977
+
+# Phase T — astronaut rest after a flight. Each crewed mission's
+# survivors mark the rest-counter; an astronaut with rest_remaining > 0
+# isn't flight-ready (similar mechanic to hospital but separate so
+# the busy_reason / countdown read distinct).
+REST_AFTER_FLIGHT  = 2  # successful mission → mandatory recovery
+REST_AFTER_FAILURE = 3  # failed mission, on top of any hospital stay
+
 
 # Phase Q — components that aren't gating prereqs but DO contribute
 # reliability bonuses to applicable missions. Pre-seeded so the game
@@ -945,6 +957,10 @@ class Astronaut:
     advanced_training_skill: str = ""     # Skill.value while training, else ""
     advanced_training_remaining: int = 0
     hospital_remaining: int = 0
+    # Phase T — post-flight rest period. An astronaut with rest > 0
+    # isn't flight_ready. Set when a mission resolves; ticks down each
+    # season alongside the other recovery counters.
+    rest_remaining: int = 0
     # Phase K — personality tag + morale. Both default so legacy rosters
     # without them still construct cleanly.
     compatibility: str = Compatibility.A.value
@@ -964,13 +980,14 @@ class Astronaut:
     @property
     def flight_ready(self) -> bool:
         """True iff the astronaut can be assigned to a mission right now.
-        Equivalent to active + no outstanding basic/advanced training
-        and no current hospital stay."""
+        Equivalent to active + no outstanding basic/advanced training,
+        no current hospital stay, and no Phase T post-flight rest."""
         return (
             self.active
             and self.basic_training_remaining == 0
             and self.advanced_training_remaining == 0
             and self.hospital_remaining == 0
+            and self.rest_remaining == 0
         )
 
     @property
@@ -993,6 +1010,8 @@ class Astronaut:
         if self.advanced_training_remaining > 0:
             skill = self.advanced_training_skill or "skill"
             return f"training {skill} ({self.advanced_training_remaining})"
+        if self.rest_remaining > 0:
+            return f"resting ({self.rest_remaining})"
         return ""
 
 
@@ -1180,6 +1199,12 @@ class GameState:
     # can plot a line chart.
     mission_history: list["MissionHistoryEntry"] = field(default_factory=list)
     prestige_timeline: list["PrestigeSnapshot"] = field(default_factory=list)
+    # Phase S — calendar deadline. Game forces an ending by prestige
+    # tiebreaker once year exceeds end_year. milestones_fired tracks
+    # which historical headline events have already played so each
+    # one only fires at most once per game.
+    end_year: int = DEFAULT_END_YEAR
+    milestones_fired: list[str] = field(default_factory=list)
 
     def to_dict(self) -> dict[str, Any]:
         return asdict(self)
@@ -1204,6 +1229,8 @@ class GameState:
             current_news_id=d.get("current_news_id", ""),
             mission_history=[_mission_history_from_dict(m) for m in raw_history],
             prestige_timeline=[_prestige_snapshot_from_dict(s) for s in raw_timeline],
+            end_year=d.get("end_year", DEFAULT_END_YEAR),
+            milestones_fired=list(d.get("milestones_fired", [])),
         )
 
     def find_player(self, player_id: str) -> Player | None:
@@ -1297,6 +1324,8 @@ def _astronaut_from_dict(d: dict[str, Any]) -> Astronaut:
     data.setdefault("advanced_training_skill", "")
     data.setdefault("advanced_training_remaining", 0)
     data.setdefault("hospital_remaining", 0)
+    # Phase T — older saves predate the rest-after-flight counter.
+    data.setdefault("rest_remaining", 0)
     data.setdefault("compatibility", Compatibility.A.value)
     data.setdefault("mood", MOOD_DEFAULT)
     return Astronaut(**data)
