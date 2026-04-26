@@ -30,11 +30,12 @@ class OverlayHost:
         self.tex.set_minfilter(Texture.FT_linear)
         self.tex.set_magfilter(Texture.FT_linear)
 
-        # Fullscreen quad parented to camera.ui. camera.ui_size is
-        # Ursina's coordinate space for HUD widgets — usually
-        # (aspect_ratio, 1.0) so a quad of (aspect, 1) fills the
-        # screen.
-        ui_w, ui_h = camera.ui_size
+        # Fullscreen quad parented to camera.ui. camera.ui covers the
+        # screen as (aspect_ratio x 1.0) units of orthographic space:
+        # X spans [-aspect/2, +aspect/2], Y spans [-0.5, +0.5]. Older
+        # Ursina versions don't expose camera.ui_size, so we derive
+        # the values from window.aspect_ratio directly.
+        ui_w, ui_h = self._ui_size()
         self.entity = Entity(
             parent=camera.ui,
             model="quad",
@@ -51,6 +52,25 @@ class OverlayHost:
         # First frame: the overlay's _dirty defaults to True so a
         # one-shot upload happens on the next update().
         self._uploaded_once = False
+
+    @staticmethod
+    def _ui_size() -> tuple[float, float]:
+        """Return (ui_width, ui_height) in Ursina's HUD coordinate
+        space — i.e. (aspect_ratio, 1.0). Reads window.aspect_ratio
+        on every Ursina version we care about."""
+        ui_size = getattr(camera, "ui_size", None)
+        if ui_size is not None:
+            return float(ui_size[0]), float(ui_size[1])
+        # Fallback: derive from window. Some pygame-ce / panda3d
+        # combinations expose `aspect_ratio` as a property; if it
+        # isn't available, compute from the window size directly.
+        aspect = getattr(window, "aspect_ratio", None)
+        if aspect is None:
+            size = getattr(window, "size", None) or getattr(
+                window, "fullscreen_size", (1280, 720),
+            )
+            aspect = float(size[0]) / max(1.0, float(size[1]))
+        return float(aspect), 1.0
 
     def shutdown(self) -> None:
         """Detach the overlay quad — used when the 3D client tears
@@ -84,32 +104,32 @@ class OverlayHost:
         Click events go through forward_click below — Ursina raises
         on_click on the host entity, but for the overlay we want
         the underlying mouse event so Buttons can hit-test."""
-        # Translate Ursina's [-aspect, +aspect] / [-0.5, +0.5] mouse
-        # coords into pixel-space matching the overlay surface.
         from ursina import mouse  # imported here so test code can
         # stub the engine without importing Ursina at module load.
         if mouse.x is None or mouse.y is None:
             return
-        ui_w, ui_h = camera.ui_size
-        # mouse.position is (x, y) in ui coordinates: x in [-aspect/2, +aspect/2],
-        # y in [-0.5, +0.5]. Map to pixel (0..size).
-        w, h = self.overlay.size
-        px = int((mouse.x + ui_w / 2) / ui_w * w)
-        py = int((0.5 - mouse.y) * h)   # flip Y so 0 is top
+        px, py = self._mouse_to_pixel(mouse.x, mouse.y)
         self.overlay.post_mouse_motion((px, py))
 
     def forward_click(self, button: int = 1, down: bool = True) -> None:
         from ursina import mouse
         if mouse.x is None or mouse.y is None:
             return
-        ui_w, ui_h = camera.ui_size
-        w, h = self.overlay.size
-        px = int((mouse.x + ui_w / 2) / ui_w * w)
-        py = int((0.5 - mouse.y) * h)
+        px, py = self._mouse_to_pixel(mouse.x, mouse.y)
         if down:
             self.overlay.post_mouse_down((px, py), button=button)
         else:
             self.overlay.post_mouse_up((px, py), button=button)
+
+    def _mouse_to_pixel(self, mx: float, my: float) -> tuple[int, int]:
+        """Translate Ursina's [-aspect/2, +aspect/2] x [-0.5, +0.5]
+        mouse coords into pixel space matching the overlay surface.
+        Y is flipped so (0, 0) is the top-left of the surface."""
+        ui_w, _ = self._ui_size()
+        w, h = self.overlay.size
+        px = int((mx + ui_w / 2) / ui_w * w)
+        py = int((0.5 - my) * h)
+        return px, py
 
     def forward_pygame_event(self, event: pygame.event.Event) -> None:
         """Pass-through for callers that already have a pygame event
