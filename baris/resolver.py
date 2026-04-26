@@ -87,6 +87,7 @@ from baris.state import (
     Mission,
     MissionId,
     MissionObjective,
+    MissionPhase,
     Module,
     ObjectiveId,
     ObjectiveReport,
@@ -139,6 +140,42 @@ def effective_rocket(player: Player, mission: Mission) -> Rocket:
         if _player_architecture(player) == Architecture.EOR:
             return Rocket.MEDIUM
     return mission.rocket
+
+
+def is_joint_mission(player: Player, mission: Mission) -> bool:
+    """True for the EOR-architecture variant of the manned lunar
+    landing — the only joint mission in the catalog right now.
+    Joint missions consume two rocket units (CSM-leg + LM-leg) and
+    add a RENDEZVOUS phase to the front of the mission's phase
+    list. Other architectures keep the single-launch flow."""
+    return (
+        mission.id == MissionId.MANNED_LUNAR_LANDING
+        and _player_architecture(player) == Architecture.EOR
+    )
+
+
+def joint_mission_secondary_rocket(
+    player: Player, mission: Mission,
+) -> Rocket | None:
+    """Rocket class of the LM-leg for an EOR mission. Returns None
+    if the mission isn't joint. Currently the LM leg uses the same
+    Medium rocket as the CSM leg — Saturn 1B / Proton-class — so
+    both legs draw from the same unit pool."""
+    if not is_joint_mission(player, mission):
+        return None
+    return Rocket.MEDIUM
+
+
+def effective_phases(
+    player: Player, mission: Mission,
+) -> tuple[MissionPhase, ...]:
+    """The phase sequence the resolver actually rolls. EOR-mode
+    manned-lunar-landing prepends a RENDEZVOUS phase so the joint-
+    mission rendezvous is a real per-phase roll on the cinematic
+    ticker rather than an off-screen assumption."""
+    if is_joint_mission(player, mission):
+        return (MissionPhase.RENDEZVOUS,) + tuple(mission.phases)
+    return tuple(mission.phases)
 
 
 def effective_launch_cost(player: Player, mission: Mission) -> int:
@@ -283,6 +320,11 @@ def missing_modules(player: Player, mission: Mission) -> list[Module]:
     Empty list means every prereq module is launch-ready. Used by
     the server to reject queueing and by UIs to surface 'need: X'
     on each mission row.
+
+    Note: the EOR joint-mission second rocket isn't a Module so it
+    doesn't show up here. Joint-mission gating happens in
+    is_launch_eligible() / submit_turn() which has access to the
+    rocket-unit inventory via player.active_units().
     """
     missing: list[Module] = [
         m for m in mission.requires_modules if not player.module_built(m)
@@ -295,6 +337,30 @@ def missing_modules(player: Player, mission: Mission) -> list[Module]:
             missing.append(m)
             seen.add(m)
     return missing
+
+
+def joint_mission_short_legs(
+    player: Player, mission: Mission,
+) -> int:
+    """Count the rocket units the player needs but doesn't have for
+    a joint mission — 0 if the mission isn't joint or the inventory
+    has enough. Used by submit_turn / UI to surface 'need 2 Medium
+    rockets, only 1 ready' on the EOR path."""
+    secondary = joint_mission_secondary_rocket(player, mission)
+    if secondary is None:
+        return 0
+    # CSM leg + LM leg. The launch claims one unit per leg, falling
+    # back to auto-build at class reliability if inventory is empty
+    # — but we still want to surface "you should build the second
+    # Medium rocket yourself" so the player knows EOR costs more
+    # hardware than DA / LOR.
+    needed = 2
+    have = (
+        len(player.active_units(secondary.value))
+        if player.rocket_built(secondary)
+        else 0
+    )
+    return max(0, needed - have)
 
 
 def meets_architecture_prereqs(player: Player, mission: Mission) -> bool:
@@ -968,9 +1034,30 @@ def _resolve_pad_launch(
     rocket_unit = _claim_unit(player, eff_rocket.value, state)
     report.unit_id = rocket_unit.unit_id
     report.unit_reliability = rocket_unit.reliability
+
+    # Joint-missions — EOR-architecture lunar landing claims a SECOND
+    # unit of the same rocket class for the LM-leg. Both units are
+    # marked USED at the end regardless of outcome. The reliability
+    # bonus averages the two legs so a stand-tested CSM doesn't
+    # rescue an under-tested LM by itself.
+    secondary_unit = None
+    secondary_rocket = joint_mission_secondary_rocket(player, mission)
+    if secondary_rocket is not None:
+        secondary_unit = _claim_unit(
+            player, secondary_rocket.value, state,
+            exclude_id=rocket_unit.unit_id,
+        )
+        report.secondary_unit_id = secondary_unit.unit_id
+        report.secondary_unit_reliability = secondary_unit.reliability
+        avg_reliability = (
+            rocket_unit.reliability + secondary_unit.reliability
+        ) / 2.0
+    else:
+        avg_reliability = rocket_unit.reliability
+
     crew_bonus = _crew_bonus(crew, mission)
     reliability_bonus = (
-        (rocket_unit.reliability - 50) * RELIABILITY_SWING_PER_POINT
+        (avg_reliability - 50) * RELIABILITY_SWING_PER_POINT
     )
     compat_bonus = crew_compatibility_bonus(crew)
     component_bonus = component_reliability_bonus(player, mission)
@@ -999,10 +1086,15 @@ def _resolve_pad_launch(
     # without a declared phase list fall back to a single roll for
     # safety (shouldn't happen — every catalog entry has phases now).
     failed_at: MissionPhase | None = None
-    if mission.phases:
+    # Joint-missions — effective_phases prepends RENDEZVOUS for EOR
+    # variants so the joint rendezvous is a real rolled phase rather
+    # than an off-screen assumption. Single-launch missions get the
+    # mission.phases tuple unchanged.
+    phase_list = effective_phases(player, mission)
+    if phase_list:
         clamped = max(0.01, min(0.999, success_chance))
-        per_phase_chance = clamped ** (1.0 / len(mission.phases))
-        for phase in mission.phases:
+        per_phase_chance = clamped ** (1.0 / len(phase_list))
+        for phase in phase_list:
             if rng.random() > per_phase_chance:
                 failed_at = phase
                 break
@@ -1093,8 +1185,11 @@ def _resolve_pad_launch(
     # outcome (rockets aren't recoverable; even successful flights
     # don't return the article). Status stays USED rather than LOST
     # so the museum can distinguish "spent in service" from "blew up
-    # on the test stand".
+    # on the test stand". Joint-missions also consume the secondary
+    # leg's unit.
     rocket_unit.status = HardwareStatus.USED.value
+    if secondary_unit is not None:
+        secondary_unit.status = HardwareStatus.USED.value
     report.reliability_after = player.rocket_reliability(eff_rocket)
     report.prestige_delta = player.prestige - prestige_start
     # Pad damage: if the flight killed crew or any objective triggered a
@@ -2183,16 +2278,24 @@ def _build_unit(
 
 def _claim_unit(
     player: Player, class_name: str, state: GameState,
+    *, exclude_id: str = "",
 ) -> HardwareUnit:
     """Pick the highest-reliability ACTIVE unit of `class_name` from
     the player's inventory; auto-build one at the current class
-    reliability if the inventory is empty. Does NOT change the unit's
-    status — the caller marks USED or LOST when the disposition is
-    known."""
-    unit = player.next_unit(class_name)
-    if unit is None:
-        unit = _build_unit(player, class_name, state)
-    return unit
+    reliability if no other ACTIVE unit qualifies. Does NOT change
+    the unit's status — the caller marks USED or LOST when the
+    disposition is known.
+
+    `exclude_id` lets the caller skip a specific unit_id so the
+    joint-mission second-leg claim doesn't pick the same unit the
+    first-leg already took (status is still ACTIVE at that point —
+    USED isn't set until the end of the flight)."""
+    candidates = [
+        u for u in player.active_units(class_name) if u.unit_id != exclude_id
+    ]
+    if not candidates:
+        return _build_unit(player, class_name, state)
+    return candidates[0]
 
 
 def build_hardware_unit(

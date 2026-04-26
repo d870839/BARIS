@@ -251,6 +251,11 @@ class MissionPhase(str, Enum):
     ASCENT = "Lunar ascent"
     TEI = "Trans-Earth injection"
     REENTRY = "Re-entry"
+    # Joint-missions — only present in EOR-architecture variants of
+    # the manned lunar landing. The CSM and LM each fly to Earth
+    # orbit on separate rockets, then this phase represents the
+    # docking + push to TLI as a single co-orbital event.
+    RENDEZVOUS = "Earth-orbit rendezvous"
 
 
 # P-deep — per-phase consequence tables. When a phase roll fails the
@@ -283,6 +288,12 @@ PHASE_PROFILES: dict[MissionPhase, PhaseProfile] = {
     MissionPhase.ASCENT:           PhaseProfile(0.90, 0.0,  "stranded on the surface"),
     MissionPhase.TEI:              PhaseProfile(0.60, 0.10, "stuck in lunar orbit"),
     MissionPhase.REENTRY:          PhaseProfile(0.70, 0.30, "rough landing"),
+    # Joint-missions — a failed rendezvous in Earth orbit is
+    # usually recoverable (both crews fly home on their own rockets)
+    # but with no prestige credit since the moon push never
+    # happened. 25% catastrophic covers the catastrophic-collision
+    # case (both vehicles damaged, real KIA risk).
+    MissionPhase.RENDEZVOUS:       PhaseProfile(0.25, 0.0,  "rendezvous failed, both crews aborted"),
 }
 
 
@@ -1631,6 +1642,11 @@ class LaunchReport:
     # class-level reliability if the unit was stand-tested).
     unit_id: str = ""
     unit_reliability: int = 0
+    # Joint-missions — for EOR-architecture flights, the second
+    # rocket unit that flew (the LM-leg). Empty on every other
+    # mission so the cinematic just shows the primary leg.
+    secondary_unit_id: str = ""
+    secondary_unit_reliability: int = 0
     # P-deep — partial-success path. Set when a phase failed but the
     # casualty roll cleared, so the crew came home and a slice of the
     # mission's prestige was awarded. abort_label is the cinematic
@@ -1651,6 +1667,9 @@ def _launch_report_from_dict(d: dict[str, Any]) -> LaunchReport:
     # R-deep — older saves predate per-unit launch reporting.
     data.setdefault("unit_id", "")
     data.setdefault("unit_reliability", 0)
+    # Joint-missions — older saves predate the secondary leg.
+    data.setdefault("secondary_unit_id", "")
+    data.setdefault("secondary_unit_reliability", 0)
     # P-deep — older saves predate partial successes.
     data.setdefault("partial", False)
     data.setdefault("abort_label", "")

@@ -4993,3 +4993,121 @@ def test_legacy_capsule_save_seeds_new_families() -> None:
     assert p.module_reliability(Module.CAPSULE_1) == 50
     assert p.module_reliability(Module.CAPSULE_2) == 50
     assert p.module_reliability(Module.CAPSULE_3) == 50
+
+
+# -----------------------------------------------------------------------
+# Joint missions — multi-rocket EOR architecture
+# -----------------------------------------------------------------------
+def test_joint_eor_launch_consumes_two_rocket_units() -> None:
+    """The EOR-architecture variant of the manned lunar landing
+    flies the CSM and LM on separate rockets that rendezvous in
+    Earth orbit. The launch should mark TWO rocket units USED, and
+    the launch report should record both."""
+    from baris.resolver import (
+        is_joint_mission,
+    )
+
+    state = _two_player_state()
+    start_game(state, rng=random.Random(1))
+    me = state.players[0]
+    me.budget = 500
+    me.reliability[Rocket.MEDIUM.value] = 80   # EOR uses Medium for both legs
+    me.reliability[Module.EVA_SUIT.value] = 70
+    _arm_lunar_components(me, 70)
+    me.mission_successes[MissionId.SUBORBITAL.value] = 1
+    me.mission_successes[MissionId.MULTI_CREW_ORBITAL.value] = 1
+    choose_architecture(me, Architecture.EOR)
+    mission = MISSIONS_BY_ID[MissionId.MANNED_LUNAR_LANDING]
+    assert is_joint_mission(me, mission)
+
+    submit_turn(me, launch=MissionId.MANNED_LUNAR_LANDING)
+    submit_turn(state.players[1], launch=None)
+    with _no_news():
+        resolve_turn(state, rng=_FixedRng(0.0))
+        _fire_scheduled_launch(state, _FixedRng(0.0))
+
+    used = [u for u in me.units if u.status == "used"]
+    assert len(used) == 2, (
+        f"EOR should consume two units; got {[u.unit_id for u in used]}"
+    )
+    assert all(u.class_name == Rocket.MEDIUM.value for u in used)
+
+    report = next(
+        r for r in state.last_launches
+        if r.mission_id == MissionId.MANNED_LUNAR_LANDING.value
+    )
+    assert report.unit_id != ""
+    assert report.secondary_unit_id != ""
+    assert report.unit_id != report.secondary_unit_id
+
+
+def test_joint_eor_adds_rendezvous_phase_to_timeline() -> None:
+    """effective_phases() prepends RENDEZVOUS for an EOR mission so
+    the cinematic phase ticker shows the rendezvous as a real
+    rolled step. Non-EOR architectures get the unchanged phase
+    list."""
+    from baris.resolver import effective_phases
+    from baris.state import MissionPhase
+
+    state = _two_player_state()
+    start_game(state, rng=random.Random(1))
+    me = state.players[0]
+    mission = MISSIONS_BY_ID[MissionId.MANNED_LUNAR_LANDING]
+
+    # No architecture chosen — single-launch path, original phases.
+    assert effective_phases(me, mission)[0] == mission.phases[0]
+    assert MissionPhase.RENDEZVOUS not in effective_phases(me, mission)
+
+    # LOR: still single-launch, no rendezvous phase.
+    choose_architecture(me, Architecture.LOR)
+    assert MissionPhase.RENDEZVOUS not in effective_phases(me, mission)
+
+    # EOR: prepends RENDEZVOUS.
+    me.architecture = Architecture.EOR.value
+    eor_phases = effective_phases(me, mission)
+    assert eor_phases[0] == MissionPhase.RENDEZVOUS
+
+
+def test_joint_eor_secondary_rocket_shortage_flagged() -> None:
+    """joint_mission_short_legs reports how many extra Medium-class
+    units the player still needs to fly EOR. Used by the UI to
+    surface 'EOR needs 2 Medium rockets, 1 ready' before the player
+    commits."""
+    from baris.resolver import (
+        build_hardware_unit, joint_mission_short_legs,
+    )
+
+    state = _two_player_state()
+    start_game(state, rng=random.Random(1))
+    me = state.players[0]
+    me.reliability[Rocket.MEDIUM.value] = 70
+    me.budget = 200
+    # choose_architecture gates on Tier 3 unlock; bypass that for
+    # this isolated test by setting the field directly.
+    me.architecture = Architecture.EOR.value
+    mission = MISSIONS_BY_ID[MissionId.MANNED_LUNAR_LANDING]
+    # No units → 2 short.
+    assert joint_mission_short_legs(me, mission) == 2
+    build_hardware_unit(me, state, Rocket.MEDIUM.value)
+    assert joint_mission_short_legs(me, mission) == 1
+    build_hardware_unit(me, state, Rocket.MEDIUM.value)
+    assert joint_mission_short_legs(me, mission) == 0
+
+
+def test_joint_eor_save_load_round_trips_secondary_unit() -> None:
+    """LaunchReport.secondary_unit_id / secondary_unit_reliability
+    survive save/load. Older saves predate these fields and should
+    backfill empty without crashing the loader."""
+    from baris.state import _launch_report_from_dict, LaunchReport
+    raw = {
+        "side": "USA", "username": "X",
+        "mission_id": MissionId.MANNED_LUNAR_LANDING.value,
+        "mission_name": "Manned lunar landing",
+        "rocket": "Saturn", "rocket_class": Rocket.MEDIUM.value,
+        "success": True,
+        # Note: no secondary_unit_id key — pre-joint-mission save.
+    }
+    report = _launch_report_from_dict(raw)
+    assert isinstance(report, LaunchReport)
+    assert report.secondary_unit_id == ""
+    assert report.secondary_unit_reliability == 0

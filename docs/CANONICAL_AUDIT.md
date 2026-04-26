@@ -17,8 +17,8 @@ push.
 | LM as distinct component | ✅ | Phase Q |
 | EVA suit | ✅ | |
 | Docking module | ✅ | |
-| **Capsule families (1-man / 2-man / 3-man)** | ❌ | Single generic `CAPSULE`. Original split Mercury / Gemini / Apollo into separate R&D programs. Biggest remaining hardware-tree gap. |
-| **Joint missions / multi-rocket payloads** | ❌ | EOR architecture should fly two rockets that rendezvous. Currently a single launch even when EOR architecture is picked. |
+| Capsule families (1-man / 2-man / 3-man) | ✅ | Capsule-deep — `CAPSULE_1` (Mercury) / `CAPSULE_2` (Gemini) / `CAPSULE_3` (Apollo), routed by `mission.crew_size`, hard-prereq through the existing Q-deep gate. |
+| Joint missions / multi-rocket payloads | ✅ | EOR-architecture lunar landing now consumes two Medium-rocket units (CSM-leg + LM-leg) and rolls a `RENDEZVOUS` phase. Each leg has its own unit reliability snapshot. |
 | Hard reliability prereqs | ✅ | Q-deep |
 | Side-specific hardware names | ✅ | `rocket_display_name(rocket, side)` |
 
@@ -117,18 +117,17 @@ Ranked by canonical impact + how blocking they are for a real game:
 
 1. **AI opponent (Phase V)** — biggest single missing canonical
    feature. Solo play unlocks a much wider audience.
-2. **Capsule families** — split `CAPSULE` into one-man / two-man /
-   three-man tracks the same way Q-deep tiered the kicker. Biggest
-   remaining hardware-tree gap.
-3. **Finish UI overlay refactor** — port R&D + MC panels next so
+2. **Finish UI overlay refactor** — port R&D + MC panels next so
    the wonky 3D-rendered menus retire.
-4. **Difficulty + game-length settings** — quick to ship, big
+3. **Difficulty + game-length settings** — quick to ship, big
    replay-value win.
-5. **Joint missions / multi-rocket EOR** — adds depth to the
-   architecture choice that's otherwise flavour-only at the
-   moment.
-6. **Persistent cross-game records** — museum that survives
+4. **Wire retirement + defection consequences** — both have data
+   model hooks but don't actually remove astronauts; a one-day
+   polish round.
+5. **Persistent cross-game records** — museum that survives
    server restarts; polish wishlist.
+6. **Asymmetric tech trees** — divergence wishlist; biggest
+   identity-shift after the Italian Brainrot roster.
 
 ## Items intentionally **not** on the audit
 
