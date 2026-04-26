@@ -124,3 +124,136 @@ def test_watermark_panel_renders_visible_pixels() -> None:
     # well inside it and confirm alpha > 0.
     sample = overlay.surface.get_at((20, 460))
     assert sample.a > 0, f"watermark badge should paint visible pixels, got {sample}"
+
+
+# -----------------------------------------------------------------------
+# ResultPanel — first real panel migrated onto the overlay
+# -----------------------------------------------------------------------
+def _make_launch_report(**overrides):
+    """Build a minimal LaunchReport for panel rendering tests."""
+    from baris.state import LaunchReport, MissionId
+    base = dict(
+        side="USA",
+        username="Tester",
+        mission_id=MissionId.SUBORBITAL.value,
+        mission_name="Sub-orbital flight",
+        rocket="Atlas",
+        rocket_class="Light",
+        success=True,
+        effective_success=0.85,
+        prestige_delta=3,
+        reliability_before=60,
+        reliability_after=65,
+    )
+    base.update(overrides)
+    return LaunchReport(**base)
+
+
+def test_result_panel_animates_then_settles() -> None:
+    """is_animating() returns True while the cinematic ticker is
+    still revealing rows, then False once every row has appeared."""
+    from baris.client.ui_overlay.panels import (
+        PHASE_TICKER_STEP_S, ResultPanel,
+    )
+    now = [0.0]
+    panel = ResultPanel(
+        screen_size=(1280, 720),
+        report=_make_launch_report(),
+        is_own=True,
+        on_continue=lambda: None,
+        clock=lambda: now[0],
+    )
+    # SUBORBITAL has 2 phases. Animation lasts ~ 2 * step_s + slack.
+    assert panel.is_animating() is True
+    now[0] = 2 * PHASE_TICKER_STEP_S + 0.5
+    assert panel.is_animating() is False
+
+
+def test_result_panel_continue_button_invokes_callback() -> None:
+    """Clicking the Continue button fires on_continue(). Mouse
+    coordinates are translated by the host before reaching us, so
+    here we forge them directly into the panel's button rect."""
+    from baris.client.ui_overlay.panels import ResultPanel
+    fired = {"n": 0}
+    panel = ResultPanel(
+        screen_size=(1280, 720),
+        report=_make_launch_report(),
+        is_own=True,
+        on_continue=lambda: fired.__setitem__("n", fired["n"] + 1),
+    )
+    cx, cy = panel.continue_button.rect.center
+    panel.handle_event(pygame.event.Event(
+        pygame.MOUSEBUTTONDOWN, pos=(cx, cy), button=1,
+    ))
+    panel.handle_event(pygame.event.Event(
+        pygame.MOUSEBUTTONUP, pos=(cx, cy), button=1,
+    ))
+    assert fired["n"] == 1
+
+
+def test_result_panel_space_key_invokes_callback() -> None:
+    """Pressing Space / Enter on the result panel skips ahead the
+    same way the legacy Ursina version did."""
+    from baris.client.ui_overlay.panels import ResultPanel
+    fired = {"n": 0}
+    panel = ResultPanel(
+        screen_size=(1280, 720),
+        report=_make_launch_report(),
+        is_own=True,
+        on_continue=lambda: fired.__setitem__("n", fired["n"] + 1),
+    )
+    panel.handle_event(pygame.event.Event(pygame.KEYDOWN, key=pygame.K_SPACE))
+    assert fired["n"] == 1
+
+
+def test_result_panel_renders_failure_banner() -> None:
+    """Failed mission paints a red banner with the failed phase named
+    in the sub-line. Smoke-tests the banner branch without asserting
+    on pixel values — we just check the panel paints SOME pixels in
+    the banner area without throwing."""
+    from baris.client.ui_overlay.overlay import PygameOverlay
+    from baris.client.ui_overlay.panels import ResultPanel
+    overlay = PygameOverlay((1280, 720))
+    panel = ResultPanel(
+        screen_size=(1280, 720),
+        report=_make_launch_report(
+            success=False,
+            failed_phase="Re-entry",
+            effective_success=0.45,
+        ),
+        is_own=True,
+        on_continue=lambda: None,
+    )
+    overlay.add_panel(panel)
+    overlay.render()
+    # Banner sits at (cx-280, 190) of size (560, 90). Sample a pixel
+    # well inside it; alpha must be > 0.
+    sample = overlay.surface.get_at((640, 230))
+    assert sample.a > 0
+
+
+def test_result_panel_renders_partial_banner_with_abort_label() -> None:
+    """P-deep partial outcomes render the abort_label in the
+    sub-line (e.g. 'aborted to Earth orbit after Trans-lunar
+    injection'). The overlay version reuses the same logic the
+    Ursina banner had."""
+    from baris.client.ui_overlay.overlay import PygameOverlay
+    from baris.client.ui_overlay.panels import ResultPanel
+    overlay = PygameOverlay((1280, 720))
+    panel = ResultPanel(
+        screen_size=(1280, 720),
+        report=_make_launch_report(
+            success=False,
+            partial=True,
+            failed_phase="Trans-lunar injection",
+            abort_label="aborted to Earth orbit",
+            effective_success=0.55,
+        ),
+        is_own=True,
+        on_continue=lambda: None,
+    )
+    overlay.add_panel(panel)
+    # Should render without crashing; banner pixels visible.
+    overlay.render()
+    sample = overlay.surface.get_at((640, 230))
+    assert sample.a > 0

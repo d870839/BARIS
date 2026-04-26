@@ -878,7 +878,21 @@ class BarisClient(Entity):
         self.current_rocket_class = desired
 
     def input(self, key: str) -> None:
+        # UI refactor — forward mouse clicks to the overlay so the
+        # overlay's Buttons can hit-test. Ursina raises 'left mouse
+        # down' / 'left mouse up' as separate input events.
+        if hasattr(self, "overlay_host"):
+            if key == "left mouse down":
+                self.overlay_host.forward_click(button=1, down=True)
+            elif key == "left mouse up":
+                self.overlay_host.forward_click(button=1, down=False)
         if self.panel_id == "result" and key in ("space", "enter", "escape"):
+            self.advance_result_panel()
+            return
+        # If the overlay's result panel is open, the same keys advance it.
+        if getattr(self, "_overlay_result", None) is not None and key in (
+            "space", "enter", "escape",
+        ):
             self.advance_result_panel()
             return
         if self.launch_phase == "ascend" and key in ("space", "enter"):
@@ -1100,8 +1114,30 @@ class BarisClient(Entity):
         elif panel_id == "sabotage":
             self.panel = panels_info.build_sabotage_panel(self, camera.ui)
         elif panel_id == "result" and report is not None:
-            self.panel = panels_action.build_result_panel(self, camera.ui, report)
+            # UI refactor step 3 — result panel migrated onto the
+            # pygame overlay. The Ursina-entity build_result_panel
+            # is retired; the OverlayPanel handles drawing + input.
+            self._open_overlay_result_panel(report)
         self._enter_ui_mode()
+
+    def _open_overlay_result_panel(self, report) -> None:
+        from baris.client.ui_overlay.panels import ResultPanel
+        # Drop any prior result panel before stacking a new one (e.g.
+        # when the launch sequence advances to the next report).
+        if getattr(self, "_overlay_result", None) is not None:
+            self.overlay.remove_panel(self._overlay_result)
+            self._overlay_result = None
+        me = self.me()
+        is_own = bool(me and me.side and report.side == me.side.value)
+        self._overlay_result = ResultPanel(
+            screen_size=self.overlay.size,
+            report=report,
+            is_own=is_own,
+            on_continue=self.advance_result_panel,
+        )
+        self.overlay.add_panel(self._overlay_result)
+        # The legacy panel id is kept for the existing close path.
+        self.panel = None
 
     def close_current_panel(self) -> None:
         """Public: callable from panel buttons. Lobby panel can't be closed
@@ -1116,6 +1152,10 @@ class BarisClient(Entity):
             destroy(self.panel)
         self.panel = None
         self.panel_id = None
+        # UI refactor — also detach any overlay panel currently open.
+        if getattr(self, "_overlay_result", None) is not None:
+            self.overlay.remove_panel(self._overlay_result)
+            self._overlay_result = None
 
     def _enter_ui_mode(self) -> None:
         self.player.enabled = False

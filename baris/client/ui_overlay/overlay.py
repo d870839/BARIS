@@ -59,6 +59,15 @@ class OverlayPanel:
         """Default: ignore. Override in interactive subclasses."""
         return
 
+    def is_animating(self) -> bool:
+        """Return True while the panel needs continuous redraws —
+        e.g. a cinematic ticker that reveals new rows on a timer.
+        The overlay's render() loop reads this once per frame and
+        keeps marking itself dirty so the panel keeps repainting
+        without waiting for an event. Default: False (most panels
+        only repaint when events arrive)."""
+        return False
+
 
 class PygameOverlay:
     """Shared overlay state: the off-screen Surface every panel
@@ -142,6 +151,12 @@ class PygameOverlay:
         re-uploading the texture when nothing changed). The host
         always calls this; the host alone decides whether to push
         the new bytes to the GPU."""
+        # Animated panels (e.g. cinematic phase ticker) ask the
+        # overlay to keep repainting every frame even when no event
+        # arrives. We re-flag dirty here BEFORE the early-return
+        # check so the next frame definitely repaints.
+        if any(p.is_animating() for p in self._panels):
+            self._dirty = True
         if not self._dirty and not self._pending_events:
             return False
         events = self._pending_events
