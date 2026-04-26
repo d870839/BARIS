@@ -3640,7 +3640,9 @@ def test_applicable_components_per_mission_class() -> None:
     manned_orbital = MISSIONS_BY_ID[MissionId.MANNED_ORBITAL]
     landing = MISSIONS_BY_ID[MissionId.MANNED_LUNAR_LANDING]
     assert applicable_components(sub) == ()
-    assert applicable_components(sat) == (Module.PROBE,)
+    # Q-deep — the satellite probe lives in PROBE_INNER (low-energy
+    # Earth-orbit bus), not the legacy generic PROBE bucket.
+    assert applicable_components(sat) == (Module.PROBE_INNER,)
     assert applicable_components(manned_orbital) == (Module.CAPSULE,)
     assert set(applicable_components(landing)) == {Module.CAPSULE, Module.LM}
 
@@ -3650,9 +3652,15 @@ def test_component_bonus_zero_when_at_neutral_50() -> None:
     state = _two_player_state()
     start_game(state, rng=random.Random(1))
     me = state.players[0]
-    me.reliability[Module.CAPSULE.value] = 50
-    me.reliability[Module.PROBE.value] = 50
-    me.reliability[Module.LM.value] = 50
+    # Set every soft-bonus component to neutral 50 so no mission's
+    # component_reliability_bonus can read a non-50 value. Q-deep
+    # extended the soft-bonus set with PROBE_LUNAR/INNER/OUTER.
+    for m in (
+        Module.CAPSULE, Module.LM,
+        Module.PROBE, Module.PROBE_LUNAR,
+        Module.PROBE_INNER, Module.PROBE_OUTER,
+    ):
+        me.reliability[m.value] = 50
     for m in MISSIONS_BY_ID.values():
         assert component_reliability_bonus(me, m) == 0.0
 
@@ -4332,6 +4340,86 @@ def test_qdeep_service_module_gates_manned_lunar_orbit() -> None:
     assert missing_modules(me, mlo) == [Module.SERVICE_MODULE]
     me.reliability[Module.SERVICE_MODULE.value] = 70
     assert missing_modules(me, mlo) == []
+
+
+def test_qdeep_probe_family_picks_destination_class() -> None:
+    """Q-deep — applicable_components routes each unmanned mission to
+    its destination-specific probe family. Lunar pass uses PROBE_LUNAR,
+    Venus uses PROBE_INNER, Saturn uses PROBE_OUTER. Sub-orbital still
+    skips the probe track entirely; manned flights still use CAPSULE."""
+    from baris.resolver import applicable_components
+
+    lunar = applicable_components(MISSIONS_BY_ID[MissionId.LUNAR_PASS])
+    assert Module.PROBE_LUNAR in lunar
+    assert Module.PROBE_INNER not in lunar
+    assert Module.PROBE_OUTER not in lunar
+
+    venus = applicable_components(MISSIONS_BY_ID[MissionId.VENUS_FLYBY])
+    assert Module.PROBE_INNER in venus
+    assert Module.PROBE_LUNAR not in venus
+
+    saturn = applicable_components(MISSIONS_BY_ID[MissionId.SATURN_FLYBY])
+    assert Module.PROBE_OUTER in saturn
+
+    sub = applicable_components(MISSIONS_BY_ID[MissionId.SUBORBITAL])
+    assert all(p not in sub for p in (
+        Module.PROBE, Module.PROBE_LUNAR, Module.PROBE_INNER, Module.PROBE_OUTER,
+    ))
+
+    manned = applicable_components(MISSIONS_BY_ID[MissionId.MANNED_ORBITAL])
+    assert Module.CAPSULE in manned
+    assert all(p not in manned for p in (
+        Module.PROBE_LUNAR, Module.PROBE_INNER, Module.PROBE_OUTER,
+    ))
+
+
+def test_qdeep_probe_family_drives_component_bonus() -> None:
+    """Boosting PROBE_LUNAR should lift a lunar-pass roll without
+    affecting Venus (which uses PROBE_INNER). Verifies the
+    component_reliability_bonus actually reads the per-family value
+    rather than a generic PROBE bucket."""
+    from baris.resolver import component_reliability_bonus
+
+    state = _two_player_state()
+    start_game(state, rng=random.Random(1))
+    me = state.players[0]
+    # Both probe families start at their COMPONENT_STARTING_RELIABILITY
+    # baseline. Boost only the lunar family.
+    me.reliability[Module.PROBE_LUNAR.value] = 90
+    me.reliability[Module.PROBE_INNER.value] = 30
+    lunar_bonus = component_reliability_bonus(
+        me, MISSIONS_BY_ID[MissionId.LUNAR_PASS],
+    )
+    venus_bonus = component_reliability_bonus(
+        me, MISSIONS_BY_ID[MissionId.VENUS_FLYBY],
+    )
+    assert lunar_bonus > venus_bonus, (
+        f"PROBE_LUNAR=90 should beat PROBE_INNER=30 ({lunar_bonus} vs {venus_bonus})"
+    )
+
+
+def test_qdeep_legacy_probe_save_seeds_new_families() -> None:
+    """Old saves only have a single PROBE reliability score. The
+    loader should clone it into all three tiered families so research
+    progress carries over."""
+    from baris.state import _player_from_dict
+    raw = {
+        "player_id": "x", "username": "X",
+        "side": Side.USA.value, "budget": 30, "prestige": 0,
+        "ready": True, "astronauts": [],
+        "reliability": {
+            Rocket.LIGHT.value: 0,
+            Rocket.MEDIUM.value: 0,
+            Rocket.HEAVY.value: 0,
+            Module.PROBE.value: 55,   # pre-split research
+        },
+        "mission_successes": {}, "architecture": None,
+        "turn_submitted": False,
+    }
+    p = _player_from_dict(raw)
+    assert p.module_reliability(Module.PROBE_LUNAR) == 55
+    assert p.module_reliability(Module.PROBE_INNER) == 55
+    assert p.module_reliability(Module.PROBE_OUTER) == 55
 
 
 def test_qdeep_legacy_lunar_kicker_save_seeds_new_kickers() -> None:

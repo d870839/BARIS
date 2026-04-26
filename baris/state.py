@@ -51,7 +51,7 @@ class Module(str, Enum):
     LUNAR_KICKER = "Lunar Kicker"        # legacy — see KICKER_A/B/C
     EVA_SUIT = "EVA Suit"
     CAPSULE = "Capsule"           # Phase Q — manned-flight component
-    PROBE = "Probe"               # Phase Q — unmanned-flight component
+    PROBE = "Probe"               # legacy — see PROBE_LUNAR/INNER/OUTER
     LM = "Lunar Module"           # Phase Q — lunar-landing component
     # Q-deep — tiered injection stages. A is the lightest (small
     # probes); C is the heaviest (lunar landing, outer-planet probes).
@@ -61,6 +61,12 @@ class Module(str, Enum):
     # Q-deep — Service Module gates all manned lunar work. Fails on the
     # CSM-class missions until research clears MIN_RELIABILITY_TO_LAUNCH.
     SERVICE_MODULE = "Service Module"
+    # Q-deep — probe families. Soft success bonuses, mirrored to the
+    # mission's destination class. PROBE_INNER also covers Earth orbit
+    # satellite payloads (low-energy bus shared with Venus / Mars).
+    PROBE_LUNAR = "Lunar Probe"
+    PROBE_INNER = "Inner Probe"
+    PROBE_OUTER = "Outer Probe"
 
 
 class Skill(str, Enum):
@@ -411,6 +417,12 @@ RD_SPEED: dict[str, float] = {
     Module.KICKER_B.value:        0.5,
     Module.KICKER_C.value:        0.3,
     Module.SERVICE_MODULE.value:  0.6,
+    # Q-deep — probe families. Inner probes share heritage with
+    # satellite buses so they research a hair faster than the
+    # lunar / outer specialists.
+    Module.PROBE_LUNAR.value:     0.8,
+    Module.PROBE_INNER.value:     0.9,
+    Module.PROBE_OUTER.value:     0.5,
 }
 RD_BATCH_COST = 3  # MB per roll
 
@@ -449,6 +461,12 @@ COMPONENT_STARTING_RELIABILITY: dict[str, int] = {
     Module.KICKER_B.value:        10,
     Module.KICKER_C.value:        0,
     Module.SERVICE_MODULE.value:  10,
+    # Q-deep — probe families. Inner probes seed a touch higher
+    # because they share heritage with satellite buses; outer probes
+    # are bleeding-edge and sit at zero.
+    Module.PROBE_LUNAR.value:     20,
+    Module.PROBE_INNER.value:     30,
+    Module.PROBE_OUTER.value:      0,
 }
 
 
@@ -1337,6 +1355,13 @@ def _player_from_dict(d: dict[str, Any]) -> Player:
     if legacy_kicker is not None and legacy_kicker > 0:
         for k in (Module.KICKER_A, Module.KICKER_B, Module.KICKER_C):
             raw_reliability.setdefault(k.value, legacy_kicker)
+    # Q-deep — same idea for the legacy generic PROBE track. Pre-split
+    # research becomes the seed for each tiered probe family so the
+    # player keeps their work.
+    legacy_probe = raw_reliability.get(Module.PROBE.value)
+    if legacy_probe is not None and legacy_probe > 0:
+        for p in (Module.PROBE_LUNAR, Module.PROBE_INNER, Module.PROBE_OUTER):
+            raw_reliability.setdefault(p.value, legacy_probe)
     for m in Module:
         raw_reliability.setdefault(
             m.value, COMPONENT_STARTING_RELIABILITY.get(m.value, 0),

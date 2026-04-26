@@ -146,18 +146,54 @@ def effective_base_success(player: Player, mission: Mission) -> float:
     return mission.base_success
 
 
+_INNER_PROBE_MISSIONS = frozenset({
+    MissionId.SATELLITE,
+    MissionId.ORBITAL,
+    MissionId.VENUS_FLYBY,
+    MissionId.MARS_FLYBY,
+    MissionId.MERCURY_FLYBY,
+})
+_OUTER_PROBE_MISSIONS = frozenset({
+    MissionId.JUPITER_FLYBY,
+    MissionId.SATURN_FLYBY,
+})
+_LUNAR_PROBE_MISSIONS = frozenset({
+    MissionId.LUNAR_PASS,
+    MissionId.LUNAR_ORBIT,
+    MissionId.LUNAR_LANDING,
+})
+
+
+def _probe_family(mission: Mission) -> Module | None:
+    """Q-deep — pick the probe family that applies to an unmanned
+    mission. Returns None for sub-orbital ballistic tests (no probe
+    track) and for any manned flight (those pull CAPSULE instead)."""
+    if mission.manned or mission.id == MissionId.SUBORBITAL:
+        return None
+    if mission.id in _LUNAR_PROBE_MISSIONS:
+        return Module.PROBE_LUNAR
+    if mission.id in _OUTER_PROBE_MISSIONS:
+        return Module.PROBE_OUTER
+    if mission.id in _INNER_PROBE_MISSIONS:
+        return Module.PROBE_INNER
+    return None
+
+
 def applicable_components(mission: Mission) -> tuple[Module, ...]:
     """Phase Q — non-rocket components that contribute reliability
     bonuses to this mission. Manned flights pull in CAPSULE; unmanned
-    flights pull in PROBE (sub-orbital is a ballistic test and skips
-    the probe track). Any lunar-landing variant additionally pulls in
-    LM. Mission-declared `requires_modules` are NOT pulled in here
-    because their reliability is already a hard gate at submit time."""
+    flights pull in the family-specific probe (lunar / inner / outer
+    — sub-orbital is a ballistic test and skips the probe track).
+    Any lunar-landing variant additionally pulls in LM. Mission-
+    declared `requires_modules` are NOT pulled in here because their
+    reliability is already a hard gate at submit time."""
     components: list[Module] = []
     if mission.manned:
         components.append(Module.CAPSULE)
-    elif mission.id != MissionId.SUBORBITAL:
-        components.append(Module.PROBE)
+    else:
+        family = _probe_family(mission)
+        if family is not None:
+            components.append(family)
     if mission.id in (
         MissionId.LUNAR_LANDING,
         MissionId.MANNED_LUNAR_LANDING,
