@@ -52,6 +52,14 @@ class OverlayHost:
         # First frame: the overlay's _dirty defaults to True so a
         # one-shot upload happens on the next update().
         self._uploaded_once = False
+        # Last forwarded cursor position (overlay-pixel space). Used
+        # to dedupe MOUSEMOTION events — without this every frame
+        # would post a fresh motion event even when the cursor was
+        # stationary, which would dirty the overlay, force a re-
+        # render, and re-upload the full surface bytes to the GPU.
+        # That's the difference between idle-frame "free" and
+        # idle-frame "100MB/s of texture transfer".
+        self._last_mouse_xy: tuple[int, int] | None = None
 
     @staticmethod
     def _ui_size() -> tuple[float, float]:
@@ -103,12 +111,18 @@ class OverlayHost:
         MOUSEMOTION event to the overlay so panels see hover state.
         Click events go through forward_click below — Ursina raises
         on_click on the host entity, but for the overlay we want
-        the underlying mouse event so Buttons can hit-test."""
+        the underlying mouse event so Buttons can hit-test.
+
+        Skips the post entirely if the cursor hasn't moved since
+        the previous frame — see _last_mouse_xy for why."""
         from ursina import mouse  # imported here so test code can
         # stub the engine without importing Ursina at module load.
         if mouse.x is None or mouse.y is None:
             return
         px, py = self._mouse_to_pixel(mouse.x, mouse.y)
+        if self._last_mouse_xy == (px, py):
+            return
+        self._last_mouse_xy = (px, py)
         self.overlay.post_mouse_motion((px, py))
 
     def forward_click(self, button: int = 1, down: bool = True) -> None:

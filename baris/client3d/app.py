@@ -964,9 +964,23 @@ class BarisClient(Entity):
             self._maybe_close_lobby_on_start()
         elif mtype == protocol.ERROR:
             self.status_text.text = f"Error: {msg.get('message', '?')}"
+            # Pin the error for a few seconds so the player can
+            # actually read it; otherwise the next STATE broadcast
+            # (or the next refresh tick) overwrites it within
+            # milliseconds. _refresh_status checks this timestamp
+            # and skips its overwrite while the error is still
+            # within the pin window.
+            from time import monotonic
+            self._status_error_pin_until = monotonic() + 5.0
         self._refresh_status()
 
     def _refresh_status(self) -> None:
+        # Don't trample a recent error message — see the pin set in
+        # _handle_message's ERROR branch. Once the timer expires the
+        # next refresh overwrites normally.
+        from time import monotonic
+        if monotonic() < getattr(self, "_status_error_pin_until", 0.0):
+            return
         if self.state is None:
             return
         me = self.me()
