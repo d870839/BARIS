@@ -1352,8 +1352,20 @@ class BarisClient(Entity):
 
     def intel_execute_sabotage(self, card_id: str) -> None:
         """Fire EXECUTE_SABOTAGE. Server validates budget + per-season
-        gate, applies the per-card effect, and echoes back state.
-        Refresh the open panel so the in-progress card list updates."""
+        gate, applies the per-card effect, and echoes back state. We
+        also do a client-side sabotage_available() check first so the
+        prompt shows a "why" message if the panel was stale and the
+        card became unavailable between render and click."""
+        from baris.resolver import sabotage_available
+        from baris.state import get_sabotage_card
+        me = self.me()
+        if me is not None and self.state is not None:
+            ok, why = sabotage_available(me, self.state, card_id)
+            if not ok:
+                card = get_sabotage_card(card_id)
+                name = card.name if card else card_id
+                self.prompt_text.text = f"{name} unavailable — {why}"
+                return
         self.net.send(protocol.EXECUTE_SABOTAGE, card_id=card_id)
         self._refresh_current_panel()
 

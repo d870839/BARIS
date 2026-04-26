@@ -741,10 +741,20 @@ class Client:
             elif self.active_tab == TAB_INTEL and event.key == pygame.K_i:
                 self.net.send(protocol.REQUEST_INTEL)
             elif self.active_tab == TAB_INTEL and event.key in SABOTAGE_KEYS:
-                self.net.send(
-                    protocol.EXECUTE_SABOTAGE,
-                    card_id=SABOTAGE_KEYS[event.key],
-                )
+                # Client-side feasibility check so a refused card surfaces
+                # a "why" message instead of a silent server-side reject.
+                from baris.resolver import sabotage_available
+                from baris.state import get_sabotage_card
+                card_id = SABOTAGE_KEYS[event.key]
+                ok, why = sabotage_available(me, self.state, card_id)
+                if not ok:
+                    card = get_sabotage_card(card_id)
+                    name = card.name if card else card_id
+                    self.status = f"{name} unavailable — {why}"
+                else:
+                    self.net.send(
+                        protocol.EXECUTE_SABOTAGE, card_id=card_id,
+                    )
             elif event.key == pygame.K_RETURN:
                 self._submit_turn(me)
         return True
