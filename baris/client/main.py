@@ -212,6 +212,10 @@ class Client:
         self.rd_spend: int = 10
         self.queued_mission: MissionId | None = None
         self.queued_objectives: set[ObjectiveId] = set()
+        # Phase O — Astronaut.id values the player has hand-picked for
+        # the queued manned mission. Empty list = "let the resolver
+        # auto-pick top-skilled" (the default behaviour).
+        self.queued_crew: list[str] = []
 
         self.scene: str = MENU
         self.active_tab: str = TAB_HUB
@@ -249,6 +253,7 @@ class Client:
         self.joined_sent = False
         self.queued_mission = None
         self.queued_objectives.clear()
+        self.queued_crew.clear()
         self.report_queue = []
         self.report_idx = 0
         self._consumed_launch_sig = None
@@ -652,6 +657,8 @@ class Client:
                 return True
             if event.key == pygame.K_ESCAPE and self.queued_mission is not None:
                 self.queued_mission = None
+                self.queued_objectives.clear()
+                self.queued_crew.clear()
                 return True
             # Architecture is accessible regardless of tab (one-time action).
             if (
@@ -683,6 +690,7 @@ class Client:
                 if idx < len(visible) and me.scheduled_launch is None:
                     self.queued_mission = visible[idx].id
                     self.queued_objectives.clear()
+                    self.queued_crew.clear()
             elif self.active_tab == TAB_MISSIONS and event.key in OBJECTIVE_KEYS and self.queued_mission:
                 obj_id = OBJECTIVE_KEYS[event.key]
                 # only toggle if this objective belongs to the queued mission
@@ -692,6 +700,15 @@ class Client:
                         self.queued_objectives.discard(obj_id)
                     else:
                         self.queued_objectives.add(obj_id)
+            elif (
+                self.active_tab == TAB_MISSIONS
+                and self.queued_mission is not None
+                and (event.mod & pygame.KMOD_SHIFT)
+                and event.key in MISSION_KEYS
+            ):
+                # Phase O — Shift+digit toggles a crew member at that
+                # index from the player's flight-ready roster.
+                self._toggle_queued_crew(me, MISSION_KEYS[event.key])
             elif self.active_tab == TAB_ASTRONAUTS and event.key == pygame.K_r:
                 self.net.send(protocol.RECRUIT_GROUP)
             elif self.active_tab == TAB_INTEL and event.key == pygame.K_i:
@@ -719,6 +736,7 @@ class Client:
             "rd_spend": min(self.rd_spend, me.budget),
             "launch": self.queued_mission.value if self.queued_mission else None,
             "objectives": [o.value for o in self.queued_objectives],
+            "crew": list(self.queued_crew),
         }
         if self.rd_target_module is not None:
             payload["rd_module"] = self.rd_target_module.value
@@ -727,6 +745,7 @@ class Client:
         self.net.send(protocol.END_TURN, **payload)
         self.queued_mission = None
         self.queued_objectives.clear()
+        self.queued_crew.clear()
 
     def _handle_briefing_event(self, event: pygame.event.Event) -> bool:
         me = self._me()
@@ -1516,10 +1535,16 @@ class Client:
             )
 
         # Objectives strip — only when the queued mission has any.
+        objs_height = 0
         if self.queued_mission is not None:
             objs = objectives_for(self.queued_mission)
             if objs:
                 self._render_objective_toggles(me, objs, (20, panel_y + 68))
+                objs_height = 24 + 20 * len(objs) + 8
+            # Crew picker — under the objectives strip, only for manned missions.
+            mission = MISSIONS_BY_ID.get(self.queued_mission)
+            if mission is not None and mission.manned:
+                self._render_crew_picker(me, (20, panel_y + 68 + objs_height))
 
     # --- Log tab --------------------------------------------------------
     def _render_tab_intel(self, me: Player | None, opp: Player | None) -> None:
@@ -1800,6 +1825,72 @@ class Client:
         for line in self.state.log[-30:]:
             draw_text(self.screen, line, (36, y), size=15, color=FG)
             y += 22
+
+    def _flight_ready_pickable(self, me: Player) -> list[Astronaut]:
+        """The astronauts you can hand-pick for a manned launch right
+        now: active + no training/hospital. Order is roster order so
+        the Shift+digit hotkey indices stay stable across refreshes."""
+        return [a for a in me.astronauts if a.flight_ready]
+
+    def _toggle_queued_crew(self, me: Player, idx: int) -> None:
+        """Add or remove the astronaut at flight-ready-roster index `idx`
+        from the queued crew, capped at the queued mission's crew_size.
+        No-op if the queued mission isn't manned or the index is out of
+        range."""
+        if self.queued_mission is None:
+            return
+        mission = MISSIONS_BY_ID.get(self.queued_mission)
+        if mission is None or not mission.manned:
+            return
+        pool = self._flight_ready_pickable(me)
+        if idx < 0 or idx >= len(pool):
+            return
+        astro_id = pool[idx].id
+        if astro_id in self.queued_crew:
+            self.queued_crew.remove(astro_id)
+            return
+        if len(self.queued_crew) >= mission.crew_size:
+            # Already at cap — the player must drop someone first.
+            return
+        self.queued_crew.append(astro_id)
+
+    def _render_crew_picker(self, me: Player, pos: tuple[int, int]) -> None:
+        """Crew picker shown when a manned mission is queued. Lists the
+        flight-ready roster with Shift+digit hotkeys; ticks the chosen
+        crew. Empty pick = auto top-skilled (the legacy default)."""
+        if self.queued_mission is None:
+            return
+        mission = MISSIONS_BY_ID.get(self.queued_mission)
+        if mission is None or not mission.manned:
+            return
+        from baris.state import character_portrait
+        x, y = pos
+        skill_attr = mission.primary_skill.value if mission.primary_skill else "capsule"
+        title = (
+            f"CREW (Shift+digit to toggle — pick {mission.crew_size}, "
+            f"or leave empty for auto top-skilled)"
+        )
+        draw_text(self.screen, title, (x + 16, y), size=14, color=HIGHLIGHT, bold=True)
+        cy = y + 24
+        pool = self._flight_ready_pickable(me)
+        if not pool:
+            draw_text(self.screen, "(no flight-ready astronauts)",
+                      (x + 16, cy), size=14, color=DIM)
+            return
+        for idx, astro in enumerate(pool[:11]):  # match MISSION_KEYS span (1..0..-)
+            picked = astro.id in self.queued_crew
+            marker = "[X]" if picked else "[ ]"
+            glyph, _ = character_portrait(astro.name)
+            primary = getattr(astro, skill_attr, 0)
+            label_color = HIGHLIGHT if picked else FG
+            hint = "0" if idx == 9 else ("-" if idx == 10 else str(idx + 1))
+            line = (
+                f"{marker} (S+{hint}) {glyph} {astro.name}  "
+                f"{mission.primary_skill.value if mission.primary_skill else 'capsule'}: {primary}  "
+                f"mood {astro.mood} / {astro.compatibility}"
+            )
+            draw_text(self.screen, line, (x + 16, cy), size=14, color=label_color)
+            cy += 20
 
     def _render_objective_toggles(self, me: Player, objs: tuple, pos: tuple[int, int]) -> None:
         x, y = pos

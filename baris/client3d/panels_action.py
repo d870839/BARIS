@@ -294,13 +294,13 @@ def build_mc_panel(client: "BarisClient", parent: Entity) -> Entity:
 
         # Objective toggles.
         obj_list = objectives_for(m.id)
+        oy = -0.13
         if obj_list:
             Text(
                 text="Objectives (click to toggle):",
                 parent=root, position=(0.22, -0.08),
                 origin=(0, 0), z=-0.01, scale=0.9, color=color.rgb32(160, 170, 195),
             )
-            oy = -0.13
             for obj in obj_list:
                 queued = obj.id in client.queued_objectives
                 risk = ""
@@ -319,6 +319,37 @@ def build_mc_panel(client: "BarisClient", parent: Entity) -> Entity:
                 )
                 btn.on_click = (lambda oid=obj.id: client.mc_toggle_objective(oid))
                 oy -= 0.04
+
+        # Phase O — manual crew assignment. Inline picker beneath the
+        # objectives column, only for manned missions. Empty list is
+        # the legacy "auto-pick top-skilled" default.
+        if m.manned:
+            from baris.state import character_portrait
+            cy = oy - 0.02
+            Text(
+                text=(
+                    f"Crew — pick {m.crew_size} (or leave empty for "
+                    "auto top-skilled):"
+                ),
+                parent=root, position=(0.22, cy),
+                origin=(0, 0), z=-0.01, scale=0.85, color=color.rgb32(160, 170, 195),
+            )
+            cy -= 0.04
+            pool = [a for a in me.astronauts if a.flight_ready]
+            for astro in pool[:8]:
+                picked = astro.id in client.queued_crew
+                marker = "[x]" if picked else "[ ]"
+                glyph, _ = character_portrait(astro.name)
+                btn = Button(
+                    parent=root,
+                    text=f"{marker} {glyph} {astro.name[:18]}",
+                    position=(0.22, cy, -0.02), scale=(0.4, 0.034),
+                    color=(
+                        color.rgb32(80, 100, 60) if picked else color.rgb32(34, 44, 70)
+                    ),
+                )
+                btn.on_click = (lambda aid=astro.id: client.mc_toggle_crew(aid))
+                cy -= 0.038
 
     # Architecture (Tier 3 only, one-shot)
     if me.is_tier_unlocked(ProgramTier.THREE) and me.architecture is None:

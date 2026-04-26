@@ -3255,3 +3255,161 @@ def test_legacy_player_dict_backfills_sabotage_used_on() -> None:
     }
     p = _player_from_dict(raw)
     assert p.sabotage_used_on == ""
+
+
+# ----------------------------------------------------------------------
+# Phase O — manual crew assignment
+# ----------------------------------------------------------------------
+
+
+def _setup_manned_launch(state: GameState) -> tuple:
+    """Helper: bring USA to a state where it can submit a manned
+    multi-crew orbital this turn. Returns (me, opp, mission)."""
+    me = state.players[0]
+    opp = state.players[1]
+    me.reliability[Rocket.MEDIUM.value] = 70
+    me.budget = 200
+    # MULTI_CREW_ORBITAL is Tier 2; need a Tier-1 success on record
+    # to unlock the tier.
+    me.mission_successes[MissionId.SUBORBITAL.value] = 1
+    return me, opp, MissionId.MULTI_CREW_ORBITAL
+
+
+def test_manual_crew_chosen_pilots_actually_fly() -> None:
+    """Hand-pick a crew that's NOT the top-skilled and confirm the
+    resolver flies them — i.e. the chosen astronauts get the +mood
+    bump on a successful launch."""
+    state = _two_player_state()
+    start_game(state, rng=random.Random(1))
+    me, _, mid = _setup_manned_launch(state)
+    # Make two astronauts top-skilled in the mission's primary skill;
+    # we'll pick two mid-skilled ones instead.
+    from baris.state import MISSIONS_BY_ID
+    skill_attr = MISSIONS_BY_ID[mid].primary_skill.value
+    for a in me.astronauts:
+        setattr(a, skill_attr, 30)
+    setattr(me.astronauts[0], skill_attr, 95)
+    setattr(me.astronauts[1], skill_attr, 95)   # auto-pick would take these
+    chosen = me.astronauts[2:4]                  # pick two mid-skilled
+    chosen_ids = [a.id for a in chosen]
+    submit_turn(me, launch=mid, crew=chosen_ids)
+    submit_turn(state.players[1], launch=None)
+    with _no_news():
+        resolve_turn(state, rng=_FixedRng(0.0))           # promote
+        _fire_scheduled_launch(state, _FixedRng(0.0))     # fire
+
+    # Chosen crew got the success-bump; auto-top didn't fly. Mood drift
+    # nudges everyone toward 60 each season, so check the gap rather
+    # than absolute values: a flier ends up clearly above a non-flier.
+    auto_top = [me.astronauts[0], me.astronauts[1]]
+    for chosen_astro in chosen:
+        for non_flyer in auto_top:
+            assert chosen_astro.mood > non_flyer.mood, (
+                f"{chosen_astro.name} (mood {chosen_astro.mood}) didn't fly; "
+                f"{non_flyer.name} (mood {non_flyer.mood}) did"
+            )
+
+
+def test_manual_crew_falls_back_to_auto_if_invalid() -> None:
+    state = _two_player_state()
+    start_game(state, rng=random.Random(1))
+    me, _, mid = _setup_manned_launch(state)
+    # Wrong-sized crew — MULTI_CREW_ORBITAL needs 2, we send only 1.
+    # Should fall back to auto-pick rather than reject the launch.
+    submit_turn(me, launch=mid, crew=[me.astronauts[0].id])
+    assert me.pending_launch == mid.value      # launch still queued
+    assert me.pending_crew == []                # but with no manual override
+
+
+def test_manual_crew_rejected_if_member_not_flight_ready() -> None:
+    state = _two_player_state()
+    start_game(state, rng=random.Random(1))
+    me, _, mid = _setup_manned_launch(state)
+    me.astronauts[0].basic_training_remaining = 2  # disqualifies them
+    submit_turn(
+        me, launch=mid,
+        crew=[me.astronauts[0].id, me.astronauts[1].id],
+    )
+    assert me.pending_crew == []                # full pick rejected → auto
+
+
+def test_manual_crew_promoted_onto_scheduled_launch() -> None:
+    state = _two_player_state()
+    start_game(state, rng=random.Random(1))
+    me, _, mid = _setup_manned_launch(state)
+    crew_ids = [a.id for a in me.astronauts[3:5]]
+    submit_turn(me, launch=mid, crew=crew_ids)
+    submit_turn(state.players[1], launch=None)
+    with _no_news():
+        resolve_turn(state, rng=_FixedRng(0.99))
+    sched = me.pads[0].scheduled_launch
+    assert sched is not None
+    assert sched.crew == crew_ids
+    # And submit_turn cleared pending_crew once promoted.
+    assert me.pending_crew == []
+
+
+def test_resolver_falls_back_when_chosen_crew_dies_before_launch() -> None:
+    """Sabotage / etc. could KIA an astronaut between schedule and
+    resolve. The resolver should fall back to auto top-skilled."""
+    state = _two_player_state()
+    start_game(state, rng=random.Random(1))
+    me, _, mid = _setup_manned_launch(state)
+    crew_ids = [a.id for a in me.astronauts[3:5]]
+    submit_turn(me, launch=mid, crew=crew_ids)
+    submit_turn(state.players[1], launch=None)
+    with _no_news():
+        resolve_turn(state, rng=_FixedRng(0.99))
+    # Knock out the chosen crew between schedule and fire.
+    me.astronauts[3].status = AstronautStatus.KIA.value
+    with _no_news():
+        _fire_scheduled_launch(state, _FixedRng(0.0))
+    # Mission should still have flown (auto-picked replacement crew).
+    assert any(
+        m.year == state.year - 0
+        and m.mission_id == mid.value
+        for m in state.mission_history
+    )
+
+
+def test_scheduled_launch_dict_roundtrip_preserves_crew() -> None:
+    state = _two_player_state()
+    start_game(state, rng=random.Random(1))
+    me, _, mid = _setup_manned_launch(state)
+    crew_ids = [a.id for a in me.astronauts[3:5]]
+    submit_turn(me, launch=mid, crew=crew_ids)
+    submit_turn(state.players[1], launch=None)
+    with _no_news():
+        resolve_turn(state, rng=_FixedRng(0.99))
+    restored = GameState.from_dict(state.to_dict())
+    sched = restored.players[0].pads[0].scheduled_launch
+    assert sched is not None
+    assert sched.crew == crew_ids
+
+
+def test_legacy_scheduled_launch_dict_backfills_crew() -> None:
+    from baris.state import _scheduled_launch_from_dict
+    raw = {
+        "mission_id": "suborbital",
+        "rocket_class": "Light",
+        "launch_cost_total": 10,
+        "assembly_cost_paid": 3,
+        "launch_cost_remaining": 7,
+        "objectives": [],
+    }
+    sl = _scheduled_launch_from_dict(raw)
+    assert sl is not None
+    assert sl.crew == []
+
+
+def test_legacy_player_dict_backfills_pending_crew() -> None:
+    from baris.state import _player_from_dict
+    raw = {
+        "player_id": "x", "username": "X",
+        "side": Side.USA.value, "budget": 30, "prestige": 0,
+        "ready": True, "astronauts": [],
+        "mission_successes": {}, "architecture": None,
+        "turn_submitted": False,
+    }
+    p = _player_from_dict(raw)
+    assert p.pending_crew == []

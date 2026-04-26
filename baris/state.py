@@ -825,6 +825,11 @@ class Player:
     pending_rd_spend: int = 0
     pending_launch: str | None = None      # MissionId.value or None
     pending_objectives: list[str] = field(default_factory=list)  # ObjectiveId.value list
+    # Phase O — manual crew assignment. List of Astronaut.id values
+    # the player hand-picked for the next manned launch. Empty means
+    # "auto-pick top-skilled" (the legacy default). Cleared when a
+    # launch is promoted onto a pad.
+    pending_crew: list[str] = field(default_factory=list)
     # Phase E — launch pads. Each pad is a parallel VAB slot: new submits
     # land in the first available pad and each pad resolves independently
     # the following turn. Catastrophic failures damage the launching pad
@@ -1033,6 +1038,8 @@ def _player_from_dict(d: dict[str, Any]) -> Player:
     data.setdefault("last_review_year", 0)
     # DIRTY TRICKS — legacy saves predate sabotage.
     data.setdefault("sabotage_used_on", "")
+    # Phase O — legacy saves predate manual crew assignment.
+    data.setdefault("pending_crew", [])
     return Player(**data)
 
 
@@ -1195,6 +1202,9 @@ class ScheduledLaunch:
     architecture: str | None = None
     scheduled_year: int = 0
     scheduled_season: str = ""
+    # Phase O — Astronaut.id values chosen at submit time. Empty list
+    # means "let the resolver auto-pick top-skilled when this fires".
+    crew: list[str] = field(default_factory=list)
 
 
 def _scheduled_launch_from_dict(d: dict[str, Any] | None) -> ScheduledLaunch | None:
@@ -1202,6 +1212,8 @@ def _scheduled_launch_from_dict(d: dict[str, Any] | None) -> ScheduledLaunch | N
         return None
     data = dict(d)
     data.setdefault("objectives", [])
+    # Phase O — legacy saves predate manual crew picks.
+    data.setdefault("crew", [])
     return ScheduledLaunch(**data)
 
 

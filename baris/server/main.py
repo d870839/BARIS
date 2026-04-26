@@ -169,6 +169,8 @@ async def handle_end_turn(player: Player, msg: dict[str, Any]) -> None:
             objectives.append(ObjectiveId(raw_obj))
         except ValueError:
             continue
+    raw_crew = msg.get("crew") or []
+    crew = [str(c) for c in raw_crew] if isinstance(raw_crew, list) else []
     submit_turn(
         player,
         rd_rocket=rd_rocket,
@@ -176,6 +178,7 @@ async def handle_end_turn(player: Player, msg: dict[str, Any]) -> None:
         rd_spend=rd_spend,
         launch=launch,
         objectives=objectives,
+        crew=crew,
     )
     if all_turns_in(room.state):
         resolve_turn(room.state)

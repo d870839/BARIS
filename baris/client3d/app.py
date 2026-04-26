@@ -83,6 +83,9 @@ class BarisClient(Entity):
         self.rd_spend: int = 10
         self.queued_mission: MissionId | None = None
         self.queued_objectives: set[ObjectiveId] = set()
+        # Phase O — Astronaut.id values for the queued manned mission.
+        # Empty list = auto top-skilled (legacy default).
+        self.queued_crew: list[str] = []
 
         # Launch-sequence playback state.
         self.report_queue: list[LaunchReport] = []
@@ -1260,11 +1263,14 @@ class BarisClient(Entity):
         if self.queued_mission == mission_id:
             self.queued_mission = None
             self.queued_objectives.clear()
+            self.queued_crew.clear()
         else:
             self.queued_mission = mission_id
             # Drop any objectives that don't apply to the new mission.
             allowed = {o.id for o in objectives_for(mission_id)}
             self.queued_objectives = {o for o in self.queued_objectives if o in allowed}
+            # Re-pick the crew for the new mission.
+            self.queued_crew = []
         self._refresh_current_panel()
 
     def mc_toggle_objective(self, obj_id: ObjectiveId) -> None:
@@ -1274,6 +1280,25 @@ class BarisClient(Entity):
             self.queued_objectives.discard(obj_id)
         else:
             self.queued_objectives.add(obj_id)
+        self._refresh_current_panel()
+
+    def mc_toggle_crew(self, astronaut_id: str) -> None:
+        """Add or remove an astronaut from the manually-picked crew for
+        the queued manned mission. Honoured at submit time only when
+        the count exactly matches mission.crew_size; otherwise the
+        resolver falls back to auto top-skilled selection."""
+        if self._turn_locked() or self._has_scheduled_launch():
+            return
+        if self.queued_mission is None:
+            return
+        mission = MISSIONS_BY_ID.get(self.queued_mission)
+        if mission is None or not mission.manned:
+            return
+        if astronaut_id in self.queued_crew:
+            self.queued_crew.remove(astronaut_id)
+        elif len(self.queued_crew) < mission.crew_size:
+            self.queued_crew.append(astronaut_id)
+        # else: cap reached, drop someone before adding another.
         self._refresh_current_panel()
 
     def _has_scheduled_launch(self) -> bool:
@@ -1337,6 +1362,7 @@ class BarisClient(Entity):
             "rd_spend": min(self.rd_spend, me.budget),
             "launch": self.queued_mission.value if self.queued_mission else None,
             "objectives": [o.value for o in self.queued_objectives],
+            "crew": list(self.queued_crew),
         }
         # rd_target may be a Rocket.value or Module.value.
         if self.rd_target in (m.value for m in Module):
@@ -1346,6 +1372,7 @@ class BarisClient(Entity):
         self.net.send(protocol.END_TURN, **payload)
         self.queued_mission = None
         self.queued_objectives.clear()
+        self.queued_crew.clear()
         self._close_panel_silent()
         self._exit_ui_mode()
 

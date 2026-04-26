@@ -422,6 +422,7 @@ def submit_turn(
     rd_spend: int = 0,
     launch: MissionId | None = None,
     objectives: list[ObjectiveId] | None = None,
+    crew: list[str] | None = None,
 ) -> None:
     # pick at most one R&D target; rocket wins if both provided.
     if rd_rocket is not None:
@@ -434,6 +435,7 @@ def submit_turn(
 
     player.pending_launch = None
     player.pending_objectives = []
+    player.pending_crew = []
     # With VAB scheduling, only one mission can be on the manifest at a
     # time. Attempting to queue a new launch while one is already
     # scheduled is silently dropped — the player must resolve or scrub
@@ -468,6 +470,23 @@ def submit_turn(
                 if obj.requires_module and not player.module_built(obj.requires_module):
                     continue
                 player.pending_objectives.append(obj.id.value)
+            # Phase O — manual crew assignment. We accept the picked
+            # list iff every member is on the roster, flight-ready, and
+            # the count exactly matches the mission's crew_size; an
+            # invalid pick falls back to auto top-skilled selection so
+            # the launch isn't outright dropped.
+            if crew and mission.manned and len(crew) == mission.crew_size:
+                ok_ids: list[str] = []
+                for astro_id in crew:
+                    astro = next(
+                        (a for a in player.astronauts if a.id == astro_id),
+                        None,
+                    )
+                    if astro is None or not astro.flight_ready:
+                        ok_ids = []
+                        break
+                    ok_ids.append(astro_id)
+                player.pending_crew = ok_ids
     player.turn_submitted = True
 
 
@@ -570,6 +589,7 @@ def resolve_turn(state: GameState, rng: random.Random | None = None) -> None:
         player.pending_rd_spend = 0
         player.pending_launch = None
         player.pending_objectives = []
+        player.pending_crew = []
         player.turn_submitted = False
         player.budget += SEASON_REFILL
 
@@ -697,6 +717,7 @@ def _promote_pending_to_scheduled(player: Player, state: GameState) -> None:
         architecture=player.architecture,
         scheduled_year=state.year,
         scheduled_season=state.season.value,
+        crew=list(player.pending_crew),
     )
     state.log.append(
         f"{player.username} — {mission.name}: assembled on Pad {pad.pad_id} "
@@ -783,7 +804,11 @@ def _resolve_pad_launch(
 
     crew: list[Astronaut] = []
     if mission.manned:
-        crew = _select_crew(player, mission) or []
+        # Phase O — honour the manually-picked crew if every member is
+        # still flight-ready when the launch fires (catch e.g. an
+        # astronaut who got hospitalised between schedule and resolve).
+        # Fall back to auto top-skilled selection otherwise.
+        crew = _resolve_scheduled_crew(player, mission, sl) or []
         if not crew:
             _abort(
                 f"{player.username} aborts {mission.name} — no available crew.",
@@ -1067,6 +1092,32 @@ def _select_crew(player: Player, mission: Mission) -> list[Astronaut] | None:
     skill_key = mission.primary_skill or Skill.CAPSULE
     ranked = sorted(pool, key=lambda a: a.skill(skill_key), reverse=True)
     return ranked[:mission.crew_size]
+
+
+def _resolve_scheduled_crew(
+    player: Player, mission: Mission, sl: ScheduledLaunch,
+) -> list[Astronaut] | None:
+    """Phase O — pick the crew at launch time. Honours the player's
+    manual selection from sl.crew when every member is still on the
+    roster and flight-ready; otherwise falls back to _select_crew's
+    auto top-skilled pick. Empty sl.crew (legacy or auto-pick path) is
+    indistinguishable from "no manual choice"."""
+    if not mission.manned:
+        return []
+    if sl.crew and len(sl.crew) == mission.crew_size:
+        manual: list[Astronaut] = []
+        valid = True
+        for astro_id in sl.crew:
+            astro = next(
+                (a for a in player.astronauts if a.id == astro_id), None,
+            )
+            if astro is None or not astro.flight_ready:
+                valid = False
+                break
+            manual.append(astro)
+        if valid:
+            return manual
+    return _select_crew(player, mission)
 
 
 def _crew_bonus(crew: list[Astronaut], mission: Mission) -> float:
