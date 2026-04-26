@@ -91,6 +91,23 @@ class AstronautStatus(str, Enum):
     RETIRED = "retired"
 
 
+class HardwareStatus(str, Enum):
+    """R-deep — lifecycle of a single rocket / module unit.
+
+    ACTIVE   — built and ready to fly or test.
+    USED     — consumed by a launch (success or failure). Stays in
+               the inventory as a record but doesn't reappear in any
+               selection menu.
+    LOST     — destroyed during a full-up stand test. Same as USED
+               for selection purposes but tagged separately so the
+               UI can show a distinct icon and the museum can record
+               which units never made it to the pad.
+    """
+    ACTIVE = "active"
+    USED   = "used"
+    LOST   = "lost"
+
+
 class Compatibility(str, Enum):
     """Rough personality-type tag assigned to each astronaut at roster
     creation. Used to score crew compatibility: same/adjacent types mesh
@@ -431,6 +448,23 @@ RD_BATCH_COST = 3  # MB per roll
 # spam them. Cheaper per point than R&D batches but capped in pace.
 STAND_TEST_COST = 5
 STAND_TEST_GAIN = 8
+
+# R-deep — individual hardware units. Each launch consumes a unit of
+# the relevant rocket (and any required modules); each unit has its
+# own reliability snapshot from build time. Stand tests come in two
+# flavours that target a specific unit:
+#   * Max-Q test: cheap, partial reliability gain, no risk of loss.
+#   * Full-up test: pricier, bigger gain, small chance of destroying
+#     the article during the test (unit goes LOST, prestige hit).
+HARDWARE_UNIT_COST    = 4   # MB to manually build a unit (auto-build
+                            # at launch is free, charged via launch_cost)
+MAX_Q_TEST_COST       = 4
+MAX_Q_TEST_GAIN       = 8
+FULL_UP_TEST_COST     = 12
+FULL_UP_TEST_GAIN     = 15
+FULL_UP_LOSS_CHANCE   = 0.05    # roll < this on a Random.random() = LOST
+FULL_UP_LOSS_PRESTIGE = 3       # prestige docked when an article blows
+                                # up on the test stand
 
 # Phase S — calendar deadline. Game ends with a prestige tiebreaker
 # at the end of the deadline year. Default chosen to roughly match
@@ -1094,6 +1128,29 @@ class IntelReport:
 
 
 @dataclass
+class HardwareUnit:
+    """R-deep — one specific rocket or module article.
+
+    Each launch consumes a unit; each stand test targets a unit.
+    `class_name` is the Rocket.value or Module.value the unit
+    belongs to (so the inventory can collapse them into per-class
+    rows when needed). `reliability` snapshots the player's class-
+    level reliability at build time; subsequent stand tests bump
+    only this unit's score, decoupling individual articles from
+    each other and from ongoing R&D progress.
+
+    `unit_id` is human-readable ("Saturn V #2") so logs and the
+    museum can refer to it without the player needing to memorise
+    UUIDs."""
+    unit_id: str
+    class_name: str
+    reliability: int
+    status: str = HardwareStatus.ACTIVE.value
+    built_year: int = 0
+    built_season: str = ""
+
+
+@dataclass
 class Player:
     player_id: str
     username: str
@@ -1146,6 +1203,15 @@ class Player:
     # Phase R — per-component "year-season" key of the most recent
     # stand test on that target. One test per target per season.
     stand_tests_used: dict[str, str] = field(default_factory=dict)
+    # R-deep — individual hardware articles (rockets + modules). Each
+    # launch consumes the highest-reliability ACTIVE unit of the
+    # required class, auto-building one at the current class
+    # reliability if the inventory is empty. Stand tests target a
+    # specific unit. Unit reliability decouples from class reliability
+    # at build time, so stand-tested units can outperform a class's
+    # research average and a class research push doesn't retroactively
+    # boost units that are already built.
+    units: list[HardwareUnit] = field(default_factory=list)
 
     def rocket_reliability(self, rocket: Rocket) -> int:
         return self.reliability.get(rocket.value, 0)
@@ -1161,6 +1227,30 @@ class Player:
 
     def hardware_reliability(self, name: str) -> int:
         return self.reliability.get(name, 0)
+
+    # R-deep — per-unit inventory helpers.
+    def active_units(self, class_name: str) -> list["HardwareUnit"]:
+        """All ACTIVE units of `class_name`, ordered most-reliable first.
+        The launcher and stand-test code pick from the head; the UI
+        renders in this order."""
+        candidates = [
+            u for u in self.units
+            if u.class_name == class_name and u.status == HardwareStatus.ACTIVE.value
+        ]
+        candidates.sort(key=lambda u: u.reliability, reverse=True)
+        return candidates
+
+    def next_unit(self, class_name: str) -> "HardwareUnit | None":
+        """Highest-reliability ACTIVE unit of `class_name`, or None
+        if the inventory is empty."""
+        units = self.active_units(class_name)
+        return units[0] if units else None
+
+    def find_unit(self, unit_id: str) -> "HardwareUnit | None":
+        for u in self.units:
+            if u.unit_id == unit_id:
+                return u
+        return None
 
     # back-compat aliases kept short so the UI and resolver don't have to pick.
     def rd_progress(self, rocket: Rocket) -> int:
@@ -1340,6 +1430,11 @@ def _player_from_dict(d: dict[str, Any]) -> Player:
     data.setdefault("stand_tests_used", {})
     # Phase O — legacy saves predate manual crew assignment.
     data.setdefault("pending_crew", [])
+    # R-deep — legacy saves predate per-unit hardware. Empty list is
+    # fine because the resolver auto-builds units at launch when the
+    # inventory is empty.
+    raw_units = data.pop("units", None) or []
+    data["units"] = [HardwareUnit(**u) for u in raw_units]
     # Phase Q — legacy saves predate the new component R&D tracks.
     # Backfill any missing module entries so .module_reliability()
     # still resolves without a KeyError on older saves.
@@ -1461,6 +1556,11 @@ class LaunchReport:
     # Phase Q — per-component reliability average swing applied to
     # this launch. Empty on missions with no applicable components.
     component_bonus: float = 0.0
+    # R-deep — the specific hardware unit that flew this mission and
+    # its reliability snapshot at launch (which may differ from the
+    # class-level reliability if the unit was stand-tested).
+    unit_id: str = ""
+    unit_reliability: int = 0
 
 
 def _launch_report_from_dict(d: dict[str, Any]) -> LaunchReport:
@@ -1472,6 +1572,9 @@ def _launch_report_from_dict(d: dict[str, Any]) -> LaunchReport:
     data.setdefault("failed_phase", "")
     # Phase Q — older saves predate component_bonus.
     data.setdefault("component_bonus", 0.0)
+    # R-deep — older saves predate per-unit launch reporting.
+    data.setdefault("unit_id", "")
+    data.setdefault("unit_reliability", 0)
     return LaunchReport(**data)
 
 

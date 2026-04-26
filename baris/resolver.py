@@ -69,6 +69,15 @@ from baris.state import (
     SabotageCard,
     STAND_TEST_COST,
     STAND_TEST_GAIN,
+    HARDWARE_UNIT_COST,
+    HardwareStatus,
+    HardwareUnit,
+    MAX_Q_TEST_COST,
+    MAX_Q_TEST_GAIN,
+    FULL_UP_TEST_COST,
+    FULL_UP_TEST_GAIN,
+    FULL_UP_LOSS_CHANCE,
+    FULL_UP_LOSS_PRESTIGE,
     get_sabotage_card,
     MIN_RELIABILITY_TO_LAUNCH,
     MISSION_OBJECTIVES,
@@ -932,9 +941,17 @@ def _resolve_pad_launch(
         report.crew = [a.name for a in crew]
 
     player.budget -= sl.launch_cost_remaining
+    # R-deep — claim the rocket unit that will fly. Auto-build if the
+    # inventory is empty (legacy callers + tests that never called
+    # build_hardware_unit). Roll against the unit's reliability rather
+    # than the class average so stand-tested articles actually fly
+    # better. The unit is marked USED below regardless of outcome.
+    rocket_unit = _claim_unit(player, eff_rocket.value, state)
+    report.unit_id = rocket_unit.unit_id
+    report.unit_reliability = rocket_unit.reliability
     crew_bonus = _crew_bonus(crew, mission)
     reliability_bonus = (
-        (player.rocket_reliability(eff_rocket) - 50) * RELIABILITY_SWING_PER_POINT
+        (rocket_unit.reliability - 50) * RELIABILITY_SWING_PER_POINT
     )
     compat_bonus = crew_compatibility_bonus(crew)
     component_bonus = component_reliability_bonus(player, mission)
@@ -1019,6 +1036,12 @@ def _resolve_pad_launch(
                 character=_chatter_character(player, rng),
                 names=", ".join(report.deaths),
             )
+    # R-deep — the unit just flew. Mark it consumed regardless of
+    # outcome (rockets aren't recoverable; even successful flights
+    # don't return the article). Status stays USED rather than LOST
+    # so the museum can distinguish "spent in service" from "blew up
+    # on the test stand".
+    rocket_unit.status = HardwareStatus.USED.value
     report.reliability_after = player.rocket_reliability(eff_rocket)
     report.prestige_delta = player.prestige - prestige_start
     # Pad damage: if the flight killed crew or any objective triggered a
@@ -2013,6 +2036,175 @@ def request_stand_test(
     state.log.append(
         f"STAND TEST: {player.username} ran a {target_id} stand test "
         f"({current} → {new})."
+    )
+    return True
+
+
+# ----------------------------------------------------------------------
+# R-deep — per-unit hardware tracking
+# ----------------------------------------------------------------------
+
+def _build_unit(
+    player: Player, class_name: str, state: GameState,
+) -> HardwareUnit:
+    """Mint a new HardwareUnit for `class_name` at the player's
+    current class-level reliability. Used by both the explicit
+    BUILD_HARDWARE action and the resolver's auto-build path on
+    launch (so legacy callers that never built a unit still work).
+    The unit_id is human-readable: 'Saturn V #2'."""
+    n = sum(1 for u in player.units if u.class_name == class_name) + 1
+    unit_id = f"{class_name} #{n}"
+    unit = HardwareUnit(
+        unit_id=unit_id,
+        class_name=class_name,
+        reliability=player.reliability.get(class_name, 0),
+        status=HardwareStatus.ACTIVE.value,
+        built_year=state.year,
+        built_season=state.season.value,
+    )
+    player.units.append(unit)
+    return unit
+
+
+def _claim_unit(
+    player: Player, class_name: str, state: GameState,
+) -> HardwareUnit:
+    """Pick the highest-reliability ACTIVE unit of `class_name` from
+    the player's inventory; auto-build one at the current class
+    reliability if the inventory is empty. Does NOT change the unit's
+    status — the caller marks USED or LOST when the disposition is
+    known."""
+    unit = player.next_unit(class_name)
+    if unit is None:
+        unit = _build_unit(player, class_name, state)
+    return unit
+
+
+def build_hardware_unit(
+    player: Player, state: GameState, class_name: str,
+) -> bool:
+    """Explicit player action: spend HARDWARE_UNIT_COST MB to build a
+    new unit at the current class reliability. Useful for stockpiling
+    well-tested articles ahead of an important launch (build now while
+    research is high; fly later regardless of where research drifts).
+    Returns True on success."""
+    if state.phase != Phase.PLAYING:
+        return False
+    if player.budget < HARDWARE_UNIT_COST:
+        return False
+    if class_name not in player.reliability:
+        return False
+    player.budget -= HARDWARE_UNIT_COST
+    unit = _build_unit(player, class_name, state)
+    state.log.append(
+        f"BUILD: {player.username} built {unit.unit_id} "
+        f"(reliability {unit.reliability}%)."
+    )
+    return True
+
+
+def _resolve_unit_target(
+    player: Player, state: GameState, target_id: str,
+) -> HardwareUnit | None:
+    """Translate a stand-test target into a specific unit. `target_id`
+    can be either a unit_id (exact match) or a class name (auto-pick
+    the next ACTIVE unit, building one if needed)."""
+    by_id = player.find_unit(target_id)
+    if by_id is not None and by_id.status == HardwareStatus.ACTIVE.value:
+        return by_id
+    if _is_valid_stand_test_target(target_id):
+        return _claim_unit(player, target_id, state)
+    return None
+
+
+def max_q_test_available(
+    player: Player, state: GameState, target_id: str,
+) -> tuple[bool, str]:
+    """Cheap, no-risk unit test. Returns (ok, reason)."""
+    if state.phase != Phase.PLAYING:
+        return False, "game not in progress"
+    if player.budget < MAX_Q_TEST_COST:
+        return False, f"need {MAX_Q_TEST_COST} MB"
+    last = player.stand_tests_used.get(target_id, "")
+    if last == _stand_test_season_stamp(state):
+        return False, "already tested this season"
+    unit = _resolve_unit_target(player, state, target_id)
+    if unit is None:
+        return False, "unknown target"
+    return True, ""
+
+
+def request_max_q_test(
+    player: Player, state: GameState, target_id: str,
+) -> bool:
+    """R-deep — max-Q stand test. Bumps a single unit's reliability
+    by MAX_Q_TEST_GAIN, no risk of loss. Throttled to one test per
+    (target, season). Cheaper than a full-up test."""
+    ok, _reason = max_q_test_available(player, state, target_id)
+    if not ok:
+        return False
+    unit = _resolve_unit_target(player, state, target_id)
+    assert unit is not None
+    player.budget -= MAX_Q_TEST_COST
+    player.stand_tests_used[target_id] = _stand_test_season_stamp(state)
+    before = unit.reliability
+    unit.reliability = min(RELIABILITY_CAP, unit.reliability + MAX_Q_TEST_GAIN)
+    state.log.append(
+        f"MAX-Q: {player.username}'s {unit.unit_id} cleared a max-Q test "
+        f"({before} → {unit.reliability}%)."
+    )
+    return True
+
+
+def full_up_test_available(
+    player: Player, state: GameState, target_id: str,
+) -> tuple[bool, str]:
+    """Pricey test. Bigger gain but a small chance of destroying the
+    article on the stand. Returns (ok, reason)."""
+    if state.phase != Phase.PLAYING:
+        return False, "game not in progress"
+    if player.budget < FULL_UP_TEST_COST:
+        return False, f"need {FULL_UP_TEST_COST} MB"
+    last = player.stand_tests_used.get(target_id, "")
+    if last == _stand_test_season_stamp(state):
+        return False, "already tested this season"
+    unit = _resolve_unit_target(player, state, target_id)
+    if unit is None:
+        return False, "unknown target"
+    return True, ""
+
+
+def request_full_up_test(
+    player: Player,
+    state: GameState,
+    target_id: str,
+    rng: random.Random,
+) -> bool:
+    """R-deep — full-up stand test. Bumps unit reliability by
+    FULL_UP_TEST_GAIN on success but rolls FULL_UP_LOSS_CHANCE for the
+    article to be destroyed (status LOST + prestige penalty). The
+    season throttle is consumed regardless of outcome — the test
+    happened either way."""
+    ok, _reason = full_up_test_available(player, state, target_id)
+    if not ok:
+        return False
+    unit = _resolve_unit_target(player, state, target_id)
+    assert unit is not None
+    player.budget -= FULL_UP_TEST_COST
+    player.stand_tests_used[target_id] = _stand_test_season_stamp(state)
+    if rng.random() < FULL_UP_LOSS_CHANCE:
+        unit.status = HardwareStatus.LOST.value
+        player.prestige -= FULL_UP_LOSS_PRESTIGE
+        state.log.append(
+            f"💥 FULL-UP: {player.username}'s {unit.unit_id} exploded on "
+            f"the test stand. Prestige -{FULL_UP_LOSS_PRESTIGE}."
+        )
+        return True
+    before = unit.reliability
+    unit.reliability = min(RELIABILITY_CAP, unit.reliability + FULL_UP_TEST_GAIN)
+    state.log.append(
+        f"FULL-UP: {player.username}'s {unit.unit_id} survived a full-up "
+        f"test ({before} → {unit.reliability}%)."
     )
     return True
 

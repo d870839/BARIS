@@ -4535,3 +4535,167 @@ def test_phase_outcomes_unknown_failed_phase_skips_all() -> None:
     rows = phase_outcomes(report)
     assert all(r[1] == PHASE_OUTCOME_SKIP for r in rows)
     assert [r[0] for r in rows] == ["Launch", "Re-entry"]
+
+
+# -----------------------------------------------------------------------
+# R-deep — per-unit hardware tracking
+# -----------------------------------------------------------------------
+def test_rdeep_launch_auto_builds_unit_when_inventory_empty() -> None:
+    """Legacy callers + tests that never called build_hardware_unit
+    should still fly — _resolve_pad_launch auto-builds a unit at the
+    current class reliability and records it on the launch report."""
+    state = _two_player_state()
+    start_game(state, rng=random.Random(1))
+    me = state.players[0]
+    me.reliability[Rocket.LIGHT.value] = 60
+    submit_turn(me, launch=MissionId.SUBORBITAL)
+    submit_turn(state.players[1], launch=None)
+    with _no_news():
+        resolve_turn(state, rng=_FixedRng(0.0))
+        _fire_scheduled_launch(state, _FixedRng(0.0))
+    report = next(
+        r for r in state.last_launches
+        if r.mission_id == MissionId.SUBORBITAL.value
+    )
+    assert report.success
+    # One unit was minted on demand and is now tagged USED.
+    assert len(me.units) == 1
+    assert me.units[0].class_name == Rocket.LIGHT.value
+    assert me.units[0].status == "used"
+    assert report.unit_id == me.units[0].unit_id
+    assert report.unit_reliability == 60
+
+
+def test_rdeep_explicit_build_freezes_class_reliability_at_build_time() -> None:
+    """A unit built at class reliability 60 keeps that 60 even after
+    the class reliability drifts. Subsequent class research doesn't
+    retroactively bump units already in the inventory."""
+    from baris.resolver import build_hardware_unit
+    state = _two_player_state()
+    start_game(state, rng=random.Random(1))
+    me = state.players[0]
+    me.reliability[Rocket.LIGHT.value] = 60
+    me.budget = 200
+    assert build_hardware_unit(me, state, Rocket.LIGHT.value)
+    # Class reliability moves; the unit doesn't.
+    me.reliability[Rocket.LIGHT.value] = 80
+    assert me.units[0].reliability == 60
+
+
+def test_rdeep_launch_picks_highest_reliability_unit_first() -> None:
+    """Multiple units in the inventory: the launcher claims the most
+    reliable one. The other stays ACTIVE for a future flight."""
+    from baris.resolver import build_hardware_unit
+    state = _two_player_state()
+    start_game(state, rng=random.Random(1))
+    me = state.players[0]
+    me.reliability[Rocket.LIGHT.value] = 40
+    me.budget = 200
+    # First (lower-reliability) unit at 40.
+    assert build_hardware_unit(me, state, Rocket.LIGHT.value)
+    # Second (higher-reliability) unit at 80.
+    me.reliability[Rocket.LIGHT.value] = 80
+    assert build_hardware_unit(me, state, Rocket.LIGHT.value)
+    submit_turn(me, launch=MissionId.SUBORBITAL)
+    submit_turn(state.players[1], launch=None)
+    with _no_news():
+        resolve_turn(state, rng=_FixedRng(0.0))
+        _fire_scheduled_launch(state, _FixedRng(0.0))
+    # The 80-reliability unit flew; the 40 stayed home.
+    used = [u for u in me.units if u.status == "used"]
+    active = [u for u in me.units if u.status == "active"]
+    assert len(used) == 1 and used[0].reliability == 80
+    assert len(active) == 1 and active[0].reliability == 40
+
+
+def test_rdeep_max_q_test_bumps_unit_no_risk() -> None:
+    from baris.resolver import build_hardware_unit, request_max_q_test
+    from baris.state import MAX_Q_TEST_GAIN
+    state = _two_player_state()
+    start_game(state, rng=random.Random(1))
+    me = state.players[0]
+    me.reliability[Rocket.LIGHT.value] = 50
+    me.budget = 200
+    build_hardware_unit(me, state, Rocket.LIGHT.value)
+    before = me.units[0].reliability
+    assert request_max_q_test(me, state, Rocket.LIGHT.value)
+    assert me.units[0].reliability == before + MAX_Q_TEST_GAIN
+    assert me.units[0].status == "active"   # max-Q is risk-free
+
+
+def test_rdeep_full_up_test_destroys_unit_on_low_roll() -> None:
+    """rng.random() < FULL_UP_LOSS_CHANCE → article LOST + prestige
+    docked. The throttle still fires so the player can't immediately
+    retry on the same target this season."""
+    from baris.resolver import build_hardware_unit, request_full_up_test
+    from baris.state import FULL_UP_LOSS_PRESTIGE
+    state = _two_player_state()
+    start_game(state, rng=random.Random(1))
+    me = state.players[0]
+    me.reliability[Rocket.LIGHT.value] = 50
+    me.budget = 200
+    me.prestige = 10
+    build_hardware_unit(me, state, Rocket.LIGHT.value)
+    # _FixedRng(0.0) always rolls below FULL_UP_LOSS_CHANCE (5%).
+    assert request_full_up_test(me, state, Rocket.LIGHT.value, _FixedRng(0.0))
+    assert me.units[0].status == "lost"
+    assert me.prestige == 10 - FULL_UP_LOSS_PRESTIGE
+
+
+def test_rdeep_full_up_test_succeeds_on_high_roll() -> None:
+    """rng.random() above FULL_UP_LOSS_CHANCE → no loss, big bump."""
+    from baris.resolver import build_hardware_unit, request_full_up_test
+    from baris.state import FULL_UP_TEST_GAIN
+    state = _two_player_state()
+    start_game(state, rng=random.Random(1))
+    me = state.players[0]
+    me.reliability[Rocket.LIGHT.value] = 50
+    me.budget = 200
+    build_hardware_unit(me, state, Rocket.LIGHT.value)
+    before = me.units[0].reliability
+    assert request_full_up_test(me, state, Rocket.LIGHT.value, _FixedRng(0.99))
+    assert me.units[0].status == "active"
+    assert me.units[0].reliability == before + FULL_UP_TEST_GAIN
+
+
+def test_rdeep_lost_units_dont_fly() -> None:
+    """A LOST unit is excluded from launch selection. With only one
+    unit in the inventory and that one LOST, the launcher must
+    auto-build a fresh one."""
+    from baris.resolver import build_hardware_unit
+    from baris.state import HardwareStatus
+    state = _two_player_state()
+    start_game(state, rng=random.Random(1))
+    me = state.players[0]
+    me.reliability[Rocket.LIGHT.value] = 70
+    me.budget = 200
+    build_hardware_unit(me, state, Rocket.LIGHT.value)
+    me.units[0].status = HardwareStatus.LOST.value
+    submit_turn(me, launch=MissionId.SUBORBITAL)
+    submit_turn(state.players[1], launch=None)
+    with _no_news():
+        resolve_turn(state, rng=_FixedRng(0.0))
+        _fire_scheduled_launch(state, _FixedRng(0.0))
+    # Two units now: the LOST original + a freshly auto-built USED one.
+    statuses = sorted(u.status for u in me.units)
+    assert statuses == ["lost", "used"]
+
+
+def test_rdeep_save_load_round_trips_units() -> None:
+    """Player.units serialises through to_dict / from_dict so save
+    files preserve the inventory."""
+    from baris.resolver import build_hardware_unit
+    from baris.state import _player_from_dict
+    state = _two_player_state()
+    start_game(state, rng=random.Random(1))
+    me = state.players[0]
+    me.reliability[Rocket.LIGHT.value] = 65
+    me.budget = 200
+    build_hardware_unit(me, state, Rocket.LIGHT.value)
+    raw = state.to_dict()
+    rehydrated = type(state).from_dict(raw)
+    p = rehydrated.players[0]
+    assert len(p.units) == 1
+    assert p.units[0].class_name == Rocket.LIGHT.value
+    assert p.units[0].reliability == 65
+    assert p.units[0].status == "active"

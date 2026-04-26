@@ -100,31 +100,57 @@ def build_rd_panel(client: "BarisClient", parent: Entity) -> Entity:
     _draw_target_row(rocket_targets, 0.22, scale_x=0.24)
     _draw_target_row(module_targets, 0.155, scale_x=0.13)
 
-    # Reliability bars per target + a per-row stand-test button.
-    # Phase R — clicking TEST runs an instant test on that target;
-    # server enforces cost + once-per-season throttle.
-    from baris.state import STAND_TEST_COST
+    # Reliability bars per target + per-row action buttons.
+    # R-deep — each row shows class research %, unit count, and the
+    # next ACTIVE unit's reliability. Three buttons per row:
+    #   BUILD — pay HARDWARE_UNIT_COST to mint a new unit at the
+    #           current class reliability.
+    #   MAX-Q — cheap, no-risk test on the next ACTIVE unit.
+    #   FULL  — pricier test with FULL_UP_LOSS_CHANCE of destroying
+    #           the article, but a bigger reliability gain.
+    from baris.state import (
+        FULL_UP_TEST_COST, HARDWARE_UNIT_COST, MAX_Q_TEST_COST,
+    )
     y = 0.085
     for tvalue, tlabel in all_targets:
         rel = me.reliability.get(tvalue, 0)
         built = rel >= MIN_RELIABILITY_TO_LAUNCH
+        active = me.active_units(tvalue)
+        n_active = len(active)
+        next_rel = active[0].reliability if active else rel
         tag = "reliable" if rel >= 75 else ("launch-ready" if built else "not ready")
         tag_color = (110, 200, 120) if rel >= 75 else (
             (240, 200, 90) if built else (220, 90, 90)
         )
         Text(
-            text=f"{tlabel:<16} {rel:>3}%   {tag}",
-            parent=root, position=(-0.4, y), origin=(-0.5, 0.5), z=-0.01,
-            scale=0.85, color=color.rgb32(*tag_color),
+            text=(
+                f"{tlabel:<16} R&D {rel:>3}%   "
+                f"units {n_active}  next {next_rel:>3}%   {tag}"
+            ),
+            parent=root, position=(-0.43, y), origin=(-0.5, 0.5), z=-0.01,
+            scale=0.7, color=color.rgb32(*tag_color),
         )
-        test_btn = Button(
-            parent=root,
-            text=f"TEST {STAND_TEST_COST}",
-            position=(0.30, y, -0.02), scale=(0.13, 0.028),
+        build_btn = Button(
+            parent=root, text=f"BUILD {HARDWARE_UNIT_COST}",
+            position=(0.20, y, -0.02), scale=(0.10, 0.028),
+            color=color.rgb32(70, 90, 100),
+            highlight_color=color.rgb32(100, 130, 150),
+        )
+        build_btn.on_click = (lambda v=tvalue: client.rd_build_hardware(v))
+        maxq_btn = Button(
+            parent=root, text=f"MAX-Q {MAX_Q_TEST_COST}",
+            position=(0.31, y, -0.02), scale=(0.10, 0.028),
             color=color.rgb32(80, 100, 70),
             highlight_color=color.rgb32(110, 150, 90),
         )
-        test_btn.on_click = (lambda v=tvalue: client.rd_run_stand_test(v))
+        maxq_btn.on_click = (lambda v=tvalue: client.rd_run_max_q_test(v))
+        full_btn = Button(
+            parent=root, text=f"FULL {FULL_UP_TEST_COST}",
+            position=(0.42, y, -0.02), scale=(0.10, 0.028),
+            color=color.rgb32(120, 80, 70),
+            highlight_color=color.rgb32(160, 100, 90),
+        )
+        full_btn.on_click = (lambda v=tvalue: client.rd_run_full_up_test(v))
         y -= 0.034
 
     # Spend controls.
@@ -489,8 +515,16 @@ def build_result_panel(
         origin=(0, 0), scale=1.8, z=-0.01,
         color=color.rgb32(220, 225, 235),
     )
+    # R-deep — show the specific unit that flew so the player can see
+    # which article was consumed and at what reliability.
+    rocket_line = f"Rocket: {report.rocket}"
+    if report.unit_id:
+        rocket_line = (
+            f"Rocket: {report.rocket}  "
+            f"({report.unit_id} @ {report.unit_reliability}%)"
+        )
     Text(
-        text=f"{report.username} [{report.side or '?'}]   Rocket: {report.rocket}",
+        text=f"{report.username} [{report.side or '?'}]   {rocket_line}",
         parent=root, position=(0, 0.22),
         origin=(0, 0), scale=0.9, z=-0.01,
         color=color.rgb32(140, 150, 170),

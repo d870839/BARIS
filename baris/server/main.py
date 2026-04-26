@@ -5,6 +5,7 @@ import asyncio
 import json
 import logging
 import os
+import random
 import uuid
 from pathlib import Path
 from typing import Any
@@ -14,12 +15,15 @@ import websockets
 from baris import protocol
 from baris.resolver import (
     all_turns_in,
+    build_hardware_unit,
     can_start,
     cancel_training,
     choose_architecture,
     execute_sabotage,
     recruit_next_group,
+    request_full_up_test,
     request_intel,
+    request_max_q_test,
     request_stand_test,
     resolve_turn,
     scrub_scheduled,
@@ -307,6 +311,34 @@ async def handle_request_stand_test(player: Player, msg: dict[str, Any]) -> None
         log.info("%s ran stand test on %s", player.username, target_id)
 
 
+async def handle_build_hardware(player: Player, msg: dict[str, Any]) -> None:
+    if room.state.phase != Phase.PLAYING:
+        return
+    class_name = str(msg.get("class_name") or "")
+    if build_hardware_unit(player, room.state, class_name):
+        log.info("%s built a %s unit", player.username, class_name)
+
+
+async def handle_request_max_q_test(player: Player, msg: dict[str, Any]) -> None:
+    if room.state.phase != Phase.PLAYING:
+        return
+    target_id = str(msg.get("target_id") or "")
+    if request_max_q_test(player, room.state, target_id):
+        log.info("%s ran max-Q test on %s", player.username, target_id)
+
+
+async def handle_request_full_up_test(player: Player, msg: dict[str, Any]) -> None:
+    if room.state.phase != Phase.PLAYING:
+        return
+    target_id = str(msg.get("target_id") or "")
+    # R-deep — each full-up test rolls independently. The room doesn't
+    # carry a shared RNG (turn resolution makes one ad hoc), so we mint
+    # a fresh one per call. random.Random() defaults to system entropy
+    # which is fine for per-action gambles.
+    if request_full_up_test(player, room.state, target_id, random.Random()):
+        log.info("%s ran full-up test on %s", player.username, target_id)
+
+
 async def client_handler(ws: Any) -> None:
     player: Player | None = None
     try:
@@ -352,6 +384,12 @@ async def client_handler(ws: Any) -> None:
                 await handle_execute_sabotage(player, msg)
             elif mtype == protocol.REQUEST_STAND_TEST:
                 await handle_request_stand_test(player, msg)
+            elif mtype == protocol.BUILD_HARDWARE:
+                await handle_build_hardware(player, msg)
+            elif mtype == protocol.REQUEST_MAX_Q_TEST:
+                await handle_request_max_q_test(player, msg)
+            elif mtype == protocol.REQUEST_FULL_UP_TEST:
+                await handle_request_full_up_test(player, msg)
             else:
                 await ws.send(protocol.encode(protocol.ERROR, message=f"Unknown type {mtype}"))
                 continue

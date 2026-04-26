@@ -1319,7 +1319,19 @@ class Client:
         bar_w = 320 if not compact else 220
         size = 16 if not compact else 14
         display = rocket_display_name(rocket, player.side)
-        label = f"{display:<10} {rel:3}%"
+        # R-deep — append unit count + next-unit reliability so the
+        # 2D HUD shows the per-unit state. Compact opponent rows
+        # skip this to keep the line short.
+        if compact:
+            label = f"{display:<10} {rel:3}%"
+        else:
+            active = player.active_units(rocket.value)
+            n_active = len(active)
+            next_rel = active[0].reliability if active else rel
+            label = (
+                f"{display:<10} R&D {rel:3}%   "
+                f"units {n_active}  next {next_rel:>3}%"
+            )
         draw_text(self.screen, label, (x, y), size=size, color=FG)
         bar_x = x + 220 if not compact else x + 200
         bar_y = y + 3
@@ -1359,7 +1371,14 @@ class Client:
         rel = player.module_reliability(module)
         bar_w = 320
         size = 16
-        label = f"{module.value:<16} {rel:3}%"
+        # R-deep — same unit info as the rocket row.
+        active = player.active_units(module.value)
+        n_active = len(active)
+        next_rel = active[0].reliability if active else rel
+        label = (
+            f"{module.value:<16} R&D {rel:3}%   "
+            f"units {n_active}  next {next_rel:>3}%"
+        )
         draw_text(self.screen, label, (x, y), size=size, color=FG)
         bar_x = x + 220
         bar_y = y + 3

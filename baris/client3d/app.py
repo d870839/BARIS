@@ -1263,6 +1263,27 @@ class BarisClient(Entity):
         self.net.send(protocol.REQUEST_STAND_TEST, target_id=target_id)
         self._refresh_current_panel()
 
+    # R-deep — per-unit hardware actions. The server validates budget,
+    # the once-per-season throttle, and (for full-up) rolls the loss
+    # chance.
+    def rd_build_hardware(self, class_name: str) -> None:
+        if self._turn_locked():
+            return
+        self.net.send(protocol.BUILD_HARDWARE, class_name=class_name)
+        self._refresh_current_panel()
+
+    def rd_run_max_q_test(self, target_id: str) -> None:
+        if self._turn_locked():
+            return
+        self.net.send(protocol.REQUEST_MAX_Q_TEST, target_id=target_id)
+        self._refresh_current_panel()
+
+    def rd_run_full_up_test(self, target_id: str) -> None:
+        if self._turn_locked():
+            return
+        self.net.send(protocol.REQUEST_FULL_UP_TEST, target_id=target_id)
+        self._refresh_current_panel()
+
     # ------------------------------------------------------------------
     # Mission Control actions
     # ------------------------------------------------------------------
