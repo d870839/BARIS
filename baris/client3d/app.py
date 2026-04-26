@@ -1254,6 +1254,15 @@ class BarisClient(Entity):
         self.rd_spend = max(0, min(ceiling, self.rd_spend + delta))
         self._refresh_current_panel()
 
+    def rd_run_stand_test(self, target_id: str) -> None:
+        """Phase R — fire a stand test on the given component. Server
+        validates budget + once-per-season throttle and applies the
+        reliability bump if cleared."""
+        if self._turn_locked():
+            return
+        self.net.send(protocol.REQUEST_STAND_TEST, target_id=target_id)
+        self._refresh_current_panel()
+
     # ------------------------------------------------------------------
     # Mission Control actions
     # ------------------------------------------------------------------

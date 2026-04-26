@@ -34,10 +34,19 @@ class Module(str, Enum):
     rockets are (stochastic batched rolls against a single reliability
     score). Individual missions list which modules they need in their
     `requires_modules` tuple; the resolver rejects a launch whose
-    required modules aren't built."""
+    required modules aren't built.
+
+    Phase Q split ROCKET-only research into per-component tracks. The
+    last three (CAPSULE / PROBE / LM) are SOFT inputs to effective
+    success — they contribute reliability bonuses on relevant flights
+    but aren't gating prereqs, so current balance still holds and
+    existing missions keep flying with default starting values."""
     DOCKING = "Docking Module"
     LUNAR_KICKER = "Lunar Kicker"
     EVA_SUIT = "EVA Suit"
+    CAPSULE = "Capsule"           # Phase Q — manned-flight component
+    PROBE = "Probe"               # Phase Q — unmanned-flight component
+    LM = "Lunar Module"           # Phase Q — lunar-landing component
 
 
 class Skill(str, Enum):
@@ -365,8 +374,41 @@ RD_SPEED: dict[str, float] = {
     Module.DOCKING.value:      0.7,
     Module.LUNAR_KICKER.value: 0.5,
     Module.EVA_SUIT.value:     0.8,
+    # Phase Q — per-component R&D speeds.
+    Module.CAPSULE.value:      0.8,
+    Module.PROBE.value:        0.9,
+    Module.LM.value:           0.4,
 }
 RD_BATCH_COST = 3  # MB per roll
+
+# Phase R — stand tests. A one-shot reliability boost on a specific
+# component, throttled to once per (component, season) so you can't
+# spam them. Cheaper per point than R&D batches but capped in pace.
+STAND_TEST_COST = 5
+STAND_TEST_GAIN = 8
+
+
+# Phase Q — components that aren't gating prereqs but DO contribute
+# reliability bonuses to applicable missions. Pre-seeded so the game
+# isn't blocked on Day 1; R&D pushes them upward (50 = neutral, above
+# = bonus, below = penalty via the standard reliability swing).
+COMPONENT_STARTING_RELIABILITY: dict[str, int] = {
+    Module.CAPSULE.value: 30,
+    Module.PROBE.value:   30,
+    Module.LM.value:      10,
+}
+
+
+def _default_reliability_table() -> dict[str, int]:
+    """Player's starting reliability ledger. Rockets + the original
+    three modules (DOCKING / LUNAR_KICKER / EVA_SUIT) start at 0 — you
+    research them up. The three Phase Q components seed at low-but-
+    nonzero so research has a useful gradient without wholesale
+    blocking missions."""
+    table = {r.value: 0 for r in Rocket}
+    for m in Module:
+        table[m.value] = COMPONENT_STARTING_RELIABILITY.get(m.value, 0)
+    return table
 
 
 def hardware_names() -> tuple[str, ...]:
@@ -869,10 +911,7 @@ class Player:
     prestige: int = 0
     ready: bool = False
     reliability: dict[str, int] = field(
-        default_factory=lambda: {
-            **{r.value: 0 for r in Rocket},
-            **{m.value: 0 for m in Module},
-        }
+        default_factory=lambda: _default_reliability_table()
     )
     astronauts: list[Astronaut] = field(default_factory=list)
     mission_successes: dict[str, int] = field(default_factory=dict)
@@ -913,6 +952,9 @@ class Player:
     # DIRTY TRICKS — "year-season" key of the most recent sabotage so
     # the server can throttle to one per season per player.
     sabotage_used_on: str = ""
+    # Phase R — per-component "year-season" key of the most recent
+    # stand test on that target. One test per target per season.
+    stand_tests_used: dict[str, str] = field(default_factory=dict)
 
     def rocket_reliability(self, rocket: Rocket) -> int:
         return self.reliability.get(rocket.value, 0)
@@ -1095,8 +1137,21 @@ def _player_from_dict(d: dict[str, Any]) -> Player:
     data.setdefault("last_review_year", 0)
     # DIRTY TRICKS — legacy saves predate sabotage.
     data.setdefault("sabotage_used_on", "")
+    # Phase R — legacy saves predate stand tests.
+    data.setdefault("stand_tests_used", {})
     # Phase O — legacy saves predate manual crew assignment.
     data.setdefault("pending_crew", [])
+    # Phase Q — legacy saves predate the new component R&D tracks.
+    # Backfill any missing module entries so .module_reliability()
+    # still resolves without a KeyError on older saves.
+    raw_reliability = data.get("reliability") or {}
+    for r in Rocket:
+        raw_reliability.setdefault(r.value, 0)
+    for m in Module:
+        raw_reliability.setdefault(
+            m.value, COMPONENT_STARTING_RELIABILITY.get(m.value, 0),
+        )
+    data["reliability"] = raw_reliability
     return Player(**data)
 
 
@@ -1186,6 +1241,9 @@ class LaunchReport:
     # things went wrong ("Stage II ignition", "Trans-lunar injection").
     # Empty on success and on aborted-pre-launch flights.
     failed_phase: str = ""
+    # Phase Q — per-component reliability average swing applied to
+    # this launch. Empty on missions with no applicable components.
+    component_bonus: float = 0.0
 
 
 def _launch_report_from_dict(d: dict[str, Any]) -> LaunchReport:
@@ -1195,6 +1253,8 @@ def _launch_report_from_dict(d: dict[str, Any]) -> LaunchReport:
     # Phase P — older saves predate failed_phase; default to "" so a
     # legacy report still rehydrates cleanly.
     data.setdefault("failed_phase", "")
+    # Phase Q — older saves predate component_bonus.
+    data.setdefault("component_bonus", 0.0)
     return LaunchReport(**data)
 
 

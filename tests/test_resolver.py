@@ -3530,3 +3530,184 @@ def test_legacy_launch_report_dict_backfills_failed_phase() -> None:
     }
     r = _launch_report_from_dict(raw)
     assert r.failed_phase == ""
+
+
+# ----------------------------------------------------------------------
+# Phase Q — per-component R&D
+# ----------------------------------------------------------------------
+
+
+def test_player_default_reliability_seeds_phase_q_components() -> None:
+    """A fresh Player has CAPSULE / PROBE / LM at the seeded baseline."""
+    from baris.state import COMPONENT_STARTING_RELIABILITY
+    p = Player(player_id="x", username="X", side=Side.USA)
+    assert p.module_reliability(Module.CAPSULE) == COMPONENT_STARTING_RELIABILITY[
+        Module.CAPSULE.value]
+    assert p.module_reliability(Module.PROBE) == COMPONENT_STARTING_RELIABILITY[
+        Module.PROBE.value]
+    assert p.module_reliability(Module.LM) == COMPONENT_STARTING_RELIABILITY[
+        Module.LM.value]
+
+
+def test_applicable_components_per_mission_class() -> None:
+    from baris.resolver import applicable_components
+    sub = MISSIONS_BY_ID[MissionId.SUBORBITAL]
+    sat = MISSIONS_BY_ID[MissionId.SATELLITE]
+    manned_orbital = MISSIONS_BY_ID[MissionId.MANNED_ORBITAL]
+    landing = MISSIONS_BY_ID[MissionId.MANNED_LUNAR_LANDING]
+    assert applicable_components(sub) == ()
+    assert applicable_components(sat) == (Module.PROBE,)
+    assert applicable_components(manned_orbital) == (Module.CAPSULE,)
+    assert set(applicable_components(landing)) == {Module.CAPSULE, Module.LM}
+
+
+def test_component_bonus_zero_when_at_neutral_50() -> None:
+    from baris.resolver import component_reliability_bonus
+    state = _two_player_state()
+    start_game(state, rng=random.Random(1))
+    me = state.players[0]
+    me.reliability[Module.CAPSULE.value] = 50
+    me.reliability[Module.PROBE.value] = 50
+    me.reliability[Module.LM.value] = 50
+    for m in MISSIONS_BY_ID.values():
+        assert component_reliability_bonus(me, m) == 0.0
+
+
+def test_component_bonus_positive_when_above_neutral() -> None:
+    from baris.resolver import component_reliability_bonus
+    state = _two_player_state()
+    start_game(state, rng=random.Random(1))
+    me = state.players[0]
+    me.reliability[Module.CAPSULE.value] = 80
+    bonus = component_reliability_bonus(me, MISSIONS_BY_ID[MissionId.MANNED_ORBITAL])
+    assert bonus > 0
+
+
+def test_component_bonus_penalises_unresearched_lm() -> None:
+    """A landing mission with unresearched LM (=10) takes a real hit."""
+    from baris.resolver import component_reliability_bonus
+    state = _two_player_state()
+    start_game(state, rng=random.Random(1))
+    me = state.players[0]
+    bonus = component_reliability_bonus(
+        me, MISSIONS_BY_ID[MissionId.MANNED_LUNAR_LANDING],
+    )
+    assert bonus < 0
+
+
+def test_legacy_player_dict_backfills_phase_q_components() -> None:
+    """Pre-Phase-Q saves' reliability dict has no CAPSULE/PROBE/LM
+    entries; loader fills them in at the COMPONENT_STARTING_RELIABILITY
+    baseline rather than crashing later when a launch reads them."""
+    from baris.state import COMPONENT_STARTING_RELIABILITY, _player_from_dict
+    raw = {
+        "player_id": "x", "username": "X",
+        "side": Side.USA.value, "budget": 30, "prestige": 0,
+        "ready": True, "astronauts": [],
+        "reliability": {  # only the legacy three modules
+            Rocket.LIGHT.value: 0,
+            Rocket.MEDIUM.value: 0,
+            Rocket.HEAVY.value: 0,
+            Module.DOCKING.value: 0,
+            Module.LUNAR_KICKER.value: 0,
+            Module.EVA_SUIT.value: 0,
+        },
+        "mission_successes": {}, "architecture": None,
+        "turn_submitted": False,
+    }
+    p = _player_from_dict(raw)
+    assert p.module_reliability(Module.CAPSULE) == \
+        COMPONENT_STARTING_RELIABILITY[Module.CAPSULE.value]
+    assert p.module_reliability(Module.PROBE) == \
+        COMPONENT_STARTING_RELIABILITY[Module.PROBE.value]
+    assert p.module_reliability(Module.LM) == \
+        COMPONENT_STARTING_RELIABILITY[Module.LM.value]
+
+
+def test_legacy_launch_report_dict_backfills_component_bonus() -> None:
+    from baris.state import _launch_report_from_dict
+    raw = {
+        "side": "USA", "username": "X",
+        "mission_id": "suborbital", "mission_name": "Sub-orbital",
+        "rocket": "Redstone", "rocket_class": "Light",
+    }
+    r = _launch_report_from_dict(raw)
+    assert r.component_bonus == 0.0
+
+
+# ----------------------------------------------------------------------
+# Phase R — stand tests
+# ----------------------------------------------------------------------
+
+
+def test_stand_test_bumps_reliability_and_charges_cost() -> None:
+    from baris.resolver import request_stand_test
+    from baris.state import STAND_TEST_COST, STAND_TEST_GAIN
+    state = _two_player_state()
+    start_game(state, rng=random.Random(1))
+    me = state.players[0]
+    me.budget = 50
+    me.reliability[Rocket.LIGHT.value] = 40
+    assert request_stand_test(me, state, Rocket.LIGHT.value)
+    assert me.reliability[Rocket.LIGHT.value] == 40 + STAND_TEST_GAIN
+    assert me.budget == 50 - STAND_TEST_COST
+
+
+def test_stand_test_rejected_without_budget() -> None:
+    from baris.resolver import request_stand_test
+    from baris.state import STAND_TEST_COST
+    state = _two_player_state()
+    start_game(state, rng=random.Random(1))
+    me = state.players[0]
+    me.budget = STAND_TEST_COST - 1
+    me.reliability[Rocket.LIGHT.value] = 30
+    assert not request_stand_test(me, state, Rocket.LIGHT.value)
+    assert me.reliability[Rocket.LIGHT.value] == 30
+
+
+def test_stand_test_throttled_to_one_per_target_per_season() -> None:
+    from baris.resolver import request_stand_test
+    state = _two_player_state()
+    start_game(state, rng=random.Random(1))
+    me = state.players[0]
+    me.budget = 100
+    assert request_stand_test(me, state, Rocket.LIGHT.value)
+    # Same target, same season — refused.
+    assert not request_stand_test(me, state, Rocket.LIGHT.value)
+    # Different target, same season — allowed.
+    assert request_stand_test(me, state, Module.DOCKING.value)
+
+
+def test_stand_test_clamped_at_reliability_cap() -> None:
+    from baris.resolver import request_stand_test
+    state = _two_player_state()
+    start_game(state, rng=random.Random(1))
+    me = state.players[0]
+    me.budget = 100
+    me.reliability[Rocket.HEAVY.value] = RELIABILITY_FLOOR  # use a constant
+    me.reliability[Rocket.HEAVY.value] = 95  # close to the cap (99)
+    assert request_stand_test(me, state, Rocket.HEAVY.value)
+    from baris.state import RELIABILITY_CAP
+    assert me.reliability[Rocket.HEAVY.value] == RELIABILITY_CAP
+
+
+def test_stand_test_rejected_for_unknown_target() -> None:
+    from baris.resolver import request_stand_test
+    state = _two_player_state()
+    start_game(state, rng=random.Random(1))
+    me = state.players[0]
+    me.budget = 100
+    assert not request_stand_test(me, state, "Nonsense Component")
+
+
+def test_legacy_player_dict_backfills_stand_tests_used() -> None:
+    from baris.state import _player_from_dict
+    raw = {
+        "player_id": "x", "username": "X",
+        "side": Side.USA.value, "budget": 30, "prestige": 0,
+        "ready": True, "astronauts": [],
+        "mission_successes": {}, "architecture": None,
+        "turn_submitted": False,
+    }
+    p = _player_from_dict(raw)
+    assert p.stand_tests_used == {}

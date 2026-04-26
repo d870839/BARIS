@@ -390,6 +390,8 @@ class MCInterior:
         rel_bonus = (
             (me.rocket_reliability(eff_rocket) - 50) * RELIABILITY_SWING_PER_POINT
         )
+        from baris.resolver import component_reliability_bonus
+        comp_b = component_reliability_bonus(me, m)
         crew_b = 0.0
         compat_b = 0.0
         if m.manned:
@@ -398,7 +400,10 @@ class MCInterior:
                 crew_b = _crew_bonus_from(preview, m)
                 compat_b = crew_compatibility_bonus(preview)
         recon_bonus, lm_penalty = effective_lunar_modifier(me, m)
-        eff = base_s + crew_b + compat_b + rel_bonus + recon_bonus - lm_penalty
+        eff = (
+            base_s + crew_b + compat_b + rel_bonus + comp_b
+            + recon_bonus - lm_penalty
+        )
 
         prefix = "SCHEDULED: " if scheduled_id is not None else ""
         self.briefing_title.text = prefix + m.name.upper()
@@ -441,7 +446,10 @@ class MCInterior:
             )
         if compat_b:
             self.briefing_crew.text += f"   Cmpt {compat_b:+.3f}"
-        self.briefing_rel.text = f"Rel'ty:  {rel_bonus:+.3f}"
+        rel_text = f"Rel'ty:  {rel_bonus:+.3f}"
+        if comp_b:
+            rel_text += f"   Cmp {comp_b:+.3f}"
+        self.briefing_rel.text = rel_text
         self.briefing_effective.text = (
             f"EFF  {eff:.2f}  (~{int(max(0, min(1, eff)) * 100)}%)"
         )

@@ -60,7 +60,14 @@ WINDOW_SIZE = (1200, 940)
 FPS = 60
 
 ROCKET_KEYS = {pygame.K_q: Rocket.LIGHT, pygame.K_w: Rocket.MEDIUM, pygame.K_e: Rocket.HEAVY}
-MODULE_KEYS = {pygame.K_r: Module.DOCKING}
+MODULE_KEYS = {
+    pygame.K_r: Module.DOCKING,
+    pygame.K_t: Module.LUNAR_KICKER,
+    pygame.K_y: Module.EVA_SUIT,
+    pygame.K_u: Module.CAPSULE,
+    pygame.K_i: Module.PROBE,
+    pygame.K_o: Module.LM,
+}
 OBJECTIVE_KEYS = {  # held-down toggle keys while on the Missions tab
     pygame.K_v: ObjectiveId.EVA,
     pygame.K_b: ObjectiveId.DOCKING,
@@ -673,7 +680,27 @@ class Client:
                 return True
             if not editable:
                 return True
-            if self.active_tab == TAB_RD and event.key in ROCKET_KEYS:
+            if (
+                self.active_tab == TAB_RD
+                and (event.mod & pygame.KMOD_SHIFT)
+                and event.key in ROCKET_KEYS
+            ):
+                # Phase R — Shift+rocket-hotkey runs an instant stand
+                # test on that class. One per (target, season).
+                self.net.send(
+                    protocol.REQUEST_STAND_TEST,
+                    target_id=ROCKET_KEYS[event.key].value,
+                )
+            elif (
+                self.active_tab == TAB_RD
+                and (event.mod & pygame.KMOD_SHIFT)
+                and event.key in MODULE_KEYS
+            ):
+                self.net.send(
+                    protocol.REQUEST_STAND_TEST,
+                    target_id=MODULE_KEYS[event.key].value,
+                )
+            elif self.active_tab == TAB_RD and event.key in ROCKET_KEYS:
                 self.rd_target_rocket = ROCKET_KEYS[event.key]
                 self.rd_target_module = None
             elif self.active_tab == TAB_RD and event.key in MODULE_KEYS:
@@ -967,6 +994,7 @@ class Client:
             m = MISSIONS_BY_ID[self.queued_mission]
             from baris.resolver import (
                 _crew_bonus,
+                component_reliability_bonus,
                 crew_compatibility_bonus,
                 effective_base_success,
                 effective_launch_cost,
@@ -981,6 +1009,7 @@ class Client:
             recon_bonus, lm_penalty = effective_lunar_modifier(me, m)
             effective = (
                 effective_base_success(me, m) + reliability_bonus
+                + component_reliability_bonus(me, m)
                 + recon_bonus - lm_penalty
             )
             if m.manned:
@@ -1221,15 +1250,20 @@ class Client:
                   color=HIGHLIGHT, bold=True)
         draw_text(
             self.screen,
-            "Pick a rocket class and invest MB to progress. A rocket is built once R&D reaches target.",
+            "Pick a target and invest MB to progress. Shift+hotkey for an "
+            f"instant stand test (+{8} reliability, costs {5} MB, "
+            "one per target per season).",
             (x, CONTENT_TOP + 50), size=14, color=DIM,
         )
         y = CONTENT_TOP + 90
         for r in Rocket:
             self._draw_rd_bar(r, me, (x, y), compact=False)
             y += 50
-        # docking module gets its own bar below the rockets
-        self._draw_module_bar(Module.DOCKING, me, (x, y))
+        # All modules get a bar — Phase Q split components into their own
+        # R&D tracks, so iterate the whole enum instead of hard-coding.
+        for module in Module:
+            self._draw_module_bar(module, me, (x, y))
+            y += 38
         # spend controls label (buttons themselves are drawn on top later)
         draw_text(self.screen, "Target:", (30, 496), size=14, color=DIM)
         draw_text(self.screen, f"Spend per turn: {min(self.rd_spend, me.budget)} MB",
@@ -1947,6 +1981,7 @@ class Client:
             return
         from baris.resolver import (
             _crew_bonus,
+            component_reliability_bonus,
             crew_compatibility_bonus,
             effective_base_success,
             effective_launch_cost,
@@ -1960,6 +1995,7 @@ class Client:
         base_succ = effective_base_success(me, mission)
         reliability = me.rocket_reliability(eff_rocket)
         rel_bonus = (reliability - 50) * RELIABILITY_SWING_PER_POINT
+        comp_b = component_reliability_bonus(me, mission)
         crew: list[Astronaut] = []
         crew_b = 0.0
         compat_b = 0.0
@@ -1967,7 +2003,7 @@ class Client:
             crew = self._preview_crew(me, mission)
             crew_b = _crew_bonus(crew, mission)
             compat_b = crew_compatibility_bonus(crew)
-        effective = base_succ + crew_b + compat_b + rel_bonus
+        effective = base_succ + crew_b + compat_b + rel_bonus + comp_b
 
         # Ribbon header
         pygame.draw.rect(self.screen, BG_DEEP, (0, 0, WINDOW_SIZE[0], 80))
@@ -2032,6 +2068,10 @@ class Client:
         draw_text(self.screen, f"  Reliability bonus    {rel_bonus:+.3f}",
                   (x, y), size=16, color=FG)
         y += 22
+        if comp_b:
+            draw_text(self.screen, f"  Component bonus      {comp_b:+.3f}",
+                      (x, y), size=16, color=FG)
+            y += 22
         draw_text(self.screen, "  " + "-" * 44, (x, y), size=16, color=DIM)
         y += 22
         draw_text(

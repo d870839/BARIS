@@ -64,6 +64,8 @@ from baris.state import (
     SABOTAGE_RELIABILITY_HIT,
     SABOTAGE_RELIABILITY_STEAL_GAIN,
     SabotageCard,
+    STAND_TEST_COST,
+    STAND_TEST_GAIN,
     get_sabotage_card,
     MIN_RELIABILITY_TO_LAUNCH,
     MISSION_OBJECTIVES,
@@ -139,6 +141,43 @@ def effective_base_success(player: Player, mission: Mission) -> float:
         if arch is not None:
             return mission.base_success + ARCHITECTURE_SUCCESS_DELTA[arch]
     return mission.base_success
+
+
+def applicable_components(mission: Mission) -> tuple[Module, ...]:
+    """Phase Q — non-rocket components that contribute reliability
+    bonuses to this mission. Manned flights pull in CAPSULE; unmanned
+    flights pull in PROBE (sub-orbital is a ballistic test and skips
+    the probe track). Any lunar-landing variant additionally pulls in
+    LM. Mission-declared `requires_modules` are NOT pulled in here
+    because their reliability is already a hard gate at submit time."""
+    components: list[Module] = []
+    if mission.manned:
+        components.append(Module.CAPSULE)
+    elif mission.id != MissionId.SUBORBITAL:
+        components.append(Module.PROBE)
+    if mission.id in (
+        MissionId.LUNAR_LANDING,
+        MissionId.MANNED_LUNAR_LANDING,
+        MissionId.LM_EARTH_TEST,
+        MissionId.LM_LUNAR_TEST,
+    ):
+        components.append(Module.LM)
+    return tuple(components)
+
+
+def component_reliability_bonus(player: Player, mission: Mission) -> float:
+    """Average per-component reliability swing for this mission's
+    applicable components. Centred on 50 (neutral) so unresearched
+    components drag effective success down and well-tested ones lift
+    it up. Returns 0.0 if nothing applies (e.g. a sub-orbital test)."""
+    components = applicable_components(mission)
+    if not components:
+        return 0.0
+    deltas = [
+        (player.module_reliability(m) - 50) * RELIABILITY_SWING_PER_POINT
+        for m in components
+    ]
+    return sum(deltas) / len(deltas)
 
 
 def effective_lunar_modifier(player: Player, mission: Mission) -> tuple[float, float]:
@@ -823,16 +862,18 @@ def _resolve_pad_launch(
         (player.rocket_reliability(eff_rocket) - 50) * RELIABILITY_SWING_PER_POINT
     )
     compat_bonus = crew_compatibility_bonus(crew)
+    component_bonus = component_reliability_bonus(player, mission)
     base = effective_base_success(player, mission)
     recon_bonus, lm_penalty = effective_lunar_modifier(player, mission)
     success_chance = (
         base + crew_bonus + reliability_bonus + compat_bonus
-        + recon_bonus - lm_penalty
+        + component_bonus + recon_bonus - lm_penalty
     )
     report.base_success = base
     report.crew_bonus = crew_bonus
     report.reliability_bonus = reliability_bonus
     report.compat_bonus = compat_bonus
+    report.component_bonus = component_bonus
     report.lunar_recon_bonus = recon_bonus
     report.lm_points_penalty = lm_penalty
     report.effective_success = success_chance
@@ -1742,6 +1783,60 @@ _SABOTAGE_HANDLERS: dict[str, Any] = {
     "mole":       _sab_mole,
     "blueprints": _sab_blueprints,
 }
+
+
+# ----------------------------------------------------------------------
+# Phase R — stand tests
+# ----------------------------------------------------------------------
+
+
+def _stand_test_season_stamp(state: GameState) -> str:
+    return f"{state.year}-{state.season.value}"
+
+
+def _is_valid_stand_test_target(target_id: str) -> bool:
+    if any(target_id == r.value for r in Rocket):
+        return True
+    if any(target_id == m.value for m in Module):
+        return True
+    return False
+
+
+def stand_test_available(
+    player: Player, state: GameState, target_id: str,
+) -> tuple[bool, str]:
+    """Return (can_test, reason). reason is empty on success."""
+    if not _is_valid_stand_test_target(target_id):
+        return False, "unknown target"
+    if state.phase != Phase.PLAYING:
+        return False, "game not in progress"
+    if player.budget < STAND_TEST_COST:
+        return False, f"need {STAND_TEST_COST} MB"
+    last = player.stand_tests_used.get(target_id, "")
+    if last == _stand_test_season_stamp(state):
+        return False, "already tested this season"
+    return True, ""
+
+
+def request_stand_test(
+    player: Player, state: GameState, target_id: str,
+) -> bool:
+    """Phase R — pay STAND_TEST_COST MB to bump `target_id`'s reliability
+    by STAND_TEST_GAIN (clamped at RELIABILITY_CAP). One test per
+    (target, season). Returns True on success."""
+    ok, _reason = stand_test_available(player, state, target_id)
+    if not ok:
+        return False
+    player.budget -= STAND_TEST_COST
+    player.stand_tests_used[target_id] = _stand_test_season_stamp(state)
+    current = player.reliability.get(target_id, 0)
+    new = min(RELIABILITY_CAP, current + STAND_TEST_GAIN)
+    player.reliability[target_id] = new
+    state.log.append(
+        f"STAND TEST: {player.username} ran a {target_id} stand test "
+        f"({current} → {new})."
+    )
+    return True
 
 
 def memorial_roll(state: GameState) -> list[tuple[str, str, int, str, str]]:

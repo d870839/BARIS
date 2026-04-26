@@ -17,6 +17,7 @@ from baris.resolver import (
     execute_sabotage,
     recruit_next_group,
     request_intel,
+    request_stand_test,
     resolve_turn,
     scrub_scheduled,
     start_game,
@@ -253,6 +254,14 @@ async def handle_execute_sabotage(player: Player, msg: dict[str, Any]) -> None:
         log.info("%s fired sabotage card %s", player.username, card_id)
 
 
+async def handle_request_stand_test(player: Player, msg: dict[str, Any]) -> None:
+    if room.state.phase != Phase.PLAYING:
+        return
+    target_id = str(msg.get("target_id") or "")
+    if request_stand_test(player, room.state, target_id):
+        log.info("%s ran stand test on %s", player.username, target_id)
+
+
 async def client_handler(ws: Any) -> None:
     player: Player | None = None
     try:
@@ -296,6 +305,8 @@ async def client_handler(ws: Any) -> None:
                 await handle_request_intel(player, msg)
             elif mtype == protocol.EXECUTE_SABOTAGE:
                 await handle_execute_sabotage(player, msg)
+            elif mtype == protocol.REQUEST_STAND_TEST:
+                await handle_request_stand_test(player, msg)
             else:
                 await ws.send(protocol.encode(protocol.ERROR, message=f"Unknown type {mtype}"))
                 continue
