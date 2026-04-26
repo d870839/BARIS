@@ -3957,3 +3957,66 @@ def test_legacy_astronaut_dict_backfills_rest_remaining() -> None:
     }
     a = _astronaut_from_dict(raw)
     assert a.rest_remaining == 0
+
+
+# ----------------------------------------------------------------------
+# Phase U — server save / load
+# ----------------------------------------------------------------------
+
+
+def test_server_room_round_trips_state_through_disk(tmp_path) -> None:
+    """Mutate state on a Room, save to disk, hydrate a fresh Room from
+    the same path, and confirm key fields survive the round-trip."""
+    from baris.server.main import Room
+    save_path = tmp_path / "autosave.json"
+    src = Room(save_path=save_path)
+    src.state = _two_player_state()
+    start_game(src.state, rng=random.Random(1))
+    me = src.state.players[0]
+    me.budget = 999
+    me.prestige = 17
+    src.state.year = 1962
+    src.save_to_disk()
+    assert save_path.exists()
+    dst = Room(save_path=save_path)
+    assert dst.load_from_disk()
+    assert dst.state.year == 1962
+    rp = dst.state.players[0]
+    assert rp.budget == 999
+    assert rp.prestige == 17
+    assert len(rp.astronauts) == len(me.astronauts)
+
+
+def test_server_room_load_returns_false_when_save_missing(tmp_path) -> None:
+    from baris.server.main import Room
+    save_path = tmp_path / "missing.json"
+    room = Room(save_path=save_path)
+    assert not room.load_from_disk()
+    # State is the default empty GameState, not a partial garbage hydrate.
+    assert room.state.players == []
+
+
+def test_server_room_load_returns_false_on_corrupt_save(tmp_path) -> None:
+    from baris.server.main import Room
+    save_path = tmp_path / "corrupt.json"
+    save_path.write_text("not even close to JSON")
+    room = Room(save_path=save_path)
+    assert not room.load_from_disk()
+    assert room.state.players == []
+
+
+def test_server_room_save_creates_parent_dir(tmp_path) -> None:
+    from baris.server.main import Room
+    save_path = tmp_path / "nested" / "subdir" / "autosave.json"
+    room = Room(save_path=save_path)
+    room.state = _two_player_state()
+    room.save_to_disk()
+    assert save_path.exists()
+
+
+def test_server_room_save_disabled_when_path_is_none() -> None:
+    from baris.server.main import Room
+    room = Room(save_path=None)
+    # Should be a quiet no-op rather than a crash.
+    room.save_to_disk()
+    assert not room.load_from_disk()

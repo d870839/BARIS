@@ -2,8 +2,11 @@ from __future__ import annotations
 
 import argparse
 import asyncio
+import json
 import logging
+import os
 import uuid
+from pathlib import Path
 from typing import Any
 
 import websockets
@@ -40,13 +43,51 @@ from baris.state import (
 log = logging.getLogger("baris.server")
 
 
+# Phase U — autosave path. Resolves at server start; can be overridden
+# via --save-path or disabled with --no-autosave.
+DEFAULT_AUTOSAVE_PATH = Path(os.path.expanduser("~/.baris/autosave.json"))
+
+
 class Room:
     """Single-game room. MVP: one room per server process."""
 
-    def __init__(self, debug: bool = False) -> None:
+    def __init__(
+        self, debug: bool = False, save_path: Path | None = None,
+    ) -> None:
         self.state = GameState()
         self.connections: dict[str, Any] = {}
         self.debug = debug
+        # Phase U — when set, the server writes state to this path
+        # after every mutation and reads from it once at startup so
+        # mid-game crashes / restarts don't lose progress.
+        self.save_path: Path | None = save_path
+
+    def load_from_disk(self) -> bool:
+        """Try to hydrate state from save_path. Returns True on a clean
+        load, False if the file's missing or unreadable. Connections
+        are NOT restored — clients have to rejoin."""
+        if self.save_path is None or not self.save_path.exists():
+            return False
+        try:
+            raw = json.loads(self.save_path.read_text())
+            self.state = GameState.from_dict(raw)
+            log.info("loaded autosave from %s", self.save_path)
+            return True
+        except (OSError, ValueError, KeyError) as exc:
+            log.warning("autosave at %s failed to load: %s", self.save_path, exc)
+            return False
+
+    def save_to_disk(self) -> None:
+        """Write the current state to save_path. Silent on success;
+        logs a warning on I/O errors so a flaky disk doesn't crash
+        the server but the operator still sees the failure."""
+        if self.save_path is None:
+            return
+        try:
+            self.save_path.parent.mkdir(parents=True, exist_ok=True)
+            self.save_path.write_text(json.dumps(self.state.to_dict()))
+        except OSError as exc:
+            log.warning("autosave to %s failed: %s", self.save_path, exc)
 
     def is_full(self) -> bool:
         return len(self.state.players) >= 2
@@ -70,6 +111,10 @@ class Room:
             self.state.log.append("Opponent disconnected — game ended.")
 
     async def broadcast_state(self) -> None:
+        # Phase U — every state-mutating server message ends with a
+        # broadcast, so persisting alongside the broadcast naturally
+        # keeps the on-disk copy fresh without a separate hook list.
+        self.save_to_disk()
         msg = protocol.encode(protocol.STATE, state=self.state.to_dict())
         stale: list[str] = []
         for pid, ws in self.connections.items():
@@ -333,10 +378,23 @@ def main() -> None:
     parser.add_argument("--debug", action="store_true",
                         help="Preseed both players with fat budget, built rockets, "
                              "and Apollo/Soyuz unlocked when the game starts.")
+    parser.add_argument(
+        "--save-path", type=Path, default=DEFAULT_AUTOSAVE_PATH,
+        help="Where to autosave the game state. Default: ~/.baris/autosave.json. "
+             "The server reads this file at startup if it exists, then writes it "
+             "after every state-mutating message.",
+    )
+    parser.add_argument(
+        "--no-autosave", action="store_true",
+        help="Disable autosave. Useful for tests or transient sessions.",
+    )
     args = parser.parse_args()
     logging.basicConfig(level=logging.INFO, format="%(asctime)s %(name)s %(levelname)s %(message)s")
     global room
-    room = Room(debug=args.debug)
+    save_path = None if args.no_autosave else args.save_path
+    room = Room(debug=args.debug, save_path=save_path)
+    if save_path is not None:
+        room.load_from_disk()    # silent no-op if the file isn't there
     if args.debug:
         log.warning("DEBUG MODE: players will be preseeded at game start.")
     asyncio.run(serve(args.host, args.port))
