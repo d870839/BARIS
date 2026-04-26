@@ -886,6 +886,28 @@ class BarisClient(Entity):
                 self.overlay_host.forward_click(button=1, down=True)
             elif key == "left mouse up":
                 self.overlay_host.forward_click(button=1, down=False)
+            elif key == "scroll up":
+                self.overlay_host.forward_scroll(+1)
+            elif key == "scroll down":
+                self.overlay_host.forward_scroll(-1)
+        # If the overlay roster is open, route arrow / Esc / Enter to
+        # it and short-circuit the rest of the input handler so those
+        # keys don't double-fire on Ursina widgets behind the panel.
+        if getattr(self, "_overlay_roster", None) is not None:
+            if key == "escape":
+                self.close_overlay_roster()
+                return
+            return
+        # 'r' opens the astronaut roster overlay from anywhere in the
+        # 3D world (when no other panel is open), so the player
+        # doesn't have to walk to the Astronaut Center to browse the
+        # crew. Cheap shortcut for what was previously the room-
+        # cluttering fruit roster.
+        if key == "r" and self.panel_id is None and getattr(
+            self, "_overlay_roster", None,
+        ) is None:
+            self.open_overlay_roster()
+            return
         if self.panel_id == "result" and key in ("space", "enter", "escape"):
             self.advance_result_panel()
             return
@@ -1133,6 +1155,44 @@ class BarisClient(Entity):
             # is retired; the OverlayPanel handles drawing + input.
             self._open_overlay_result_panel(report)
         self._enter_ui_mode()
+
+    # ------------------------------------------------------------------
+    # Overlay astronaut roster
+    # ------------------------------------------------------------------
+    def open_overlay_roster(self) -> None:
+        """Show the scrollable AstroRosterPanel on the pygame
+        overlay. Replaces the room-cluttering procedural fruit
+        characters with a proper card list — portrait swatch +
+        glyph + skills + bio, scrollable via mouse wheel / arrow
+        keys / PgUp / PgDn."""
+        from baris.client.ui_overlay.panels import AstroRosterPanel
+        if getattr(self, "_overlay_roster", None) is not None:
+            return
+        me = self.me()
+        if me is None:
+            return
+        self._overlay_roster = AstroRosterPanel(
+            screen_size=self.overlay.size,
+            roster=me.astronauts,
+            on_close=self.close_overlay_roster,
+        )
+        self.overlay.add_panel(self._overlay_roster)
+        # Free the mouse so the player can scroll + click the X.
+        mouse.locked = False
+        mouse.visible = True
+        self.player.enabled = False
+
+    def close_overlay_roster(self) -> None:
+        if getattr(self, "_overlay_roster", None) is None:
+            return
+        self.overlay.remove_panel(self._overlay_roster)
+        self._overlay_roster = None
+        # Hand the camera back to the player only if no other UI
+        # surface is up — same guard the legacy panel-close uses.
+        if self.panel_id is None and getattr(self, "_overlay_result", None) is None:
+            self.player.enabled = True
+            mouse.locked = True
+            mouse.visible = False
 
     def _open_overlay_result_panel(self, report) -> None:
         from baris.client.ui_overlay.panels import ResultPanel

@@ -299,3 +299,77 @@ def test_fruit_face_glyph_falls_back_for_non_ascii() -> None:
     assert _ascii_face_glyph("X", "X-Pilot") == "X"
     # Empty + nameless astronaut → '?' fallback.
     assert _ascii_face_glyph("", "") == "?"
+
+
+# -----------------------------------------------------------------------
+# AstroRosterPanel — scrollable card list replacing the room-cluttering
+# fruit characters.
+# -----------------------------------------------------------------------
+def _make_astro(name="Test Pilot", **overrides):
+    """Build a minimal Astronaut for panel rendering tests."""
+    from baris.state import Astronaut
+    base = dict(
+        id="t1", name=name,
+        capsule=50, lm_pilot=40, eva=30, docking=20, endurance=60,
+    )
+    base.update(overrides)
+    return Astronaut(**base)
+
+
+def test_astro_roster_panel_renders_visible_pixels() -> None:
+    """A populated roster card list paints visible pixels onto the
+    overlay surface — proves the basic draw path doesn't crash on
+    a real astronaut."""
+    from baris.client.ui_overlay.overlay import PygameOverlay
+    from baris.client.ui_overlay.panels import AstroRosterPanel
+    overlay = PygameOverlay((1280, 720))
+    panel = AstroRosterPanel(
+        screen_size=(1280, 720),
+        roster=[_make_astro("Bombardiro Crocodilo")],
+        on_close=lambda: None,
+    )
+    overlay.add_panel(panel)
+    overlay.render()
+    # Sample inside the first card (left column ~portrait swatch).
+    sample = overlay.surface.get_at((220, 200))
+    assert sample.a > 0
+
+
+def test_astro_roster_panel_scroll_clamps_to_content() -> None:
+    """Scroll position is clamped between 0 and max_scroll, where
+    max_scroll = total_card_height - visible_height. Mouse wheel
+    scrolls bidirectionally within those bounds."""
+    import pygame
+    from baris.client.ui_overlay.panels import (
+        AstroRosterPanel, ROSTER_SCROLL_STEP,
+    )
+    # Big roster so content overflows visible area.
+    roster = [_make_astro(f"Pilot {i}") for i in range(40)]
+    panel = AstroRosterPanel(
+        screen_size=(1280, 720),
+        roster=roster,
+        on_close=lambda: None,
+    )
+    assert panel.scroll == 0
+    # Wheel down → scroll increases; never below 0 on wheel up.
+    panel.handle_event(pygame.event.Event(pygame.MOUSEWHEEL, x=0, y=-3))
+    assert panel.scroll == 3 * ROSTER_SCROLL_STEP
+    panel.handle_event(pygame.event.Event(pygame.MOUSEWHEEL, x=0, y=999))
+    assert panel.scroll == 0   # clamped at top
+    # End / Home jump to extremes.
+    panel.handle_event(pygame.event.Event(pygame.KEYDOWN, key=pygame.K_END))
+    assert panel.scroll == panel._max_scroll
+    panel.handle_event(pygame.event.Event(pygame.KEYDOWN, key=pygame.K_HOME))
+    assert panel.scroll == 0
+
+
+def test_astro_roster_panel_escape_invokes_close() -> None:
+    from baris.client.ui_overlay.panels import AstroRosterPanel
+    fired = {"n": 0}
+    panel = AstroRosterPanel(
+        screen_size=(1280, 720),
+        roster=[_make_astro()],
+        on_close=lambda: fired.__setitem__("n", fired["n"] + 1),
+    )
+    panel.handle_event(pygame.event.Event(pygame.KEYDOWN, key=pygame.K_ESCAPE))
+    assert fired["n"] == 1

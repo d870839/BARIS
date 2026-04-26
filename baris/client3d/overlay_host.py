@@ -145,6 +145,16 @@ class OverlayHost:
         py = int((0.5 - my) * h)
         return px, py
 
+    def forward_scroll(self, direction: int) -> None:
+        """Forward a mouse-wheel notch (+1 up, -1 down) to the
+        overlay as a MOUSEWHEEL event. Ursina's input() raises
+        'scroll up' / 'scroll down' as discrete events, so the
+        host translates those into pygame's continuous-axis
+        MOUSEWHEEL shape."""
+        self.overlay.post_event(pygame.event.Event(
+            pygame.MOUSEWHEEL, x=0, y=int(direction),
+        ))
+
     def forward_pygame_event(self, event: pygame.event.Event) -> None:
         """Pass-through for callers that already have a pygame event
         in hand (e.g. keyboard events forwarded by hooks). Useful

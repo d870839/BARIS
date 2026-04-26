@@ -38,22 +38,24 @@ patch.
 - [ ] Cycling between own + opponent reports works (multiple
       launches in a turn).
 
-## Fruit characters in the Astronaut Center
+## Astronaut roster (overlay panel — replaces fruit characters in the room)
 
-- [ ] Walk into the Astronaut Center; bobbing fruit-shaped
-      characters appear in two rows along the south wall.
-- [ ] Each fruit is **tinted with the character's swatch colour**
-      (Bombardiro Crocodilo brown-grey, Tralalero Tralala blue,
-      etc.).
-- [ ] Each fruit has the character's **glyph** painted on the
-      front face.
-- [ ] Stem + leaf on top, base disc underneath.
-- [ ] Bob animation is gentle, not jittery (sine wave, ~2.4s
-      period).
-- [ ] KIA + retired astronauts are NOT in the fruit roster (they
-      stay on the wall portraits).
-- [ ] Roster swap works: recruit a new group, walk back in, the
-      new astronauts' fruits appear.
+- [ ] Press **`R`** anywhere in the 3D world (no other panel open) →
+      a scrollable card panel appears with one row per astronaut:
+      portrait swatch in their colour, glyph emoji, name, status,
+      skill bars, bio one-liner.
+- [ ] Mouse cursor is visible while the panel is open; player
+      camera is parked.
+- [ ] Mouse wheel scrolls; arrow keys / PageUp / PageDown / Home
+      / End also scroll.
+- [ ] Scrollbar on the right reflects position when the roster
+      overflows the visible area.
+- [ ] Status text matches the astronaut state — `Ready`, `KIA`,
+      `Retired`, `Hospital`, `Training`, `Resting`.
+- [ ] **`Escape`** or clicking the **X** button closes; mouse
+      re-locks to the player camera.
+- [ ] No bobbing fruit characters in the Astronaut Center room —
+      the wall portraits stay, but the floor is clear.
 
 ## Things known *not* to be in scope yet
 
