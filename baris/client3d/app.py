@@ -124,6 +124,22 @@ class BarisClient(Entity):
         # continues to work without a big rename.
         self.rd_interior = self.interiors["rd"]
 
+        # Pygame overlay layer — composited on top of the 3D world by
+        # OverlayHost each frame. Real menus migrate onto it in step 3
+        # of the UI refactor; for now the watermark panel is the smoke
+        # test that confirms the pipeline is wired up.
+        self._init_overlay()
+
+    def _init_overlay(self) -> None:
+        from baris.client.ui_overlay.overlay import PygameOverlay
+        from baris.client.ui_overlay.panels import WatermarkPanel
+        from baris.client3d.overlay_host import OverlayHost
+        # window.size is set by Ursina at app startup; default 1280x720.
+        size = (int(window.size[0]), int(window.size[1]))
+        self.overlay = PygameOverlay(size)
+        self.overlay_host = OverlayHost(self.overlay)
+        self.overlay.add_panel(WatermarkPanel(size))
+
     # ------------------------------------------------------------------
     # Scene
     # ------------------------------------------------------------------
@@ -713,6 +729,13 @@ class BarisClient(Entity):
         self._update_pad_rocket()
         self._tick_submit_button()
         self._tick_pad_status()
+        # Pygame overlay — forward the live mouse position so any
+        # interactive panel sees hover state, then run one overlay
+        # render + GPU upload (the host skips the upload when the
+        # overlay didn't actually redraw).
+        if hasattr(self, "overlay_host"):
+            self.overlay_host.forward_mouse()
+            self.overlay_host.update()
         # Once the player has committed the turn, there's nothing useful
         # to do inside a room — kick them back out so they see the rocket
         # + submit lamp and can't tap the physical buttons.
