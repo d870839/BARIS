@@ -8,7 +8,7 @@ import pygame
 
 from baris import protocol
 from baris.client.net import NetClient
-from baris.client.ui import (
+from baris.client.ui_overlay import (
     ACCENT_USA,
     ACCENT_USSR,
     BG,
