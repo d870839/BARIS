@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from typing import TYPE_CHECKING
 
-from ursina import Button, Entity, Text, color
+from ursina import Button, Entity, Text, color, invoke
 
 from baris.resolver import (
     crew_compatibility_bonus,
@@ -26,10 +26,14 @@ from baris.state import (
     MissionId,
     Module,
     ObjectiveId,
+    PHASE_OUTCOME_FAIL,
+    PHASE_OUTCOME_PASS,
+    PHASE_OUTCOME_SKIP,
     ProgramTier,
     RELIABILITY_SWING_PER_POINT,
     Rocket,
     objectives_for,
+    phase_outcomes,
     program_name,
     rocket_display_name,
 )
@@ -584,6 +588,40 @@ def build_result_panel(
                     scale=0.85, z=-0.01, color=color.rgb32(*col),
                 )
                 obj_y -= 0.035
+
+        # Cinematic phase ticker — right-hand column reveals each
+        # mission phase one at a time so the report reads like a
+        # mini-replay of the flight rather than a static verdict.
+        phase_rows = phase_outcomes(report)
+        if phase_rows:
+            phase_x = 0.18
+            Text(
+                text="MISSION TIMELINE", parent=root,
+                position=(phase_x, -0.07), origin=(-0.5, 0.5),
+                scale=0.95, z=-0.01, color=color.rgb32(240, 200, 90),
+            )
+            cy = -0.11
+            step = 0.55
+            for i, (phase_name, outcome) in enumerate(phase_rows):
+                row = Text(
+                    text="", parent=root,
+                    position=(phase_x, cy), origin=(-0.5, 0.5),
+                    scale=0.85, z=-0.01,
+                    color=color.rgb32(60, 65, 80),
+                )
+                if outcome == PHASE_OUTCOME_PASS:
+                    line, tone = f"+  {phase_name}", (110, 200, 120)
+                elif outcome == PHASE_OUTCOME_FAIL:
+                    line, tone = f"X  {phase_name}", (220, 90, 90)
+                else:
+                    line, tone = f"-  {phase_name}", (110, 110, 130)
+
+                def _reveal(r=row, l=line, t=tone) -> None:
+                    if r:
+                        r.text = l
+                        r.color = color.rgb32(*t)
+                invoke(_reveal, delay=i * step)
+                cy -= 0.035
 
     cont = Button(
         parent=root, text="Continue [Space]",

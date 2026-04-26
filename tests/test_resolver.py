@@ -4196,3 +4196,92 @@ def test_post_mission_skill_bump_uses_each_seats_role() -> None:
     assert cmp_dc > cmp_dl and cmp_dc > cmp_de, "CMP capsule didn't outgrow its other skills"
     assert lmp_dl > lmp_dc and lmp_dl > lmp_de, "LMP lm_pilot didn't outgrow its other skills"
     assert eva_de > eva_dc and eva_de > eva_dl, "EVA eva didn't outgrow its other skills"
+
+
+# -----------------------------------------------------------------------
+# phase_outcomes() — feeds the launch cinematic with per-phase verdicts.
+# -----------------------------------------------------------------------
+def _make_report(
+    mission: MissionId,
+    *,
+    success: bool = True,
+    aborted: bool = False,
+    failed_phase: str = "",
+) -> LaunchReport:
+    return LaunchReport(
+        side="USA",
+        username="Tester",
+        mission_id=mission.value,
+        mission_name=MISSIONS_BY_ID[mission].name,
+        rocket="Saturn",
+        rocket_class=Rocket.HEAVY.value,
+        success=success,
+        aborted=aborted,
+        failed_phase=failed_phase,
+    )
+
+
+def test_phase_outcomes_success_all_pass() -> None:
+    from baris.state import (
+        PHASE_OUTCOME_PASS,
+        phase_outcomes,
+    )
+
+    report = _make_report(MissionId.LUNAR_ORBIT, success=True)
+    rows = phase_outcomes(report)
+    assert [r[0] for r in rows] == ["Launch", "Trans-lunar injection", "Lunar orbit insertion"]
+    assert all(r[1] == PHASE_OUTCOME_PASS for r in rows)
+
+
+def test_phase_outcomes_failure_cascade() -> None:
+    """Failure on the middle phase: earlier ones PASS, the named phase
+    FAILs, and any later phases SKIP — the cascade the cinematic
+    visualises."""
+    from baris.state import (
+        MissionPhase,
+        PHASE_OUTCOME_FAIL,
+        PHASE_OUTCOME_PASS,
+        PHASE_OUTCOME_SKIP,
+        phase_outcomes,
+    )
+
+    report = _make_report(
+        MissionId.LUNAR_ORBIT,
+        success=False,
+        failed_phase=MissionPhase.TLI.value,
+    )
+    rows = phase_outcomes(report)
+    assert rows == (
+        ("Launch", PHASE_OUTCOME_PASS),
+        ("Trans-lunar injection", PHASE_OUTCOME_FAIL),
+        ("Lunar orbit insertion", PHASE_OUTCOME_SKIP),
+    )
+
+
+def test_phase_outcomes_aborted_returns_empty() -> None:
+    """A pre-launch abort never lifted off; the cinematic falls back to
+    the existing banner instead of replaying a flight that never
+    happened."""
+    from baris.state import phase_outcomes
+
+    report = _make_report(MissionId.SUBORBITAL, aborted=True)
+    assert phase_outcomes(report) == ()
+
+
+def test_phase_outcomes_unknown_failed_phase_skips_all() -> None:
+    """Defensive: if the resolver records a failed_phase that doesn't
+    match any declared phase (corrupt save, future enum drift) we yield
+    SKIPs across the board rather than crashing."""
+    from baris.state import (
+        PHASE_OUTCOME_SKIP,
+        phase_outcomes,
+    )
+
+    report = _make_report(
+        MissionId.SUBORBITAL,
+        success=False,
+        failed_phase="Atmospheric shimmy",
+    )
+    rows = phase_outcomes(report)
+    assert all(r[1] == PHASE_OUTCOME_SKIP for r in rows)
+    assert [r[0] for r in rows] == ["Launch", "Re-entry"]

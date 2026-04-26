@@ -190,11 +190,10 @@ class Mission:
 
 
 class MissionPhase(str, Enum):
-    """Phase P — named steps in a mission timeline. The resolver picks
-    one of these (uniformly random) when a launch's overall success
-    roll fails, so the post-launch report reads as e.g. 'Apollo 1
-    lost on Lunar descent' rather than 'Apollo 1 failed'. Pure
-    cosmetic + log labelling — does not change success math."""
+    """Phase P — named steps in a mission timeline. The resolver rolls
+    each one separately during _resolve_pad_launch and the launch
+    report records the first phase to fail (or empty on a clean
+    success) so post-flight cinematics can replay the timeline."""
     LAUNCH = "Launch"
     ORBIT_INSERTION = "Orbit insertion"
     EVA = "EVA"
@@ -1410,6 +1409,47 @@ def _launch_report_from_dict(d: dict[str, Any]) -> LaunchReport:
     # Phase Q — older saves predate component_bonus.
     data.setdefault("component_bonus", 0.0)
     return LaunchReport(**data)
+
+
+# Per-phase outcomes for the launch cinematic. Returns one entry per
+# declared phase as ("phase name", "PASS" / "FAIL" / "SKIP"). Aborted
+# pre-launch flights and missions without a phase list yield an empty
+# tuple — the cinematic just falls back to the existing banner.
+PHASE_OUTCOME_PASS = "PASS"
+PHASE_OUTCOME_FAIL = "FAIL"
+PHASE_OUTCOME_SKIP = "SKIP"
+
+
+def phase_outcomes(report: LaunchReport) -> tuple[tuple[str, str], ...]:
+    if report.aborted:
+        return ()
+    try:
+        mission = MISSIONS_BY_ID.get(MissionId(report.mission_id))
+    except (ValueError, KeyError):
+        mission = None
+    if mission is None or not mission.phases:
+        return ()
+    phases = [p.value for p in mission.phases]
+    if report.success:
+        return tuple((p, PHASE_OUTCOME_PASS) for p in phases)
+    fail_idx = -1
+    for i, name in enumerate(phases):
+        if name == report.failed_phase:
+            fail_idx = i
+            break
+    rows: list[tuple[str, str]] = []
+    for i, name in enumerate(phases):
+        if i < fail_idx:
+            rows.append((name, PHASE_OUTCOME_PASS))
+        elif i == fail_idx:
+            rows.append((name, PHASE_OUTCOME_FAIL))
+        else:
+            rows.append((name, PHASE_OUTCOME_SKIP))
+    if fail_idx == -1:
+        # failed_phase didn't match any declared phase — treat as
+        # "all phases unaccounted for"; better than crashing.
+        return tuple((p, PHASE_OUTCOME_SKIP) for p in phases)
+    return tuple(rows)
 
 
 # ----------------------------------------------------------------------

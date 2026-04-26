@@ -42,6 +42,9 @@ from baris.state import (
     MissionId,
     Module,
     ObjectiveId,
+    PHASE_OUTCOME_FAIL,
+    PHASE_OUTCOME_PASS,
+    PHASE_OUTCOME_SKIP,
     Phase,
     Player,
     ProgramTier,
@@ -50,6 +53,7 @@ from baris.state import (
     Side,
     Skill,
     objectives_for,
+    phase_outcomes,
     program_name,
     rocket_display_name,
 )
@@ -2472,6 +2476,34 @@ class Client:
                     color = DIM
                 draw_text(self.screen, line, (x, y), size=14, color=color)
                 y += 20
+
+        # Cinematic phase ticker — reveal each declared phase one at a
+        # time on the right-hand side of the detail panel. The reveal
+        # timer is anchored to launch_phase_start_ms (set when the panel
+        # transitioned to "result"), so each row appears step_ms after
+        # the previous one. Skipped phases (those after the failure)
+        # render in a dim grey to make the cascade obvious.
+        phase_rows = phase_outcomes(report)
+        if phase_rows:
+            elapsed = pygame.time.get_ticks() - self.launch_phase_start_ms
+            tx = panel.x + 380
+            ty = panel.y + 26
+            draw_text(self.screen, "MISSION TIMELINE", (tx, ty),
+                      size=18, color=HIGHLIGHT, bold=True)
+            ty += 28
+            step_ms = 550
+            for i, (phase_name, outcome) in enumerate(phase_rows):
+                if elapsed < i * step_ms:
+                    break
+                if outcome == PHASE_OUTCOME_PASS:
+                    glyph, line_color = "+", GREEN
+                elif outcome == PHASE_OUTCOME_FAIL:
+                    glyph, line_color = "X", RED
+                else:
+                    glyph, line_color = "-", DIM
+                draw_text(self.screen, f"{glyph}  {phase_name}", (tx, ty),
+                          size=16, color=line_color)
+                ty += 24
 
     # --- end ------------------------------------------------------------
     def _render_end(self) -> None:
