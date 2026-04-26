@@ -455,7 +455,16 @@ def build_result_panel(
     else:
         banner = "FAILURE"
         bcolor = (220, 90, 90)
-        sub = f"Effective {report.effective_success:.2f} — roll did not clear"
+        # Phase P — surface the failed phase in the sub-line for cinematic
+        # weight ("lost on Trans-lunar injection") rather than a generic
+        # "roll did not clear".
+        if report.failed_phase:
+            sub = (
+                f"Lost during {report.failed_phase}  "
+                f"(eff {report.effective_success:.2f})"
+            )
+        else:
+            sub = f"Effective {report.effective_success:.2f} — roll did not clear"
 
     # Drop any previous-panel's quad backdrop here — an overlapping
     # Entity(model="quad") at the same z as the shell background z-fights

@@ -169,68 +169,125 @@ class Mission:
     # here must be built (reliability >= MIN_RELIABILITY_TO_LAUNCH) at
     # schedule time or the launch is rejected. Default: no extra prereqs.
     requires_modules: tuple["Module", ...] = ()
+    # Phase P — ordered phases of this mission, used to label a failure
+    # cinematically ("failed at TLI") instead of generically. Empty
+    # tuple means "no per-phase labels — render the legacy generic
+    # 'mission failed' log line".
+    phases: tuple["MissionPhase", ...] = ()
+
+
+class MissionPhase(str, Enum):
+    """Phase P — named steps in a mission timeline. The resolver picks
+    one of these (uniformly random) when a launch's overall success
+    roll fails, so the post-launch report reads as e.g. 'Apollo 1
+    lost on Lunar descent' rather than 'Apollo 1 failed'. Pure
+    cosmetic + log labelling — does not change success math."""
+    LAUNCH = "Launch"
+    ORBIT_INSERTION = "Orbit insertion"
+    EVA = "EVA"
+    DOCKING = "Docking"
+    INJECTION_BURN = "Injection burn"
+    TLI = "Trans-lunar injection"
+    LOI = "Lunar orbit insertion"
+    DESCENT = "Lunar descent"
+    SURFACE = "Surface operations"
+    ASCENT = "Lunar ascent"
+    TEI = "Trans-Earth injection"
+    REENTRY = "Re-entry"
 
 
 # Ordered catalog — UI iterates this to build the mission list (indices map to keys 1-0 and -).
 MISSIONS: tuple[Mission, ...] = (
     # Tier 1 — Mercury / Vostok
     Mission(MissionId.SUBORBITAL,           "Sub-orbital flight",   Rocket.LIGHT,  3, 0.85,  3, 1,  2,
-            tier=ProgramTier.ONE),
+            tier=ProgramTier.ONE,
+            phases=(MissionPhase.LAUNCH, MissionPhase.REENTRY)),
     Mission(MissionId.SATELLITE,            "Satellite launch",     Rocket.LIGHT,  5, 0.75,  5, 2,  3,
-            tier=ProgramTier.ONE),
+            tier=ProgramTier.ONE,
+            phases=(MissionPhase.LAUNCH, MissionPhase.ORBIT_INSERTION)),
     Mission(MissionId.ORBITAL,              "Orbital flight",       Rocket.MEDIUM, 8, 0.70,  7, 2,  4,
-            tier=ProgramTier.ONE),
+            tier=ProgramTier.ONE,
+            phases=(MissionPhase.LAUNCH, MissionPhase.ORBIT_INSERTION,
+                    MissionPhase.REENTRY)),
     Mission(MissionId.MANNED_ORBITAL,       "Manned orbital",       Rocket.MEDIUM,15, 0.55, 12, 4,  6,
-            tier=ProgramTier.ONE, manned=True, crew_size=1, primary_skill=Skill.CAPSULE),
+            tier=ProgramTier.ONE, manned=True, crew_size=1, primary_skill=Skill.CAPSULE,
+            phases=(MissionPhase.LAUNCH, MissionPhase.ORBIT_INSERTION,
+                    MissionPhase.REENTRY)),
     # Tier 2 — Gemini / Voskhod
     Mission(MissionId.MULTI_CREW_ORBITAL,   "Multi-crew orbital",   Rocket.MEDIUM,18, 0.55, 12, 4,  6,
-            tier=ProgramTier.TWO, manned=True, crew_size=2, primary_skill=Skill.ENDURANCE),
+            tier=ProgramTier.TWO, manned=True, crew_size=2, primary_skill=Skill.ENDURANCE,
+            phases=(MissionPhase.LAUNCH, MissionPhase.ORBIT_INSERTION,
+                    MissionPhase.REENTRY)),
     Mission(MissionId.ORBITAL_EVA,          "Orbital EVA",          Rocket.MEDIUM,20, 0.50, 14, 5,  7,
             tier=ProgramTier.TWO, manned=True, crew_size=2, primary_skill=Skill.EVA,
-            requires_modules=(Module.EVA_SUIT,)),
+            requires_modules=(Module.EVA_SUIT,),
+            phases=(MissionPhase.LAUNCH, MissionPhase.ORBIT_INSERTION,
+                    MissionPhase.EVA, MissionPhase.REENTRY)),
     Mission(MissionId.LUNAR_PASS,           "Lunar flyby",          Rocket.MEDIUM,12, 0.60, 10, 3,  5,
             tier=ProgramTier.TWO,
-            requires_modules=(Module.LUNAR_KICKER,)),
+            requires_modules=(Module.LUNAR_KICKER,),
+            phases=(MissionPhase.LAUNCH, MissionPhase.TLI)),
     Mission(MissionId.LUNAR_ORBIT,          "Lunar orbit",          Rocket.HEAVY, 18, 0.50, 15, 4,  7,
             tier=ProgramTier.TWO,
-            requires_modules=(Module.LUNAR_KICKER,)),
+            requires_modules=(Module.LUNAR_KICKER,),
+            phases=(MissionPhase.LAUNCH, MissionPhase.TLI, MissionPhase.LOI)),
     # Tier 3 — Apollo / Soyuz
     Mission(MissionId.LUNAR_LANDING,        "Lunar landing",        Rocket.HEAVY, 25, 0.35, 20, 5, 10,
             tier=ProgramTier.THREE,
-            requires_modules=(Module.LUNAR_KICKER,)),
+            requires_modules=(Module.LUNAR_KICKER,),
+            phases=(MissionPhase.LAUNCH, MissionPhase.TLI, MissionPhase.DESCENT)),
     Mission(MissionId.MANNED_LUNAR_ORBIT,   "Manned lunar orbit",   Rocket.HEAVY, 25, 0.40, 20, 6,  9,
             tier=ProgramTier.THREE, manned=True, crew_size=2, primary_skill=Skill.CAPSULE,
-            requires_modules=(Module.LUNAR_KICKER,)),
+            requires_modules=(Module.LUNAR_KICKER,),
+            phases=(MissionPhase.LAUNCH, MissionPhase.ORBIT_INSERTION,
+                    MissionPhase.TLI, MissionPhase.LOI,
+                    MissionPhase.TEI, MissionPhase.REENTRY)),
     Mission(MissionId.MANNED_LUNAR_LANDING, "Manned lunar landing", Rocket.HEAVY, 35, 0.25, 35, 8, 15,
             tier=ProgramTier.THREE, manned=True, crew_size=3, primary_skill=Skill.LM_PILOT,
-            requires_modules=(Module.LUNAR_KICKER, Module.EVA_SUIT)),
+            requires_modules=(Module.LUNAR_KICKER, Module.EVA_SUIT),
+            phases=(MissionPhase.LAUNCH, MissionPhase.ORBIT_INSERTION,
+                    MissionPhase.TLI, MissionPhase.LOI,
+                    MissionPhase.DESCENT, MissionPhase.SURFACE,
+                    MissionPhase.ASCENT, MissionPhase.TEI,
+                    MissionPhase.REENTRY)),
     # Phase G — manned orbital docking.
     Mission(MissionId.ORBITAL_DOCKING,      "Orbital docking",      Rocket.MEDIUM,22, 0.50, 14, 5,  7,
             tier=ProgramTier.TWO, manned=True, crew_size=2, primary_skill=Skill.DOCKING,
-            requires_modules=(Module.DOCKING,)),
+            requires_modules=(Module.DOCKING,),
+            phases=(MissionPhase.LAUNCH, MissionPhase.ORBIT_INSERTION,
+                    MissionPhase.DOCKING, MissionPhase.REENTRY)),
     # Phase G — LM hardware tests (grant bonus LM points on success).
     Mission(MissionId.LM_EARTH_TEST,        "LM test (Earth orbit)", Rocket.MEDIUM,24, 0.45, 12, 5,  6,
-            tier=ProgramTier.THREE, manned=True, crew_size=2, primary_skill=Skill.LM_PILOT),
+            tier=ProgramTier.THREE, manned=True, crew_size=2, primary_skill=Skill.LM_PILOT,
+            phases=(MissionPhase.LAUNCH, MissionPhase.ORBIT_INSERTION,
+                    MissionPhase.REENTRY)),
     Mission(MissionId.LM_LUNAR_TEST,        "LM test (lunar orbit)", Rocket.HEAVY, 30, 0.40, 18, 6,  8,
             tier=ProgramTier.THREE, manned=True, crew_size=2, primary_skill=Skill.LM_PILOT,
-            requires_modules=(Module.LUNAR_KICKER,)),
+            requires_modules=(Module.LUNAR_KICKER,),
+            phases=(MissionPhase.LAUNCH, MissionPhase.TLI,
+                    MissionPhase.LOI, MissionPhase.REENTRY)),
     # Phase G — interplanetary probes. All need the Lunar Kicker's
     # deep-space injection stage. Distance ≈ difficulty.
     Mission(MissionId.VENUS_FLYBY,          "Venus flyby",          Rocket.MEDIUM,14, 0.55,  8, 3,  4,
             tier=ProgramTier.TWO,
-            requires_modules=(Module.LUNAR_KICKER,)),
+            requires_modules=(Module.LUNAR_KICKER,),
+            phases=(MissionPhase.LAUNCH, MissionPhase.INJECTION_BURN)),
     Mission(MissionId.MARS_FLYBY,           "Mars flyby",           Rocket.MEDIUM,16, 0.50,  9, 3,  5,
             tier=ProgramTier.TWO,
-            requires_modules=(Module.LUNAR_KICKER,)),
+            requires_modules=(Module.LUNAR_KICKER,),
+            phases=(MissionPhase.LAUNCH, MissionPhase.INJECTION_BURN)),
     Mission(MissionId.MERCURY_FLYBY,        "Mercury flyby",        Rocket.MEDIUM,18, 0.45,  9, 3,  5,
             tier=ProgramTier.THREE,
-            requires_modules=(Module.LUNAR_KICKER,)),
+            requires_modules=(Module.LUNAR_KICKER,),
+            phases=(MissionPhase.LAUNCH, MissionPhase.INJECTION_BURN)),
     Mission(MissionId.JUPITER_FLYBY,        "Jupiter flyby",        Rocket.HEAVY, 22, 0.40, 10, 4,  6,
             tier=ProgramTier.THREE,
-            requires_modules=(Module.LUNAR_KICKER,)),
+            requires_modules=(Module.LUNAR_KICKER,),
+            phases=(MissionPhase.LAUNCH, MissionPhase.INJECTION_BURN)),
     Mission(MissionId.SATURN_FLYBY,         "Saturn flyby",         Rocket.HEAVY, 25, 0.35, 12, 4,  7,
             tier=ProgramTier.THREE,
-            requires_modules=(Module.LUNAR_KICKER,)),
+            requires_modules=(Module.LUNAR_KICKER,),
+            phases=(MissionPhase.LAUNCH, MissionPhase.INJECTION_BURN)),
 )
 
 MISSIONS_BY_ID: dict[MissionId, Mission] = {m.id: m for m in MISSIONS}
@@ -1125,12 +1182,19 @@ class LaunchReport:
     lunar_recon_bonus: float = 0.0
     lm_points_penalty: float = 0.0
     objectives: list[ObjectiveReport] = field(default_factory=list)
+    # Phase P — set on failure to a MissionPhase.value indicating where
+    # things went wrong ("Stage II ignition", "Trans-lunar injection").
+    # Empty on success and on aborted-pre-launch flights.
+    failed_phase: str = ""
 
 
 def _launch_report_from_dict(d: dict[str, Any]) -> LaunchReport:
     data = dict(d)
     raw_objs = data.get("objectives") or []
     data["objectives"] = [ObjectiveReport(**o) for o in raw_objs]
+    # Phase P — older saves predate failed_phase; default to "" so a
+    # legacy report still rehydrates cleanly.
+    data.setdefault("failed_phase", "")
     return LaunchReport(**data)
 
 

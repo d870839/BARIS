@@ -2256,7 +2256,18 @@ class Client:
         else:
             banner = "FAILURE"
             banner_color = RED
-            sub = f"Effective {report.effective_success:.2f} — roll did not clear"
+            # Phase P — name the failed step in the sub-line so the
+            # report reads like "Lost during Trans-lunar injection".
+            if report.failed_phase:
+                sub = (
+                    f"Lost during {report.failed_phase}  "
+                    f"(eff {report.effective_success:.2f})"
+                )
+            else:
+                sub = (
+                    f"Effective {report.effective_success:.2f} — "
+                    "roll did not clear"
+                )
 
         banner_rect = pygame.Rect(cx - 280, 190, 560, 90)
         pygame.draw.rect(self.screen, PANEL, banner_rect, border_radius=10)

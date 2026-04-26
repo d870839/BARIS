@@ -862,8 +862,9 @@ def test_failed_manned_launch_cuts_program_funding() -> None:
 
     submit_turn(me, rd_rocket=None, rd_spend=0, launch=MissionId.MANNED_ORBITAL)
     submit_turn(state.players[1], rd_rocket=None, rd_spend=0, launch=None)
-    resolve_turn(state, rng=_FixedRng(0.99))  # forced failure, no deaths
-    _fire_scheduled_launch(state, _FixedRng(0.99))
+    with _no_news():  # isolate from random news cards (e.g. budget windfall)
+        resolve_turn(state, rng=_FixedRng(0.99))  # forced failure, no deaths
+        _fire_scheduled_launch(state, _FixedRng(0.99))
 
     from baris.state import SEASON_REFILL
     # Two resolves under VAB scheduling → two SEASON_REFILLs.
@@ -886,8 +887,9 @@ def test_failed_manned_launch_budget_cut_floors_at_zero() -> None:
 
     submit_turn(me, rd_rocket=None, rd_spend=0, launch=MissionId.MANNED_ORBITAL)
     submit_turn(state.players[1], rd_rocket=None, rd_spend=0, launch=None)
-    resolve_turn(state, rng=_FixedRng(0.99))
-    _fire_scheduled_launch(state, _FixedRng(0.99))
+    with _no_news():
+        resolve_turn(state, rng=_FixedRng(0.99))
+        _fire_scheduled_launch(state, _FixedRng(0.99))
 
     # Budget after launch cost (0) - clamped cut (0) + SEASON_REFILL.
     from baris.state import SEASON_REFILL
@@ -3413,3 +3415,118 @@ def test_legacy_player_dict_backfills_pending_crew() -> None:
     }
     p = _player_from_dict(raw)
     assert p.pending_crew == []
+
+
+# ----------------------------------------------------------------------
+# Phase P — step-by-step mission resolution (named failure phases)
+# ----------------------------------------------------------------------
+
+
+def test_every_mission_has_phases_declared() -> None:
+    """Sanity-check the catalog: every mission ships with a non-empty
+    phases tuple so failure labelling is consistent."""
+    for m in MISSIONS_BY_ID.values():
+        assert m.phases, f"{m.id.value} missing phases"
+
+
+def test_successful_launch_has_empty_failed_phase() -> None:
+    state = _two_player_state()
+    start_game(state, rng=random.Random(1))
+    me = state.players[0]
+    me.reliability[Rocket.LIGHT.value] = 80
+    submit_turn(me, launch=MissionId.SUBORBITAL)
+    submit_turn(state.players[1], launch=None)
+    with _no_news():
+        resolve_turn(state, rng=_FixedRng(0.99))
+        _fire_scheduled_launch(state, _FixedRng(0.0))
+    report = next(
+        r for r in state.last_launches
+        if r.mission_id == MissionId.SUBORBITAL.value
+    )
+    assert report.success
+    assert report.failed_phase == ""
+
+
+def test_failed_launch_records_named_phase() -> None:
+    state = _two_player_state()
+    start_game(state, rng=random.Random(1))
+    me = state.players[0]
+    me.reliability[Rocket.LIGHT.value] = 30
+    submit_turn(me, launch=MissionId.SUBORBITAL)
+    submit_turn(state.players[1], launch=None)
+    with _no_news():
+        resolve_turn(state, rng=_FixedRng(0.99))
+        _fire_scheduled_launch(state, _FixedRng(0.99))
+    report = next(
+        r for r in state.last_launches
+        if r.mission_id == MissionId.SUBORBITAL.value
+    )
+    assert not report.success
+    assert report.failed_phase
+    expected_values = {p.value for p in MISSIONS_BY_ID[MissionId.SUBORBITAL].phases}
+    assert report.failed_phase in expected_values
+
+
+def test_lunar_landing_failed_phase_drawn_from_full_timeline() -> None:
+    """Manned lunar landing has 9 phases — make sure the failure can
+    legitimately land on any of them when we feed varied rngs."""
+    seen: set[str] = set()
+    expected_pool = {
+        p.value for p in MISSIONS_BY_ID[MissionId.MANNED_LUNAR_LANDING].phases
+    }
+    for seed in range(1, 60):
+        state = _two_player_state()
+        start_game(state, rng=random.Random(seed))
+        me = state.players[0]
+        me.reliability[Rocket.HEAVY.value] = 40
+        me.reliability[Module.LUNAR_KICKER.value] = 60
+        me.reliability[Module.EVA_SUIT.value] = 60
+        me.budget = 500
+        me.architecture = Architecture.DA.value
+        # Tier-3 prereqs.
+        me.mission_successes[MissionId.SUBORBITAL.value] = 1
+        me.mission_successes[MissionId.MULTI_CREW_ORBITAL.value] = 1
+        submit_turn(me, launch=MissionId.MANNED_LUNAR_LANDING)
+        submit_turn(state.players[1], launch=None)
+        with _no_news():
+            resolve_turn(state, rng=_FixedRng(0.99, seed=seed))
+            _fire_scheduled_launch(state, _FixedRng(0.99, seed=seed))
+        report = next(
+            (r for r in state.last_launches
+             if r.mission_id == MissionId.MANNED_LUNAR_LANDING.value),
+            None,
+        )
+        if report is not None and report.failed_phase:
+            seen.add(report.failed_phase)
+        if seen == expected_pool:
+            break
+    # We should hit at least 4 different named phases across 60 seeds —
+    # if we only see 1, the random pick is broken.
+    assert len(seen) >= 4, f"only saw {seen}"
+
+
+def test_launch_report_dict_roundtrip_preserves_failed_phase() -> None:
+    from baris.state import LaunchReport, _launch_report_from_dict, MissionPhase
+    r = LaunchReport(
+        side=Side.USA.value, username="X",
+        mission_id=MissionId.SUBORBITAL.value,
+        mission_name="Sub-orbital flight",
+        rocket="Redstone", rocket_class=Rocket.LIGHT.value,
+        success=False, failed_phase=MissionPhase.REENTRY.value,
+    )
+    raw = {**r.__dict__}
+    raw["objectives"] = [o.__dict__ for o in r.objectives]
+    restored = _launch_report_from_dict(raw)
+    assert restored.failed_phase == MissionPhase.REENTRY.value
+
+
+def test_legacy_launch_report_dict_backfills_failed_phase() -> None:
+    from baris.state import _launch_report_from_dict
+    raw = {
+        "side": "USA", "username": "X",
+        "mission_id": "suborbital", "mission_name": "Sub-orbital",
+        "rocket": "Redstone", "rocket_class": "Light",
+        "success": False,
+    }
+    r = _launch_report_from_dict(raw)
+    assert r.failed_phase == ""

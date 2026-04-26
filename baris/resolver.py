@@ -1218,12 +1218,21 @@ def _handle_mission_failure(
 ) -> None:
     player.prestige = max(0, player.prestige - mission.prestige_fail)
 
+    # Phase P — pick which phase the failure happened in. Uniformly
+    # random across the mission's declared phases. Used purely for
+    # cinematic labelling in the launch report + log; doesn't change
+    # any of the consequence math below.
+    if mission.phases:
+        report.failed_phase = rng.choice(list(mission.phases)).value
+
+    phase_note = f" at {report.failed_phase}" if report.failed_phase else ""
+
     if not mission.manned:
         # Unmanned failures still teach you something — crashed probes feed
         # back into R&D. Reliability creeps up; no budget hit.
         _bump_reliability(player, eff_rocket, UNMANNED_FAILURE_RD_GAIN)
         state.log.append(
-            f"{player.username} — {mission.name}: FAILURE "
+            f"{player.username} — {mission.name}: FAILURE{phase_note} "
             f"(-{mission.prestige_fail} prestige, +{UNMANNED_FAILURE_RD_GAIN}% reliability "
             f"from post-flight analysis)."
         )
@@ -1262,7 +1271,7 @@ def _handle_mission_failure(
         f", hospitalised: {', '.join(hospitalized)}" if hospitalized else ""
     )
     state.log.append(
-        f"{player.username} — {mission.name}: FAILURE "
+        f"{player.username} — {mission.name}: FAILURE{phase_note} "
         f"(-{mission.prestige_fail} prestige{kia_note}{hosp_note}). "
         f"Program funding cut by {budget_cut} MB."
     )
