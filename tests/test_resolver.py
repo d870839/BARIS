@@ -121,7 +121,8 @@ def _arm_lunar_components(player, val: int = 70) -> None:
     """Q-deep test helper. The single LUNAR_KICKER reliability slot got
     split into KICKER_A/B/C plus SERVICE_MODULE for manned lunar work,
     and the Q-soft components (Capsule, Lunar Probe, LM) became hard
-    prereqs. Most tests don't care about specifics — they just need
+    prereqs. Capsule-deep further split CAPSULE into CAPSULE_1/2/3 by
+    crew size. Most tests don't care about specifics — they just need
     every lunar-component prereq satisfied — so this brings the whole
     set up to a launch-ready value."""
     for m in (
@@ -131,6 +132,9 @@ def _arm_lunar_components(player, val: int = 70) -> None:
         Module.SERVICE_MODULE,
         Module.LM,
         Module.PROBE_LUNAR,
+        Module.CAPSULE_1,
+        Module.CAPSULE_2,
+        Module.CAPSULE_3,
     ):
         player.reliability[m.value] = val
 
@@ -2180,11 +2184,13 @@ def test_manned_lunar_landing_needs_both_kicker_and_eva_suit() -> None:
     choose_architecture(me, Architecture.LOR)
     mll = MISSIONS_BY_ID[MissionId.MANNED_LUNAR_LANDING]
 
-    # No modules → all four lunar prereqs missing. Q-deep made the
-    # LM a hard prereq (Q-soft + below floor), on top of the
-    # explicitly declared kicker + Service Module + EVA suit.
+    # No modules → all five lunar prereqs missing. Capsule-deep
+    # added CAPSULE_3 to the manned-landing's hard prereq set
+    # (Apollo-class three-man capsule), on top of the kicker +
+    # Service Module + EVA suit + LM.
     assert set(missing_modules(me, mll)) == {
-        Module.KICKER_C, Module.SERVICE_MODULE, Module.EVA_SUIT, Module.LM,
+        Module.KICKER_C, Module.SERVICE_MODULE,
+        Module.EVA_SUIT, Module.LM, Module.CAPSULE_3,
     }
 
     # Only kicker → EVA Suit still missing; still rejected.
@@ -2327,13 +2333,18 @@ def test_orbital_docking_mission_needs_docking_module() -> None:
     me.reliability[Rocket.MEDIUM.value] = 70
     me.budget = 200
 
-    # No docking module → rejected.
-    assert missing_modules(me, MISSIONS_BY_ID[MissionId.ORBITAL_DOCKING]) == [Module.DOCKING]
+    # No docking module → rejected. Orbital docking is a 2-man
+    # mission so capsule-deep also pulls CAPSULE_2 (Gemini-class)
+    # as a hard prereq below the launch floor.
+    assert set(missing_modules(me, MISSIONS_BY_ID[MissionId.ORBITAL_DOCKING])) == {
+        Module.DOCKING, Module.CAPSULE_2,
+    }
     submit_turn(me, rd_rocket=None, rd_spend=0, launch=MissionId.ORBITAL_DOCKING)
     assert me.pending_launch is None
 
-    # Build it → accepted, and a successful resolve awards an LM point.
+    # Build both → accepted, and a successful resolve awards an LM point.
     me.reliability[Module.DOCKING.value] = 70
+    me.reliability[Module.CAPSULE_2.value] = 70
     submit_turn(me, rd_rocket=None, rd_spend=0, launch=MissionId.ORBITAL_DOCKING)
     assert me.pending_launch == MissionId.ORBITAL_DOCKING.value
     submit_turn(state.players[1], rd_rocket=None, rd_spend=0, launch=None)
@@ -3662,8 +3673,11 @@ def test_applicable_components_per_mission_class() -> None:
     # Q-deep — the satellite probe lives in PROBE_INNER (low-energy
     # Earth-orbit bus), not the legacy generic PROBE bucket.
     assert applicable_components(sat) == (Module.PROBE_INNER,)
-    assert applicable_components(manned_orbital) == (Module.CAPSULE,)
-    assert set(applicable_components(landing)) == {Module.CAPSULE, Module.LM}
+    # Capsule-deep — the capsule family is keyed off mission.crew_size.
+    # MANNED_ORBITAL is crew_size=1 (Mercury-class) → CAPSULE_1; the
+    # manned-lunar-landing is crew_size=3 (Apollo-class) → CAPSULE_3.
+    assert applicable_components(manned_orbital) == (Module.CAPSULE_1,)
+    assert set(applicable_components(landing)) == {Module.CAPSULE_3, Module.LM}
 
 
 def test_component_bonus_zero_when_at_neutral_50() -> None:
@@ -3673,11 +3687,13 @@ def test_component_bonus_zero_when_at_neutral_50() -> None:
     me = state.players[0]
     # Set every soft-bonus component to neutral 50 so no mission's
     # component_reliability_bonus can read a non-50 value. Q-deep
-    # extended the soft-bonus set with PROBE_LUNAR/INNER/OUTER.
+    # extended the soft-bonus set with PROBE_LUNAR/INNER/OUTER and
+    # capsule-deep further added CAPSULE_1/2/3.
     for m in (
         Module.CAPSULE, Module.LM,
         Module.PROBE, Module.PROBE_LUNAR,
         Module.PROBE_INNER, Module.PROBE_OUTER,
+        Module.CAPSULE_1, Module.CAPSULE_2, Module.CAPSULE_3,
     ):
         me.reliability[m.value] = 50
     for m in MISSIONS_BY_ID.values():
@@ -3689,7 +3705,10 @@ def test_component_bonus_positive_when_above_neutral() -> None:
     state = _two_player_state()
     start_game(state, rng=random.Random(1))
     me = state.players[0]
-    me.reliability[Module.CAPSULE.value] = 80
+    # Capsule-deep — manned-orbital pulls CAPSULE_1, not the legacy
+    # generic CAPSULE bucket. Boost the right family to prove the
+    # bonus path actually reads from it.
+    me.reliability[Module.CAPSULE_1.value] = 80
     bonus = component_reliability_bonus(me, MISSIONS_BY_ID[MissionId.MANNED_ORBITAL])
     assert bonus > 0
 
@@ -4411,6 +4430,9 @@ def test_qdeep_service_module_gates_manned_lunar_orbit() -> None:
     me = state.players[0]
     me.reliability[Rocket.HEAVY.value] = 70
     me.reliability[Module.KICKER_B.value] = 70
+    # Manned lunar orbit is a 2-man flight (Gemini-class). Pre-arm
+    # CAPSULE_2 so the test isolates the Service Module gate.
+    me.reliability[Module.CAPSULE_2.value] = 70
     mlo = MISSIONS_BY_ID[MissionId.MANNED_LUNAR_ORBIT]
     assert missing_modules(me, mlo) == [Module.SERVICE_MODULE]
     me.reliability[Module.SERVICE_MODULE.value] = 70
@@ -4441,8 +4463,12 @@ def test_qdeep_probe_family_picks_destination_class() -> None:
         Module.PROBE, Module.PROBE_LUNAR, Module.PROBE_INNER, Module.PROBE_OUTER,
     ))
 
+    # Capsule-deep — manned-orbital is a one-man flight, so it pulls
+    # CAPSULE_1 (the Mercury-class family). It must NOT pull any
+    # probe family (manned + probe are mutually exclusive in the
+    # component set).
     manned = applicable_components(MISSIONS_BY_ID[MissionId.MANNED_ORBITAL])
-    assert Module.CAPSULE in manned
+    assert Module.CAPSULE_1 in manned
     assert all(p not in manned for p in (
         Module.PROBE_LUNAR, Module.PROBE_INNER, Module.PROBE_OUTER,
     ))
@@ -4874,3 +4900,96 @@ def test_pdeep_unmanned_partial_still_bumps_reliability() -> None:
     assert report.partial is True
     # Reliability still ticked up from post-flight analysis.
     assert me.reliability[Rocket.LIGHT.value] == 60 + UNMANNED_FAILURE_RD_GAIN
+
+
+# -----------------------------------------------------------------------
+# Capsule-deep — 1-man / 2-man / 3-man family tracks
+# -----------------------------------------------------------------------
+def test_capsule_family_routes_by_crew_size() -> None:
+    """applicable_components picks the right capsule family for each
+    manned mission's crew size: Mercury (1), Gemini (2), Apollo (3)."""
+    from baris.resolver import applicable_components
+
+    one = MISSIONS_BY_ID[MissionId.MANNED_ORBITAL]            # crew_size=1
+    two = MISSIONS_BY_ID[MissionId.MULTI_CREW_ORBITAL]        # crew_size=2
+    three = MISSIONS_BY_ID[MissionId.MANNED_LUNAR_LANDING]    # crew_size=3
+    assert Module.CAPSULE_1 in applicable_components(one)
+    assert Module.CAPSULE_2 in applicable_components(two)
+    assert Module.CAPSULE_3 in applicable_components(three)
+    # Each manned mission only pulls ONE capsule family.
+    for mission in (one, two, three):
+        comps = applicable_components(mission)
+        capsule_count = sum(
+            1 for c in comps
+            if c in (Module.CAPSULE_1, Module.CAPSULE_2, Module.CAPSULE_3)
+        )
+        assert capsule_count == 1, (
+            f"{mission.id}: expected exactly one capsule family, got {comps}"
+        )
+
+
+def test_capsule_family_drives_component_bonus() -> None:
+    """Boosting CAPSULE_3 should lift the Apollo-class manned lunar
+    landing's roll without affecting the Mercury-class manned-orbital
+    success chance — the families are distinct."""
+    from baris.resolver import component_reliability_bonus
+
+    state = _two_player_state()
+    start_game(state, rng=random.Random(1))
+    me = state.players[0]
+    me.reliability[Module.CAPSULE_1.value] = 30   # near baseline
+    me.reliability[Module.CAPSULE_3.value] = 90   # well-researched
+    apollo_bonus = component_reliability_bonus(
+        me, MISSIONS_BY_ID[MissionId.MANNED_LUNAR_LANDING],
+    )
+    mercury_bonus = component_reliability_bonus(
+        me, MISSIONS_BY_ID[MissionId.MANNED_ORBITAL],
+    )
+    assert apollo_bonus > mercury_bonus, (
+        f"CAPSULE_3=90 should outweigh CAPSULE_1=30 ({apollo_bonus} vs {mercury_bonus})"
+    )
+
+
+def test_capsule_3_must_be_built_before_apollo_landing() -> None:
+    """Capsule-deep — the manned lunar landing now hard-gates on the
+    three-man capsule family. Mercury-class research doesn't unlock
+    Apollo-class flights."""
+    from baris.resolver import missing_modules
+
+    state = _two_player_state()
+    start_game(state, rng=random.Random(1))
+    me = state.players[0]
+    me.reliability[Rocket.HEAVY.value] = 70
+    me.reliability[Module.KICKER_C.value] = 70
+    me.reliability[Module.SERVICE_MODULE.value] = 70
+    me.reliability[Module.LM.value] = 70
+    me.reliability[Module.EVA_SUIT.value] = 70
+    me.reliability[Module.CAPSULE_1.value] = 99   # plenty of Mercury research
+    mll = MISSIONS_BY_ID[MissionId.MANNED_LUNAR_LANDING]
+    assert Module.CAPSULE_3 in missing_modules(me, mll)
+    me.reliability[Module.CAPSULE_3.value] = 70
+    assert missing_modules(me, mll) == []
+
+
+def test_legacy_capsule_save_seeds_new_families() -> None:
+    """Old saves only have a single CAPSULE reliability score. The
+    loader should clone it into all three new families so research
+    progress carries over — mirrors the kicker / probe migrations."""
+    from baris.state import _player_from_dict
+    raw = {
+        "player_id": "x", "username": "X",
+        "side": Side.USA.value, "budget": 30, "prestige": 0,
+        "ready": True, "astronauts": [],
+        "reliability": {
+            Rocket.LIGHT.value: 0,
+            Rocket.MEDIUM.value: 0,
+            Rocket.HEAVY.value: 0,
+            Module.CAPSULE.value: 50,   # pre-split research
+        },
+        "mission_successes": {}, "architecture": None,
+        "turn_submitted": False,
+    }
+    p = _player_from_dict(raw)
+    assert p.module_reliability(Module.CAPSULE_1) == 50
+    assert p.module_reliability(Module.CAPSULE_2) == 50
+    assert p.module_reliability(Module.CAPSULE_3) == 50

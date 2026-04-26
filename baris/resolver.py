@@ -190,17 +190,34 @@ def _probe_family(mission: Mission) -> Module | None:
     return None
 
 
+def _capsule_family(mission: Mission) -> Module | None:
+    """Capsule-deep — pick the per-crew-size capsule family. Unmanned
+    missions return None (they don't pull a capsule into their
+    component set). The manned-lunar-landing has crew_size=3 so it
+    pulls CAPSULE_3; manned-orbital pulls CAPSULE_1; everything
+    else is the 2-man Gemini-class."""
+    if not mission.manned:
+        return None
+    if mission.crew_size <= 1:
+        return Module.CAPSULE_1
+    if mission.crew_size == 2:
+        return Module.CAPSULE_2
+    return Module.CAPSULE_3
+
+
 def applicable_components(mission: Mission) -> tuple[Module, ...]:
     """Phase Q — non-rocket components that contribute reliability
-    bonuses to this mission. Manned flights pull in CAPSULE; unmanned
-    flights pull in the family-specific probe (lunar / inner / outer
-    — sub-orbital is a ballistic test and skips the probe track).
-    Any lunar-landing variant additionally pulls in LM. Mission-
-    declared `requires_modules` are NOT pulled in here because their
+    bonuses to this mission. Manned flights pull in the per-crew-size
+    capsule family (CAPSULE_1 / 2 / 3); unmanned flights pull in the
+    destination-specific probe (lunar / inner / outer — sub-orbital
+    is a ballistic test and skips the probe track). Any lunar-
+    landing variant additionally pulls in LM. Mission-declared
+    `requires_modules` are NOT pulled in here because their
     reliability is already a hard gate at submit time."""
     components: list[Module] = []
-    if mission.manned:
-        components.append(Module.CAPSULE)
+    capsule = _capsule_family(mission)
+    if capsule is not None:
+        components.append(capsule)
     else:
         family = _probe_family(mission)
         if family is not None:

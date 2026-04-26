@@ -50,7 +50,7 @@ class Module(str, Enum):
     DOCKING = "Docking Module"
     LUNAR_KICKER = "Lunar Kicker"        # legacy — see KICKER_A/B/C
     EVA_SUIT = "EVA Suit"
-    CAPSULE = "Capsule"           # Phase Q — manned-flight component
+    CAPSULE = "Capsule"           # legacy — see CAPSULE_1/2/3
     PROBE = "Probe"               # legacy — see PROBE_LUNAR/INNER/OUTER
     LM = "Lunar Module"           # Phase Q — lunar-landing component
     # Q-deep — tiered injection stages. A is the lightest (small
@@ -67,6 +67,14 @@ class Module(str, Enum):
     PROBE_LUNAR = "Lunar Probe"
     PROBE_INNER = "Inner Probe"
     PROBE_OUTER = "Outer Probe"
+    # Capsule-deep — Mercury-class one-man, Gemini-class two-man,
+    # Apollo-class three-man capsules as separate R&D tracks. Picked
+    # by mission.crew_size; the legacy generic CAPSULE entry above
+    # stays in the enum so old saves load (its reliability seeds all
+    # three new families on first load).
+    CAPSULE_1 = "1-man Capsule"
+    CAPSULE_2 = "2-man Capsule"
+    CAPSULE_3 = "3-man Capsule"
 
 
 class Skill(str, Enum):
@@ -481,6 +489,13 @@ RD_SPEED: dict[str, float] = {
     Module.PROBE_LUNAR.value:     0.8,
     Module.PROBE_INNER.value:     0.9,
     Module.PROBE_OUTER.value:     0.5,
+    # Capsule-deep — bigger capsules carry more crew + more systems
+    # so they research progressively slower. Mercury-class is a
+    # near-civilian aerodynamic problem; Apollo is a small space
+    # station with re-entry capability.
+    Module.CAPSULE_1.value:       0.9,
+    Module.CAPSULE_2.value:       0.7,
+    Module.CAPSULE_3.value:       0.5,
 }
 RD_BATCH_COST = 3  # MB per roll
 
@@ -542,6 +557,13 @@ COMPONENT_STARTING_RELIABILITY: dict[str, int] = {
     Module.PROBE_LUNAR.value:     20,
     Module.PROBE_INNER.value:     30,
     Module.PROBE_OUTER.value:      0,
+    # Capsule-deep — Mercury-class capsules seed above the launch
+    # floor (so day-1 manned-orbital is reachable with the right
+    # rocket); Gemini and Apollo start below the floor so the player
+    # has to actively research them before flying their missions.
+    Module.CAPSULE_1.value:       30,
+    Module.CAPSULE_2.value:       15,
+    Module.CAPSULE_3.value:        0,
 }
 
 
@@ -1498,6 +1520,13 @@ def _player_from_dict(d: dict[str, Any]) -> Player:
     if legacy_probe is not None and legacy_probe > 0:
         for p in (Module.PROBE_LUNAR, Module.PROBE_INNER, Module.PROBE_OUTER):
             raw_reliability.setdefault(p.value, legacy_probe)
+    # Capsule-deep — legacy generic CAPSULE seeds all three new
+    # capsule families. Same migration shape as the kicker / probe
+    # splits above.
+    legacy_capsule = raw_reliability.get(Module.CAPSULE.value)
+    if legacy_capsule is not None and legacy_capsule > 0:
+        for c in (Module.CAPSULE_1, Module.CAPSULE_2, Module.CAPSULE_3):
+            raw_reliability.setdefault(c.value, legacy_capsule)
     for m in Module:
         raw_reliability.setdefault(
             m.value, COMPONENT_STARTING_RELIABILITY.get(m.value, 0),
