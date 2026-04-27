@@ -136,12 +136,31 @@ def build_rocket(rocket_class: str = "Light") -> Entity:
     - A launch-escape tower on Medium and Heavy.
 
     The returned entity carries `_rocket_class` and `_rest_y` so the caller
-    can reset it after a liftoff animation without juggling globals."""
+    can reset it after a liftoff animation without juggling globals.
+
+    If `assets/rocket_<class>.glb` exists, the whole procedural body
+    is skipped — the downloaded asset becomes the rocket as-is.
+    See baris/client3d/assets/README.md for the logical names."""
     specs = ROCKET_CLASSES[rocket_class]
     body_h = specs["body_h"]
     body_w = specs["body_w"]
     px, _, pz = PAD_POSITION
     base_y = _initial_y_for(body_h)
+
+    # Asset-pack swap path. Only fires if the file's been dropped
+    # into the assets/ folder; otherwise we fall through to the
+    # procedural cube + bands + fins layout below.
+    from baris.client3d.asset_registry import try_model
+    asset = try_model(f"rocket_{rocket_class.lower()}")
+    if asset is not None:
+        body = Entity(
+            model=asset,
+            position=(px, base_y, pz),
+            scale=body_h,
+        )
+        body._rocket_class = rocket_class
+        body._rest_y = base_y
+        return body
 
     body = Entity(
         model="cube",

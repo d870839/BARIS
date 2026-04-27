@@ -224,6 +224,31 @@ class BarisClient(Entity):
 
         self.buildings: dict[str, Entity] = {}
         for bid, label, (x, z), roof, interactive in BUILDINGS:
+            # Asset-pack swap path: if `building_<bid>.glb` exists,
+            # use it as the entire building and skip all the
+            # procedural decorations (roof / trim / window strips /
+            # doorway / silhouette accessory). Caller's existing
+            # collider + interactive flags still apply.
+            from baris.client3d.asset_registry import try_model
+            asset = try_model(f"building_{bid}")
+            if asset is not None:
+                body = Entity(
+                    model=asset,
+                    position=(x, 0, z),
+                    scale=6,
+                    collider="box",
+                )
+                body._bid = bid
+                body._interactive = interactive
+                self.buildings[bid] = body
+                Text(
+                    text=label, parent=body,
+                    y=1.05, scale=1.8,
+                    origin=(0, 0), billboard=True,
+                    color=color.rgb32(30, 35, 45),
+                )
+                continue
+
             # White NASA-facility body.
             body = Entity(
                 model="cube", position=(x, 3, z),

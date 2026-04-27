@@ -67,3 +67,20 @@ patch.
   Ursina entities.
 - The standalone 2D client still works as a full game; step 4
   retires it once enough panels are on the overlay.
+
+## Asset packs (Path A continuation)
+
+The procedural cube buildings + cube rocket can now be replaced
+in-place by dropping `.glb` files into
+`baris/client3d/assets/`. See `assets/README.md` for the
+logical-name table + recommended Quaternius / Kenney sources.
+
+Logical names already wired:
+- [ ] `rocket_light.glb` / `rocket_medium.glb` / `rocket_heavy.glb`
+- [ ] `building_rd.glb`, `building_mc.glb`, `building_astro.glb`,
+      `building_library.glb`, `building_intel.glb`,
+      `building_museum.glb`
+
+Each missing file falls back to the existing primitive, so the
+game runs without any of them. As you add packs, the swap
+activates automatically — no code change.

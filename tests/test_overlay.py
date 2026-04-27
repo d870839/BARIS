@@ -462,3 +462,28 @@ def test_panda_glyph_falls_back_for_non_ascii() -> None:
     assert panda_glyph("?", "Unknown Pilot") == "?"
     assert panda_glyph("X", "X-Pilot") == "X"
     assert panda_glyph("", "") == "?"
+
+
+# -----------------------------------------------------------------------
+# Asset registry — try_model() lookups for downloaded packs
+# -----------------------------------------------------------------------
+def test_try_model_returns_none_when_asset_missing(tmp_path, monkeypatch) -> None:
+    """A logical name with no matching file falls through to None
+    so the caller can substitute the existing primitive."""
+    import baris.client3d.asset_registry as reg
+    monkeypatch.setattr(reg, "_ASSETS_DIR", tmp_path)
+    assert reg.try_model("rocket_light") is None
+
+
+def test_try_model_picks_first_supported_extension(tmp_path, monkeypatch) -> None:
+    """When multiple supported extensions exist, .glb takes priority
+    (Quaternius / Kenney both ship glTF binary)."""
+    import baris.client3d.asset_registry as reg
+    monkeypatch.setattr(reg, "_ASSETS_DIR", tmp_path)
+    (tmp_path / "rocket_light.obj").write_text("# obj placeholder")
+    obj_path = reg.try_model("rocket_light")
+    assert obj_path is not None and obj_path.endswith(".obj")
+    # Now drop in a .glb — should win the priority.
+    (tmp_path / "rocket_light.glb").write_text("glb placeholder")
+    glb_path = reg.try_model("rocket_light")
+    assert glb_path is not None and glb_path.endswith(".glb")
