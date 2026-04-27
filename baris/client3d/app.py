@@ -149,10 +149,18 @@ class BarisClient(Entity):
         # draws a default texture.
         window.color = color.rgb32(130, 180, 225)
         # Soft ambient so facades don't blow out against the sky; a single
-        # directional sun adds side-lit shading without full shadows.
+        # directional sun. shadows=True kicks Panda3D's shadow pipeline
+        # on so the buildings + characters drop soft shadows on the
+        # apron. Old default was shadows=False because we were
+        # iterating fast and didn't want the cost; now we want the
+        # cartoon depth cue.
         AmbientLight(color=color.rgba32(70, 75, 85, 255))
-        sun = DirectionalLight(shadows=False)
+        sun = DirectionalLight(shadows=True)
         sun.look_at((0.3, -0.8, 0.4))
+        # Visual polish — fog + bloom + lit shader. Wrapped in a
+        # helper so the rest of _build_scene stays focused on
+        # geometry rather than render-state plumbing.
+        self._apply_visual_polish()
 
         # Ground — concrete apron, with a collider so the FPC doesn't fall
         # through. `texture_scale` tiles the built-in white_cube texture so
@@ -778,6 +786,68 @@ class BarisClient(Entity):
             cap.color = color.rgb32(110, 115, 125)
             return
         cap.color = color.rgb32(90, 200, 110)
+
+    # ------------------------------------------------------------------
+    # Visual polish — fog + bloom + lit shader
+    # ------------------------------------------------------------------
+    def _apply_visual_polish(self) -> None:
+        """Push the existing Ursina engine harder for a more
+        cartoon / Human Fall Flat look without changing primitives.
+
+        Three layers, each safely no-ops if the host engine doesn't
+        support that piece (older Panda3D builds, headless tests
+        importing the module without a window):
+
+        1. Linear fog tinted to the sky colour. Buildings + horizon
+           props soften toward the horizon, giving an atmospheric-
+           perspective depth cue without a full skybox texture.
+        2. Lit-with-shadows shader on the world graph so every
+           Entity below it actually responds to the sun. Without
+           this every cube renders fullbright at its `.color`
+           regardless of where the sun is.
+        3. Post-processing bloom — soft glow around bright
+           surfaces (rocket exhaust, plaza lamps, the docket
+           title in highlight yellow). Single biggest perceived
+           "polish" bump for the smallest amount of code.
+
+        Each layer guarded with try/except so a missing engine
+        feature never crashes the game; the world just renders
+        without that effect.
+        """
+        # 1. Atmospheric fog
+        try:
+            from panda3d.core import Fog
+            from ursina import scene
+            fog = Fog("baris-fog")
+            fog.set_color(0.51, 0.71, 0.88)   # match sky tint
+            fog.set_linear_range(30.0, 220.0)
+            scene.set_fog(fog)
+        except Exception:
+            pass
+        # 2. Lit shader on the world so the directional sun + ambient
+        #    actually shape the scene. Applied at the scene root so
+        #    every Entity below picks it up unless they override
+        #    `.shader` themselves.
+        try:
+            from ursina.shaders import lit_with_shadows_shader
+            from ursina import scene
+            scene.shader = lit_with_shadows_shader
+        except Exception:
+            pass
+        # 3. Bloom post-process — Ursina exposes the underlying
+        #    Panda3D direct.filter.CommonFilters.
+        try:
+            from direct.filter.CommonFilters import CommonFilters
+            from ursina import base
+            self._filters = CommonFilters(base.win, base.cam)
+            self._filters.set_bloom(
+                blend=(0.3, 0.4, 0.4, 0.0),
+                desat=-0.3,
+                intensity=2.0,
+                size="medium",
+            )
+        except Exception:
+            pass
 
     # ------------------------------------------------------------------
     # Turn-docket billboard
