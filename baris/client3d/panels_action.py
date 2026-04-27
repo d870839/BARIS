@@ -416,10 +416,12 @@ def build_mc_panel(client: "BarisClient", parent: Entity) -> Entity:
             col_role = roles[next_slot] if next_slot < len(roles) else (
                 roles[0] if roles else None
             )
+            from baris.client3d.text_utils import panda_glyph
             for astro in pool[:8]:
                 picked = astro.id in client.queued_crew
                 marker = "[x]" if picked else "[ ]"
-                glyph, _ = character_portrait(astro.name)
+                glyph_raw, _ = character_portrait(astro.name)
+                glyph = panda_glyph(glyph_raw, astro.name)
                 col_value = astro.skill(col_role) if col_role else 0
                 col_label = col_role.value[:3] if col_role else "skl"
                 btn = Button(

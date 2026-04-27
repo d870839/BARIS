@@ -190,10 +190,16 @@ class LibraryInterior:
 
     def sync_state(self, me: Any, state: Any) -> None:
         # Log lines
+        from baris.client3d.text_utils import panda_safe
         lines = list(state.log[-LOG_LINES:]) if state is not None else []
         for i, t in enumerate(self.log_texts):
             if i < len(lines):
-                t.text = lines[i][:70]
+                # Resolver log strings carry → arrows + 📅 emoji that
+                # Panda3D's default font can't render. Swap them for
+                # ASCII before they reach the Text widget so the
+                # screen actually reads cleanly + the log doesn't
+                # spam font warnings every frame.
+                t.text = panda_safe(lines[i])[:70]
             else:
                 t.text = ""
         # Firsts lists

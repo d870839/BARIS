@@ -427,3 +427,38 @@ def test_room_try_reclaim_returns_none_when_username_not_present() -> None:
     from baris.state import Player, Side
     room.state.players = [Player(player_id="x", username="Alice", side=Side.USA)]
     assert room.try_reclaim("Charlie", object()) is None
+
+
+# -----------------------------------------------------------------------
+# panda_safe / panda_glyph — Panda3D-default-font sanitisers used
+# wherever resolver log strings + portrait glyphs feed into Ursina Text.
+# -----------------------------------------------------------------------
+def test_panda_safe_translates_known_glyphs() -> None:
+    """The reliability arrow (→) and historical-milestone calendar
+    (📅) appear constantly in resolver log lines; replace with
+    ASCII so Panda3D's default font stops flooding the log with
+    'No definition' warnings."""
+    from baris.client3d.text_utils import panda_safe
+    assert panda_safe("70% → 72%") == "70% -> 72%"
+    assert panda_safe("📅 1957: Sputnik beeps") == "[date] 1957: Sputnik beeps"
+    # Pure ASCII passes through unchanged.
+    assert panda_safe("PAD A: empty") == "PAD A: empty"
+
+
+def test_panda_safe_strips_unknown_extended_glyphs() -> None:
+    """A character outside the Latin-1 supplement and not in our
+    explicit translation table falls back to '?' rather than
+    leaking a per-frame font warning."""
+    from baris.client3d.text_utils import panda_safe
+    assert panda_safe("🐊") == "?"
+    assert panda_safe("🦫") == "?"
+
+
+def test_panda_glyph_falls_back_for_non_ascii() -> None:
+    """Portrait glyphs (emoji) get replaced with the first letter
+    of the character's name; ASCII glyphs pass through unchanged."""
+    from baris.client3d.text_utils import panda_glyph
+    assert panda_glyph("🐊", "Bombardiro Crocodilo") == "B"
+    assert panda_glyph("?", "Unknown Pilot") == "?"
+    assert panda_glyph("X", "X-Pilot") == "X"
+    assert panda_glyph("", "") == "?"

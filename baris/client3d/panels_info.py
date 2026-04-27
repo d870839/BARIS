@@ -167,6 +167,7 @@ def build_astro_panel(client: "BarisClient", parent: Entity) -> Entity:
         scale=0.9, color=color.rgb32(160, 170, 195),
     )
     y = 0.25
+    from baris.client3d.text_utils import panda_glyph, panda_safe
     from baris.state import character_bio, character_portrait
     for astro in me.astronauts:
         if astro.status == "kia":
@@ -175,7 +176,8 @@ def build_astro_panel(client: "BarisClient", parent: Entity) -> Entity:
             status = "retired"
         else:
             status = "active"
-        glyph, _ = character_portrait(astro.name)
+        glyph_raw, _ = character_portrait(astro.name)
+        glyph = panda_glyph(glyph_raw, astro.name)
         row = "{}{:<22}{:>8}{:>5}{:>5}{:>6}{:>8}{:>6}{:>4}   {}".format(
             f"{glyph} ",
             astro.name[:20],
@@ -194,8 +196,10 @@ def build_astro_panel(client: "BarisClient", parent: Entity) -> Entity:
             ),
         )
         # Bio sub-line: small italic-ish dim copy below the row.
+        # Bios use curly quotes / em dashes that Panda3D's font
+        # can't render — sanitise before display.
         Text(
-            text=character_bio(astro.name)[:88],
+            text=panda_safe(character_bio(astro.name))[:88],
             parent=root, position=(-0.36, y - 0.018),
             origin=(-0.5, 0.5), z=-0.01,
             scale=0.65, color=color.rgb32(150, 155, 175),
@@ -221,6 +225,7 @@ def build_library_panel(client: "BarisClient", parent: Entity) -> Entity:
         _close_button(client, root, -0.37)
         return root
 
+    from baris.client3d.text_utils import panda_safe
     lines = list(client.state.log[-20:])
     y = 0.3
     if not lines:
@@ -233,7 +238,9 @@ def build_library_panel(client: "BarisClient", parent: Entity) -> Entity:
     else:
         for line in lines:
             Text(
-                text=line, parent=root,
+                # Sanitise → / 📅 / other emoji that Panda3D's font
+                # can't render — see baris.client3d.text_utils.
+                text=panda_safe(line), parent=root,
                 position=(-0.42, y), origin=(-0.5, 0.5), z=-0.01,
                 scale=0.85, color=color.rgb32(220, 225, 235),
             )
@@ -318,8 +325,10 @@ def build_training_panel(client: "BarisClient", parent: Entity) -> Entity:
     # For each astronaut: one info row + a row of train/cancel buttons.
     from baris.state import character_portrait as _portrait
     row_y = 0.19
+    from baris.client3d.text_utils import panda_glyph
     for astro in me.astronauts:
-        glyph, _ = _portrait(astro.name)
+        glyph_raw, _ = _portrait(astro.name)
+        glyph = panda_glyph(glyph_raw, astro.name)
         skills_text = (
             f"{glyph} {astro.name[:12]:<12}"
             f"{astro.capsule:>4}{astro.lm_pilot:>4}"

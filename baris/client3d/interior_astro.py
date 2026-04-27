@@ -363,13 +363,16 @@ class AstroInterior:
         """Update both NEWS TVs with the current season's headline. Wraps
         long headlines across a handful of lines because the screen is
         narrow in world units relative to Ursina Text scale."""
+        from baris.client3d.text_utils import panda_safe
         headline = (
             getattr(state, "current_news", None)
             if state is not None else None
         )
         if not headline:
             headline = "(waiting for this season's news…)"
-        wrapped = _wrap_headline(headline, max_chars=28)
+        # News headlines occasionally carry → / 📅 / non-ASCII;
+        # Panda3D's font can't render them. Sanitise before wrapping.
+        wrapped = _wrap_headline(panda_safe(headline), max_chars=28)
         for t in self.news_texts:
             t.text = wrapped
 

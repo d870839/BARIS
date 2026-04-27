@@ -33,21 +33,12 @@ _BOB_PERIOD_S = 2.4        # seconds for a full bob cycle
 
 
 def _ascii_face_glyph(glyph: str, name: str) -> str:
-    """Pick a glyph that Panda3D's default font can actually render.
-
-    The 2D portrait emoji (🐊 🦢 etc.) trip a per-frame
-    "No definition for character" warning when used as Ursina
-    Text — Panda3D's default font ships a Latin-only set. Map any
-    non-ASCII portrait glyph to the character's first letter
-    uppercased, falling back to '?' for unnamed astronauts. The 2D
-    UI keeps the emoji because pygame's font path supports them
-    fine."""
-    if glyph and glyph.isascii() and glyph.strip():
-        return glyph
-    cleaned = (name or "").strip()
-    if cleaned:
-        return cleaned[0].upper()
-    return "?"
+    """Backwards-compat shim — kept so the existing test
+    (test_fruit_face_glyph_falls_back_for_non_ascii) keeps
+    working. New code should import panda_glyph from
+    baris.client3d.text_utils directly."""
+    from baris.client3d.text_utils import panda_glyph
+    return panda_glyph(glyph, name)
 
 
 class FruitCharacter(Entity):
