@@ -798,36 +798,40 @@ class BarisClient(Entity):
             scale=(0.18, 2.8, 0.18),
             color=color.rgb32(70, 75, 90),
         )
-        # Backing board — slightly tilted forward so glare doesn't
-        # bury the text from the player's eye level.
+        # Frame outline (large dark blue cube behind the inner board).
+        Entity(
+            model="cube",
+            position=(bx, 3.4, bz + 0.04),
+            scale=(5.6, 3.2, 0.08),
+            color=color.rgb32(110, 130, 170),
+        )
+        # Inner backing board — slightly thinner + slightly forward
+        # so the frame border shows around it.
         self.docket_backing = Entity(
             model="cube",
             position=(bx, 3.4, bz),
-            scale=(5.4, 3.0, 0.12),
+            scale=(5.4, 3.0, 0.08),
             color=color.rgb32(28, 36, 60),
-            rotation=(8, 0, 0),
         )
-        Entity(  # frame outline (slightly larger cube behind the board)
-            model="cube",
-            parent=self.docket_backing,
-            position=(0, 0, 0.02),
-            scale=(1.04, 1.06, 1.0),
-            color=color.rgb32(110, 130, 170),
-        )
-        # Title — billboarded so the player can read it from any angle.
+        # Title + body live in world space (NOT parented to the
+        # backing) so the parent's scale doesn't multiply the text
+        # size and the parent's z-thickness doesn't bury the
+        # glyphs inside the cube. Both billboard towards the camera
+        # so they stay legible regardless of which side of the
+        # plaza the player is approaching from.
+        title_z = bz - 0.08    # well in front of the backing's front face
         Text(
             text="TURN DOCKET",
-            parent=self.docket_backing,
-            position=(0, 0.42, -0.02),
-            scale=8, origin=(0, 0),
+            position=(bx, 4.55, title_z),
+            scale=2.2, origin=(0, 0),
+            billboard=True,
             color=color.rgb32(240, 200, 90),
         )
-        # Body text — assigned per frame by _sync_turn_docket.
         self.docket_body = Text(
             text="",
-            parent=self.docket_backing,
-            position=(-0.40, 0.20, -0.02),
-            scale=4.5, origin=(-0.5, 0.5),
+            position=(bx - 2.4, 4.10, title_z),
+            scale=1.4, origin=(-0.5, 0.5),
+            billboard=True,
             color=color.rgb32(220, 225, 235),
             line_height=1.15,
         )

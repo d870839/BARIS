@@ -139,18 +139,28 @@ class AstroInterior:
                 screen_scale = (0.02, 1.8, 1.3)
                 text_rot = (0, -90, 0)
                 text_x = x - 0.08
+                text_z = z
             elif facing == "west":
                 frame_scale = (0.1, 2.0, 1.5)
                 screen_offset = (0.06, 0, 0)
                 screen_scale = (0.02, 1.8, 1.3)
                 text_rot = (0, 90, 0)
                 text_x = x + 0.08
+                text_z = z
             else:
                 frame_scale = (1.4, 2.0, 0.1)
                 screen_offset = (0, 0, -0.06)
                 screen_scale = (1.2, 1.8, 0.02)
                 text_rot = (0, 0, 0)
                 text_x = x
+                # North-wall bug fix: previously text_z = z, which
+                # left the text sitting INSIDE the frame cube while
+                # the screen was offset forward by 0.06 — so on the
+                # north wall every portrait read as a blank screen
+                # with the text trapped behind. Push the text
+                # forward by a hair MORE than the screen so it's
+                # visible against the dark backing.
+                text_z = z - 0.08
             _ = is_side  # kept for symmetry / future use
             y = 2.4
             Entity(
@@ -166,13 +176,13 @@ class AstroInterior:
             # Name line (top)
             name_text = Text(
                 text="—", parent=self.root,
-                position=(text_x, y + 0.7, z), rotation=text_rot,
+                position=(text_x, y + 0.7, text_z), rotation=text_rot,
                 scale=7, origin=(0, 0), color=color.rgb32(240, 200, 90),
             )
             # Status line (below name)
             status_text = Text(
                 text="", parent=self.root,
-                position=(text_x, y + 0.45, z), rotation=text_rot,
+                position=(text_x, y + 0.45, text_z), rotation=text_rot,
                 scale=4, origin=(0, 0), color=color.rgb32(140, 150, 170),
             )
             # Five skill rows — one per manual skill category.
@@ -180,7 +190,7 @@ class AstroInterior:
             for i, label in enumerate(("Capsule", "LM", "EVA", "Docking", "Endure")):
                 skill = Text(
                     text=f"{label:<8} 0", parent=self.root,
-                    position=(text_x, y + 0.15 - i * 0.19, z), rotation=text_rot,
+                    position=(text_x, y + 0.15 - i * 0.19, text_z), rotation=text_rot,
                     scale=4.2, origin=(0, 0),
                     color=color.rgb32(220, 225, 235),
                 )
@@ -313,8 +323,16 @@ class AstroInterior:
                 continue
             astro = roster[i]
             from baris.state import character_portrait
-            glyph, swatch_rgb = character_portrait(astro.name)
-            slot["name"].text = f"{glyph} {astro.name}"
+            _glyph, swatch_rgb = character_portrait(astro.name)
+            # Panda3D's default font ships glyphs for ASCII only — the
+            # brainrot portrait emoji (🐊 🦢 🪵 etc.) trip a per-frame
+            # "No definition for character U+xxxxx" warning if used
+            # raw. The swatch tint already conveys identity, so the
+            # wall portrait drops the glyph and just shows the name
+            # in the character's colour. Emoji still render in the
+            # 2D portrait wall + the overlay roster panel where
+            # pygame's font path supports them.
+            slot["name"].text = astro.name
             slot["name"].color = color.rgb32(*swatch_rgb)
             if astro.status == "kia":
                 slot["status"].text = "KIA"
