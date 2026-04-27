@@ -1013,56 +1013,76 @@ SABOTAGE_RELIABILITY_STEAL_GAIN = 5
 
 @dataclass(frozen=True)
 class SabotageCard:
+    """One DIRTY TRICKS card the player can invest MB into and then
+    unleash on the opponent. The variable-investment redesign turned
+    the old fixed `cost` into an `success_per_step` ramp: each +5 MB
+    chunk bumps the firing odds by `success_per_step` until the
+    cap (`max_success`). Catapult Calamity is the most dramatic
+    card so its ramp is the slowest — i.e. it's the most expensive
+    one to make 'safe'."""
     card_id: str           # stable wire id
     name: str
-    cost: int              # MB
     description: str       # comedic flavour for the UI
+    success_per_step: float
+    step_cost: int = 5
+    max_success: float = 0.95
 
 
 SABOTAGE_CARDS: tuple[SabotageCard, ...] = (
     SabotageCard(
         card_id="catapult",
         name="Catapult Calamity",
-        cost=15,
         description=(
             "A morally-dubious medieval engineer launches a goat at one of "
             "the opponent's scheduled pads. Pad takes immediate damage."
         ),
+        success_per_step=0.04,   # hardest to make safe — ~24 steps for cap
     ),
     SabotageCard(
         card_id="weatherman",
         name="Bribed Weatherman",
-        cost=10,
         description=(
             "Sketchy meteorologist invents a hurricane. The opponent's "
             "scheduled launch is pushed back a season."
         ),
+        success_per_step=0.12,   # cheapest to make safe — ~8 steps for cap
     ),
     SabotageCard(
         card_id="mole",
         name="Industrial Mole",
-        cost=12,
         description=(
             "An undercover Cappuccino Assassino loosens a few bolts. "
             f"-{SABOTAGE_RELIABILITY_HIT} reliability on a random "
             "opponent rocket."
         ),
+        success_per_step=0.08,
     ),
     SabotageCard(
         card_id="blueprints",
         name="Borrowed Blueprints",
-        cost=15,
         description=(
             "Trippi Troppi photocopies the opponent's blueprints in the "
             "supply closet. Steal 5 reliability from a random built "
             "opponent rocket onto your matching class."
         ),
+        success_per_step=0.06,
     ),
 )
 
 
 def get_sabotage_card(card_id: str) -> SabotageCard | None:
     return next((c for c in SABOTAGE_CARDS if c.card_id == card_id), None)
+
+
+def sabotage_success_chance(card: SabotageCard, invested: int) -> float:
+    """Pure function: success rate for `card` given `invested` MB.
+    UI calls this to surface 'this is your current odds' before the
+    player commits. Resolver calls it at fire time to roll the
+    actual success / fizzle outcome."""
+    if invested <= 0:
+        return 0.0
+    steps = invested // card.step_cost
+    return min(card.max_success, steps * card.success_per_step)
 
 # Phase D — Lunar reconnaissance + LM (Lunar Module) points.
 #
@@ -1274,6 +1294,12 @@ class Player:
     # DIRTY TRICKS — "year-season" key of the most recent sabotage so
     # the server can throttle to one per season per player.
     sabotage_used_on: str = ""
+    # DIRTY TRICKS variable-investment redesign — MB invested per
+    # card so far. Each +5 MB chunk (card.step_cost) bumps the
+    # firing odds by card.success_per_step. Persists across seasons
+    # until the card is fired (success or fizzle), at which point
+    # the slot resets to 0. Empty dict for a fresh player.
+    sabotage_invested: dict[str, int] = field(default_factory=dict)
     # Phase R — per-component "year-season" key of the most recent
     # stand test on that target. One test per target per season.
     stand_tests_used: dict[str, str] = field(default_factory=dict)
@@ -1500,6 +1526,10 @@ def _player_from_dict(d: dict[str, Any]) -> Player:
     data.setdefault("last_review_year", 0)
     # DIRTY TRICKS — legacy saves predate sabotage.
     data.setdefault("sabotage_used_on", "")
+    # DIRTY TRICKS variable-investment redesign — older saves
+    # predate the per-card invested-MB ledger. Empty dict means
+    # "no progress on any card", which is the correct fresh state.
+    data.setdefault("sabotage_invested", {})
     # Phase R — legacy saves predate stand tests.
     data.setdefault("stand_tests_used", {})
     # Phase O — legacy saves predate manual crew assignment.

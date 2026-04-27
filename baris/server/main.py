@@ -20,6 +20,7 @@ from baris.resolver import (
     cancel_training,
     choose_architecture,
     execute_sabotage,
+    invest_sabotage,
     recruit_next_group,
     request_full_up_test,
     request_intel,
@@ -332,6 +333,17 @@ async def handle_execute_sabotage(player: Player, msg: dict[str, Any]) -> None:
         log.info("%s fired sabotage card %s", player.username, card_id)
 
 
+async def handle_invest_sabotage(player: Player, msg: dict[str, Any]) -> None:
+    """Variable-investment redesign — the player drops a step's
+    worth of MB into a card to bump its firing odds. Doesn't
+    consume the season slot; that only happens on execute."""
+    if room.state.phase != Phase.PLAYING:
+        return
+    card_id = str(msg.get("card_id") or "")
+    if invest_sabotage(player, room.state, card_id):
+        log.info("%s invested in sabotage card %s", player.username, card_id)
+
+
 async def handle_request_stand_test(player: Player, msg: dict[str, Any]) -> None:
     if room.state.phase != Phase.PLAYING:
         return
@@ -411,6 +423,8 @@ async def client_handler(ws: Any) -> None:
                 await handle_request_intel(player, msg)
             elif mtype == protocol.EXECUTE_SABOTAGE:
                 await handle_execute_sabotage(player, msg)
+            elif mtype == protocol.INVEST_SABOTAGE:
+                await handle_invest_sabotage(player, msg)
             elif mtype == protocol.REQUEST_STAND_TEST:
                 await handle_request_stand_test(player, msg)
             elif mtype == protocol.BUILD_HARDWARE:

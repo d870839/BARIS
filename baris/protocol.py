@@ -16,6 +16,7 @@ CANCEL_TRAINING = "cancel_training"
 RECRUIT_GROUP = "recruit_group"
 REQUEST_INTEL = "request_intel"
 EXECUTE_SABOTAGE = "execute_sabotage"
+INVEST_SABOTAGE = "invest_sabotage"
 REQUEST_STAND_TEST = "request_stand_test"
 # R-deep — per-unit hardware actions.
 BUILD_HARDWARE = "build_hardware"

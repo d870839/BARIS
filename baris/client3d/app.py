@@ -1646,6 +1646,15 @@ class BarisClient(Entity):
         and echoes back new state with latest_intel populated."""
         self.net.send(protocol.REQUEST_INTEL)
 
+    def intel_invest_sabotage(self, card_id: str) -> None:
+        """Variable-investment redesign — drop another step's worth
+        of MB into a card to bump its firing odds. Doesn't consume
+        the season slot; that's only triggered by FIRE."""
+        if self._turn_locked():
+            return
+        self.net.send(protocol.INVEST_SABOTAGE, card_id=card_id)
+        self._refresh_current_panel()
+
     def intel_execute_sabotage(self, card_id: str) -> None:
         """Fire EXECUTE_SABOTAGE. Server validates budget + per-season
         gate, applies the per-card effect, and echoes back state. We

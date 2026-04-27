@@ -67,6 +67,7 @@ from baris.state import (
     SABOTAGE_RELIABILITY_HIT,
     SABOTAGE_RELIABILITY_STEAL_GAIN,
     SabotageCard,
+    sabotage_success_chance,
     STAND_TEST_COST,
     STAND_TEST_GAIN,
     HARDWARE_UNIT_COST,
@@ -2048,14 +2049,20 @@ def _sabotage_season_stamp(state: GameState) -> str:
 def sabotage_available(
     player: Player, state: GameState, card_id: str,
 ) -> tuple[bool, str]:
-    """Return (can_fire, reason). reason is empty on success."""
+    """Return (can_fire, reason). reason is empty on success.
+
+    Variable-investment redesign: 'cost' isn't a thing any more —
+    instead the player must have invested at least one step
+    (`card.step_cost`) into this card via invest_sabotage() and
+    the season-throttle has to be open."""
     card = get_sabotage_card(card_id)
     if card is None:
         return False, "unknown card"
     if state.phase != Phase.PLAYING:
         return False, "game not in progress"
-    if player.budget < card.cost:
-        return False, f"need {card.cost} MB"
+    invested = player.sabotage_invested.get(card_id, 0)
+    if invested < card.step_cost:
+        return False, f"invest at least {card.step_cost} MB first"
     if player.sabotage_used_on == _sabotage_season_stamp(state):
         return False, "already used a sabotage this season"
     opponent = state.other_player(player.player_id)
@@ -2064,15 +2071,49 @@ def sabotage_available(
     return True, ""
 
 
+def invest_sabotage(
+    player: Player, state: GameState, card_id: str,
+    amount: int | None = None,
+) -> bool:
+    """Drop another `amount` MB (default = card.step_cost = 5) into
+    `card_id`'s firing pool. Each chunk bumps the success rate by
+    `card.success_per_step` up to `card.max_success`. Investment
+    persists across seasons until the card is fired.
+
+    Doesn't consume the once-per-season fire slot — that only
+    applies when execute_sabotage actually rolls. Returns True if
+    the investment landed, False on bad card / no budget / phase
+    guard. The 3D + 2D Intel panels surface the running
+    sabotage_success_chance() so the player can preview odds
+    before committing."""
+    card = get_sabotage_card(card_id)
+    if card is None:
+        return False
+    if state.phase != Phase.PLAYING:
+        return False
+    chunk = amount if amount is not None else card.step_cost
+    if chunk <= 0 or player.budget < chunk:
+        return False
+    player.budget -= chunk
+    player.sabotage_invested[card_id] = (
+        player.sabotage_invested.get(card_id, 0) + chunk
+    )
+    state.log.append(
+        f"DIRTY TRICKS: {player.username} invested +{chunk} MB into "
+        f"{card.name} (now {player.sabotage_invested[card_id]} MB)."
+    )
+    return True
+
+
 def execute_sabotage(
     player: Player, state: GameState, card_id: str,
     rng: random.Random | None = None,
 ) -> bool:
-    """Fire one sabotage card at the opponent. Charges card.cost up
-    front; if the per-card effect can't apply (e.g. catapult with no
-    scheduled pads), refunds the cost and the season slot stays free
-    so the player can try a different card. Always logs a comedic
-    headline so the news ticker reflects what happened (or didn't)."""
+    """Fire one sabotage card. Reads the player's sabotage_invested
+    pool for this card, rolls against sabotage_success_chance(),
+    and resets the pool regardless of outcome. On a success the
+    card's existing handler runs; on a fizzle the invested MB is
+    forfeit and a comedic 'didn't go off' headline lands."""
     ok, _reason = sabotage_available(player, state, card_id)
     if not ok:
         return False
@@ -2085,17 +2126,33 @@ def execute_sabotage(
     handler = _SABOTAGE_HANDLERS.get(card.card_id)
     if handler is None:
         return False
-    player.budget -= card.cost
+
+    invested = player.sabotage_invested.get(card_id, 0)
+    chance = sabotage_success_chance(card, invested)
+    # Consume the season slot + reset the pool up-front so a player
+    # can't re-roll by spamming the action. MB stays gone whether
+    # the card landed or fizzled — that's the gamble.
+    player.sabotage_invested[card_id] = 0
     player.sabotage_used_on = _sabotage_season_stamp(state)
+
+    if rng.random() >= chance:
+        state.log.append(
+            f"DIRTY TRICKS: {player.username}'s {card.name} fizzled "
+            f"({chance:.0%} odds, {invested} MB invested)."
+        )
+        return False
+
     fired_headline = handler(player, opponent, state, rng)
     if not fired_headline:
-        # Refund + free up the season slot — the card had nothing to
-        # bite into, so the player gets a do-over.
-        player.budget += card.cost
+        # Handler bailed because the effect had no target (e.g.
+        # catapult with no pads scheduled). Refund the season slot
+        # so the player can try a different card; MB stays spent
+        # because they already gambled it.
         player.sabotage_used_on = ""
         state.log.append(
             f"DIRTY TRICKS: {player.username} prepped {card.name} "
-            f"but found no target — cost refunded."
+            f"but found no target — {invested} MB wasted, "
+            "season slot still open."
         )
         return False
     state.log.append(f"DIRTY TRICKS: {fired_headline}")

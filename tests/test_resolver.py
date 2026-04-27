@@ -3265,31 +3265,45 @@ def _schedule_a_pad(state: GameState, side_idx: int = 1) -> None:
     )
 
 
+def _max_invest(player, card_id: str) -> None:
+    """Test helper: stuff the per-card invested pool with enough MB
+    to cap success_chance at max_success. Combined with an RNG
+    that returns < 0.95 this guarantees the card fires when
+    execute_sabotage rolls. Doesn't deduct budget — the test
+    sabotages assume budget tracking happens separately."""
+    player.sabotage_invested[card_id] = 1000
+
+
 def test_sabotage_catapult_damages_scheduled_pad() -> None:
     from baris.resolver import execute_sabotage
     state = _two_player_state()
     start_game(state, rng=random.Random(1))
     me = state.players[0]
-    me.budget = 50
     _schedule_a_pad(state)
+    _max_invest(me, "catapult")
     assert execute_sabotage(me, state, "catapult", rng=random.Random(0))
     opp_pad = state.players[1].pads[0]
     assert opp_pad.damaged
     assert opp_pad.repair_turns_remaining > 0
-    assert me.budget == 50 - 15           # cost paid
-    assert me.sabotage_used_on            # season slot consumed
+    # Variable-investment redesign — the per-card pool resets after
+    # firing; the season slot is consumed.
+    assert me.sabotage_invested.get("catapult", 0) == 0
+    assert me.sabotage_used_on
 
 
-def test_sabotage_catapult_refunds_when_no_target() -> None:
+def test_sabotage_catapult_no_target_keeps_season_slot_open() -> None:
+    """Opponent has nothing to bite into → handler bails. The
+    invested MB is forfeit (already a gamble) but the season slot
+    is freed so the player can try a different card."""
     from baris.resolver import execute_sabotage
     state = _two_player_state()
     start_game(state, rng=random.Random(1))
     me = state.players[0]
-    me.budget = 50
-    # Opponent has no scheduled pads → catapult finds nothing.
+    _max_invest(me, "catapult")
     assert not execute_sabotage(me, state, "catapult", rng=random.Random(0))
-    assert me.budget == 50                # cost refunded
-    assert me.sabotage_used_on == ""      # season slot freed
+    # Pool reset (gamble was lost), season slot freed.
+    assert me.sabotage_invested.get("catapult", 0) == 0
+    assert me.sabotage_used_on == ""
 
 
 def test_sabotage_weatherman_delays_scheduled_launch_one_season() -> None:
@@ -3297,8 +3311,8 @@ def test_sabotage_weatherman_delays_scheduled_launch_one_season() -> None:
     state = _two_player_state()
     start_game(state, rng=random.Random(1))
     me = state.players[0]
-    me.budget = 50
     _schedule_a_pad(state)
+    _max_invest(me, "weatherman")
     sched = state.players[1].pads[0].scheduled_launch
     assert sched is not None
     before_season, before_year = sched.scheduled_season, sched.scheduled_year
@@ -3314,8 +3328,8 @@ def test_sabotage_mole_drops_opponent_reliability() -> None:
     start_game(state, rng=random.Random(1))
     me = state.players[0]
     opp = state.players[1]
-    me.budget = 50
     _state_with_built_rockets(state, ussr_built=True)
+    _max_invest(me, "mole")
     before = opp.rocket_reliability(Rocket.MEDIUM)
     assert execute_sabotage(me, state, "mole", rng=random.Random(0))
     assert opp.rocket_reliability(Rocket.MEDIUM) == before - 5
@@ -3327,8 +3341,8 @@ def test_sabotage_blueprints_steals_reliability() -> None:
     start_game(state, rng=random.Random(1))
     me = state.players[0]
     opp = state.players[1]
-    me.budget = 50
     _state_with_built_rockets(state, ussr_built=True)
+    _max_invest(me, "blueprints")
     opp_before = opp.rocket_reliability(Rocket.MEDIUM)
     me_before = me.rocket_reliability(Rocket.MEDIUM)
     assert execute_sabotage(me, state, "blueprints", rng=random.Random(0))
@@ -3341,21 +3355,27 @@ def test_sabotage_one_per_season() -> None:
     state = _two_player_state()
     start_game(state, rng=random.Random(1))
     me = state.players[0]
-    me.budget = 100
     _state_with_built_rockets(state, ussr_built=True)
+    _max_invest(me, "mole")
     assert execute_sabotage(me, state, "mole", rng=random.Random(0))
-    # Second sabotage same season — refused.
+    # Second sabotage same season — even with another fully-pumped
+    # card, the season throttle holds.
+    _max_invest(me, "mole")
     assert not execute_sabotage(me, state, "mole", rng=random.Random(0))
 
 
-def test_sabotage_rejected_without_budget() -> None:
+def test_sabotage_requires_at_least_one_invest_step() -> None:
+    """Variable-investment redesign: 0 MB invested = 0 success
+    chance. execute_sabotage rejects up-front without rolling so
+    the player can't accidentally consume the season slot."""
     from baris.resolver import execute_sabotage
     state = _two_player_state()
     start_game(state, rng=random.Random(1))
     me = state.players[0]
-    me.budget = 5  # below any card cost
     _state_with_built_rockets(state, ussr_built=True)
+    # No investment in any card → execute is a no-op.
     assert not execute_sabotage(me, state, "mole", rng=random.Random(0))
+    assert me.sabotage_used_on == ""
 
 
 def test_legacy_player_dict_backfills_sabotage_used_on() -> None:
@@ -5111,3 +5131,90 @@ def test_joint_eor_save_load_round_trips_secondary_unit() -> None:
     assert isinstance(report, LaunchReport)
     assert report.secondary_unit_id == ""
     assert report.secondary_unit_reliability == 0
+
+
+# -----------------------------------------------------------------------
+# Sabotage variable-investment redesign — odds scale with MB
+# -----------------------------------------------------------------------
+def test_sabotage_success_chance_scales_with_invested() -> None:
+    """sabotage_success_chance is a pure function of card +
+    invested MB. Each step bumps by card.success_per_step until
+    max_success caps it."""
+    from baris.state import get_sabotage_card, sabotage_success_chance
+    mole = get_sabotage_card("mole")
+    assert mole is not None
+    assert sabotage_success_chance(mole, 0) == 0.0
+    assert abs(sabotage_success_chance(mole, 5) - 0.08) < 1e-9
+    assert abs(sabotage_success_chance(mole, 25) - 0.40) < 1e-9
+    # Cap at max_success (0.95 default).
+    assert sabotage_success_chance(mole, 1000) == mole.max_success
+
+
+def test_sabotage_catapult_is_hardest_to_make_safe() -> None:
+    """User-facing balance check: catapult should ramp slowest of
+    the four cards, so reaching a given confidence costs more MB
+    than the other dirty tricks."""
+    from baris.state import SABOTAGE_CARDS, get_sabotage_card
+    catapult = get_sabotage_card("catapult")
+    assert catapult is not None
+    for other in SABOTAGE_CARDS:
+        if other.card_id == "catapult":
+            continue
+        assert other.success_per_step > catapult.success_per_step, (
+            f"{other.card_id} ramps faster than catapult — "
+            f"{other.success_per_step} > {catapult.success_per_step}"
+        )
+
+
+def test_invest_sabotage_deducts_budget_and_accumulates() -> None:
+    """invest_sabotage(...) deducts the chunk from budget and adds
+    to the per-card invested pool. Multiple calls stack."""
+    from baris.resolver import invest_sabotage
+    state = _two_player_state()
+    start_game(state, rng=random.Random(1))
+    me = state.players[0]
+    me.budget = 100
+    assert invest_sabotage(me, state, "mole")
+    assert me.budget == 95
+    assert me.sabotage_invested["mole"] == 5
+    assert invest_sabotage(me, state, "mole")
+    assert me.budget == 90
+    assert me.sabotage_invested["mole"] == 10
+
+
+def test_invest_sabotage_rejects_when_budget_below_step() -> None:
+    """Budget below the step cost rejects the investment without
+    deducting anything."""
+    from baris.resolver import invest_sabotage
+    state = _two_player_state()
+    start_game(state, rng=random.Random(1))
+    me = state.players[0]
+    me.budget = 3
+    assert not invest_sabotage(me, state, "mole")
+    assert me.budget == 3
+    assert me.sabotage_invested.get("mole", 0) == 0
+
+
+def test_sabotage_fizzle_consumes_invested_and_season_slot() -> None:
+    """If the success roll fails, the player still loses the
+    invested MB AND the season slot (you spun the wheel and lost
+    — that's the gamble). A fresh pump on the same card next
+    season is allowed."""
+    from baris.resolver import execute_sabotage
+    state = _two_player_state()
+    start_game(state, rng=random.Random(1))
+    me = state.players[0]
+    _state_with_built_rockets(state, ussr_built=True)
+    # Just enough invested to roll a low chance (5 MB → 8% mole).
+    me.sabotage_invested["mole"] = 5
+    # rng.random() returning 0.99 will exceed the 8% chance → fizzle.
+
+    class _FixedRng:
+        def __init__(self, v): self.v = v
+        def random(self): return self.v
+        def randint(self, a, b): return random.Random(0).randint(a, b)
+        def choice(self, seq): return random.Random(0).choice(seq)
+
+    assert not execute_sabotage(me, state, "mole", rng=_FixedRng(0.99))
+    assert me.sabotage_invested["mole"] == 0
+    assert me.sabotage_used_on   # season slot consumed

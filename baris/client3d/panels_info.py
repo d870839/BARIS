@@ -470,11 +470,11 @@ def build_recruit_panel(client: "BarisClient", parent: Entity) -> Entity:
 # ----------------------------------------------------------------------
 def build_sabotage_panel(client: "BarisClient", parent: Entity) -> Entity:
     from baris.resolver import sabotage_available
-    from baris.state import SABOTAGE_CARDS
+    from baris.state import SABOTAGE_CARDS, sabotage_success_chance
     me = client.me()
     root, w, h = _panel_shell(
         parent, "DIRTY TRICKS",
-        width=1.0, height=0.7, title_color=(220, 130, 170),
+        width=1.0, height=0.74, title_color=(220, 130, 170),
     )
     if me is None or client.state is None:
         _close_button(client, root, -0.3)
@@ -482,21 +482,29 @@ def build_sabotage_panel(client: "BarisClient", parent: Entity) -> Entity:
     Text(
         text=(
             f"Budget: {me.budget} MB.   One sabotage per season.   "
-            "Cards refund themselves if there's no valid target."
+            "Invest +5 MB at a time to bump the firing odds, then FIRE."
         ),
-        parent=root, position=(0, 0.27),
+        parent=root, position=(0, 0.31),
         origin=(0, 0), z=-0.01,
         scale=0.9, color=color.rgb32(220, 225, 235),
     )
-    # One row per card.
-    row_y = 0.16
+    # One row per card. Variable-investment redesign — each card
+    # shows its current invested-MB total + the resulting success
+    # rate. INVEST +5 bumps both; FIRE rolls and resets.
+    row_y = 0.20
     for card in SABOTAGE_CARDS:
         ok, why = sabotage_available(me, client.state, card.card_id)
+        invested = me.sabotage_invested.get(card.card_id, 0)
+        chance = sabotage_success_chance(card, invested)
+        per_step_pct = int(round(card.success_per_step * 100))
         Text(
-            text=f"{card.name}   ({card.cost} MB)",
+            text=(
+                f"{card.name}    invested {invested} MB    "
+                f"odds {chance:.0%}    (+{per_step_pct}% per +{card.step_cost} MB)"
+            ),
             parent=root, position=(-0.45, row_y),
             origin=(-0.5, 0.5), z=-0.01,
-            scale=1.05,
+            scale=1.0,
             color=color.rgb32(110, 200, 130) if ok else color.rgb32(160, 165, 180),
         )
         Text(
@@ -505,25 +513,46 @@ def build_sabotage_panel(client: "BarisClient", parent: Entity) -> Entity:
             origin=(-0.5, 0.5), z=-0.01,
             scale=0.78, color=color.rgb32(190, 195, 210),
         )
+        # INVEST +5 button — always available while in PLAYING phase
+        # and budget covers a step. Doesn't consume the season slot.
+        invest_enabled = (
+            client.state.phase.value == "playing"
+            and me.budget >= card.step_cost
+        )
+        invest_btn = Button(
+            parent=root,
+            text=f"+{card.step_cost} MB",
+            position=(0.30, row_y - 0.02, -0.02),
+            scale=(0.13, 0.06),
+            color=color.rgb32(60, 100, 140) if invest_enabled
+            else color.rgb32(50, 55, 70),
+            highlight_color=color.rgb32(90, 140, 200),
+        )
+        if invest_enabled:
+            invest_btn.on_click = (
+                lambda cid=card.card_id: client.intel_invest_sabotage(cid)
+            )
+        # FIRE button — only available when at least one step is
+        # invested AND the season slot is open (sabotage_available).
         if ok:
-            btn = Button(
+            fire_btn = Button(
                 parent=root, text="FIRE",
-                position=(0.38, row_y - 0.02, -0.02),
-                scale=(0.16, 0.06),
+                position=(0.44, row_y - 0.02, -0.02),
+                scale=(0.13, 0.06),
                 color=color.rgb32(170, 60, 90),
                 highlight_color=color.rgb32(220, 90, 130),
             )
-            btn.on_click = (
+            fire_btn.on_click = (
                 lambda cid=card.card_id: client.intel_execute_sabotage(cid)
             )
         else:
             Text(
                 text=f"({why})",
-                parent=root, position=(0.38, row_y - 0.02),
+                parent=root, position=(0.44, row_y - 0.02),
                 origin=(0, 0), z=-0.01,
-                scale=0.85, color=color.rgb32(220, 180, 110),
+                scale=0.7, color=color.rgb32(220, 180, 110),
             )
         row_y -= 0.13
 
-    _close_button(client, root, -0.3)
+    _close_button(client, root, -0.34)
     return root
