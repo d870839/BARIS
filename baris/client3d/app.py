@@ -144,18 +144,14 @@ class BarisClient(Entity):
     # Scene
     # ------------------------------------------------------------------
     def _build_scene(self) -> None:
-        # Sky via the window clear color — more reliable than Sky(color=...)
-        # across Ursina versions, which sometimes ignores the color arg and
-        # draws a default texture.
+        # Sky via the window clear color. We tried Sky(color=...) here
+        # to add a proper skybox dome but Ursina's default Sky entity
+        # ships a cloud cubemap texture that isn't disabled by the
+        # `color=` arg — it just tints the clouds, leaving a visible
+        # ring of cloud texture wrapping the camera. Stick with the
+        # flat-colour clear-buffer approach; revisit if we ever drop
+        # in our own skybox asset (assets/skybox.glb or similar).
         window.color = color.rgb32(130, 180, 225)
-        # Try a real Sky entity for an actual skybox dome. Falls
-        # back to the clear-colour above if the engine build doesn't
-        # ship the texture asset.
-        try:
-            from ursina import Sky
-            self._sky = Sky(color=color.rgb32(130, 180, 225))
-        except Exception:
-            pass
         # Stronger ambient + brighter sun so the lit shader has
         # something obvious to shape with. The old values washed
         # the world out flat; bumping each gives the cubes a clear
