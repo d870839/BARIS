@@ -186,9 +186,17 @@ def build_rd_panel(client: "BarisClient", parent: Entity) -> Entity:
 def build_mc_panel(client: "BarisClient", parent: Entity) -> Entity:
     me = client.me()
     state = client.state
-    root, w, h = _panel_shell(parent, "MISSION CONTROL", title_color=(240, 200, 90))
+    # Wider + taller than the default panel shell so the whole
+    # eventually-unlocked mission catalog (Tier 1 + 2 + 3 + probes
+    # = ~17 rows) fits without a scroll. Default 0.9 x 0.8 was
+    # cropping the bottom half once you reached Tier 3.
+    root, w, h = _panel_shell(
+        parent, "MISSION CONTROL",
+        width=1.0, height=0.95,
+        title_color=(240, 200, 90),
+    )
     if me is None or state is None:
-        _close_button(client, root, -0.37)
+        _close_button(client, root, -0.45)
         return root
 
     # Top status strip.
@@ -201,12 +209,12 @@ def build_mc_panel(client: "BarisClient", parent: Entity) -> Entity:
             f"{state.season.value} {state.year}   Budget {me.budget} MB   "
             f"Prestige {me.prestige}   Programs: {format_programs(me)}"
         ),
-        parent=root, position=(-0.42, 0.31),
+        parent=root, position=(-0.47, 0.40),
         origin=(-0.5, 0.5), z=-0.01, scale=0.95, color=color.rgb32(220, 225, 235),
     )
     Text(
         text=rd_summary, parent=root,
-        position=(-0.42, 0.27), origin=(-0.5, 0.5), z=-0.01,
+        position=(-0.47, 0.36), origin=(-0.5, 0.5), z=-0.01,
         scale=0.95, color=color.rgb32(160, 200, 160),
     )
 
@@ -228,19 +236,21 @@ def build_mc_panel(client: "BarisClient", parent: Entity) -> Entity:
         pad_bits.append(f"{pad.pad_id}:{name[:14]}")
     Text(
         text="PADS: " + "   ".join(pad_bits),
-        parent=root, position=(-0.42, 0.235), origin=(-0.5, 0.5), z=-0.01,
+        parent=root, position=(-0.47, 0.32), origin=(-0.5, 0.5), z=-0.01,
         scale=0.95, color=color.rgb32(240, 200, 90),
     )
 
     # ---- Mission list (left column) --------------------------------
+    # No more `[:10]` cap — the full unlocked catalog fits now that
+    # the panel is taller and rows are tighter (0.028 stride).
     visible = visible_missions(me)
     Text(
         text="Available missions (click to queue):",
-        parent=root, position=(-0.42, 0.22),
+        parent=root, position=(-0.47, 0.28),
         origin=(-0.5, 0.5), z=-0.01, scale=0.95, color=color.rgb32(160, 170, 195),
     )
-    y = 0.175
-    for m in visible[:10]:
+    y = 0.235
+    for m in visible:
         eff_rocket = effective_rocket(me, m)
         eff_cost = effective_launch_cost(me, m)
         eff_succ = effective_base_success(me, m)
@@ -273,22 +283,22 @@ def build_mc_panel(client: "BarisClient", parent: Entity) -> Entity:
             hl = color.rgb32(130, 70, 70)
         btn = Button(
             parent=root, text=label,
-            position=(-0.22, y, -0.02), scale=(0.4, 0.032),
+            position=(-0.27, y, -0.02), scale=(0.42, 0.026),
             color=fill, highlight_color=hl,
         )
         btn.on_click = (lambda mid=m.id: client.mc_select_mission(mid))
-        y -= 0.035
+        y -= 0.028
 
     # ---- Right column: queued mission + briefing -------------------
     Text(
         text="QUEUED", parent=root,
-        position=(0.22, 0.22), origin=(0, 0), z=-0.01,
+        position=(0.27, 0.28), origin=(0, 0), z=-0.01,
         scale=1.05, color=color.rgb32(240, 200, 90),
     )
     if client.queued_mission is None:
         Text(
             text="(no mission queued)",
-            parent=root, position=(0.22, 0.16),
+            parent=root, position=(0.27, 0.22),
             origin=(0, 0), z=-0.01, scale=0.95, color=color.rgb32(140, 150, 170),
         )
     else:
@@ -317,7 +327,7 @@ def build_mc_panel(client: "BarisClient", parent: Entity) -> Entity:
 
         Text(
             text=f"{m.name}", parent=root,
-            position=(0.22, 0.16), origin=(0, 0), z=-0.01,
+            position=(0.27, 0.22), origin=(0, 0), z=-0.01,
             scale=1.0, color=color.rgb32(240, 220, 180),
         )
         lunar_line = ""
@@ -439,23 +449,24 @@ def build_mc_panel(client: "BarisClient", parent: Entity) -> Entity:
     if me.is_tier_unlocked(ProgramTier.THREE) and me.architecture is None:
         Text(
             text="Lunar architecture (one-way choice):",
-            parent=root, position=(-0.42, -0.22),
+            parent=root, position=(-0.47, -0.30),
             origin=(-0.5, 0.5), z=-0.01, scale=0.95, color=color.rgb32(240, 200, 90),
         )
-        ax = -0.32
+        ax = -0.37
         for arch in (Architecture.LOR, Architecture.DA, Architecture.EOR, Architecture.LSR):
             btn = Button(
                 parent=root, text=arch.value,
-                position=(ax, -0.27, -0.02), scale=(0.085, 0.05),
+                position=(ax, -0.35, -0.02), scale=(0.085, 0.05),
                 color=color.rgb32(70, 80, 100),
             )
             btn.on_click = (lambda a=arch: client.mc_choose_architecture(a))
             ax += 0.11
 
-    # Submit / scrub / close
+    # Submit / scrub / close — bottom row, anchored to the new
+    # taller panel's edge.
     submit = Button(
         parent=root, text="SUBMIT TURN [Enter]",
-        position=(0.28, -0.37, -0.02), scale=(0.28, 0.058),
+        position=(0.30, -0.45, -0.02), scale=(0.30, 0.058),
         color=color.rgb32(60, 120, 80),
         highlight_color=color.rgb32(90, 170, 110),
     )
@@ -470,13 +481,13 @@ def build_mc_panel(client: "BarisClient", parent: Entity) -> Entity:
         scrub_hl = color.rgb32(100, 80, 80)
     scrub = Button(
         parent=root, text="SCRUB",
-        position=(0.00, -0.37, -0.02), scale=(0.18, 0.058),
+        position=(0.00, -0.45, -0.02), scale=(0.18, 0.058),
         color=scrub_color, highlight_color=scrub_hl,
     )
     scrub.on_click = lambda: client.mc_scrub_scheduled()
     cancel = Button(
         parent=root, text="Close [Esc]",
-        position=(-0.28, -0.37, -0.02), scale=(0.2, 0.05),
+        position=(-0.30, -0.45, -0.02), scale=(0.20, 0.05),
         color=color.rgb32(60, 70, 100),
     )
     cancel.on_click = lambda: client.close_current_panel()

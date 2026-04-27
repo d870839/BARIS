@@ -148,18 +148,30 @@ class BarisClient(Entity):
         # across Ursina versions, which sometimes ignores the color arg and
         # draws a default texture.
         window.color = color.rgb32(130, 180, 225)
-        # Soft ambient so facades don't blow out against the sky; a single
-        # directional sun. shadows=True kicks Panda3D's shadow pipeline
-        # on so the buildings + characters drop soft shadows on the
-        # apron. Old default was shadows=False because we were
-        # iterating fast and didn't want the cost; now we want the
-        # cartoon depth cue.
-        AmbientLight(color=color.rgba32(70, 75, 85, 255))
-        sun = DirectionalLight(shadows=True)
-        sun.look_at((0.3, -0.8, 0.4))
-        # Visual polish — fog + bloom + lit shader. Wrapped in a
-        # helper so the rest of _build_scene stays focused on
-        # geometry rather than render-state plumbing.
+        # Try a real Sky entity for an actual skybox dome. Falls
+        # back to the clear-colour above if the engine build doesn't
+        # ship the texture asset.
+        try:
+            from ursina import Sky
+            self._sky = Sky(color=color.rgb32(130, 180, 225))
+        except Exception:
+            pass
+        # Stronger ambient + brighter sun so the lit shader has
+        # something obvious to shape with. The old values washed
+        # the world out flat; bumping each gives the cubes a clear
+        # shadow side vs sun side under the cel-ish shader.
+        AmbientLight(color=color.rgba32(110, 115, 130, 255))
+        sun = DirectionalLight(
+            shadows=True,
+            color=color.rgba32(255, 245, 215, 255),
+        )
+        sun.look_at((0.4, -0.7, 0.3))
+        # Apply visual-polish render state BEFORE the geometry is
+        # built so every Entity created by _build_* below inherits
+        # the lit shader + fog + shadow flags. Was ordered the
+        # other way previously, which is why "minimal change" —
+        # entities created earlier don't auto-pick up a shader
+        # set on the scene root after the fact.
         self._apply_visual_polish()
 
         # Ground — concrete apron, with a collider so the FPC doesn't fall
@@ -793,49 +805,46 @@ class BarisClient(Entity):
     def _apply_visual_polish(self) -> None:
         """Push the existing Ursina engine harder for a more
         cartoon / Human Fall Flat look without changing primitives.
+        Each layer is guarded with try/except so a missing engine
+        feature never crashes the game.
 
-        Three layers, each safely no-ops if the host engine doesn't
-        support that piece (older Panda3D builds, headless tests
-        importing the module without a window):
-
-        1. Linear fog tinted to the sky colour. Buildings + horizon
-           props soften toward the horizon, giving an atmospheric-
-           perspective depth cue without a full skybox texture.
-        2. Lit-with-shadows shader on the world graph so every
-           Entity below it actually responds to the sun. Without
-           this every cube renders fullbright at its `.color`
-           regardless of where the sun is.
-        3. Post-processing bloom — soft glow around bright
-           surfaces (rocket exhaust, plaza lamps, the docket
-           title in highlight yellow). Single biggest perceived
-           "polish" bump for the smallest amount of code.
-
-        Each layer guarded with try/except so a missing engine
-        feature never crashes the game; the world just renders
-        without that effect.
-        """
-        # 1. Atmospheric fog
+        IMPORTANT — call BEFORE _build_scene's geometry. Setting
+        scene.shader after the cubes are spawned doesn't propagate
+        to entities created earlier on most Panda3D builds; calling
+        first means every subsequent Entity inherits the lit shader,
+        the fog, and the shadow flags by default."""
+        # 1. Atmospheric fog — heavier than the first cut. Without
+        #    a real skybox a thicker fog is what sells "atmospheric
+        #    perspective" most. Linear ramp 25..120 = horizon
+        #    silhouettes blend into the sky over a much shorter
+        #    range, which is the Human Fall Flat look.
         try:
             from panda3d.core import Fog
             from ursina import scene
             fog = Fog("baris-fog")
-            fog.set_color(0.51, 0.71, 0.88)   # match sky tint
-            fog.set_linear_range(30.0, 220.0)
+            fog.set_color(0.51, 0.71, 0.88)
+            fog.set_linear_range(25.0, 120.0)
             scene.set_fog(fog)
         except Exception:
             pass
-        # 2. Lit shader on the world so the directional sun + ambient
-        #    actually shape the scene. Applied at the scene root so
-        #    every Entity below picks it up unless they override
-        #    `.shader` themselves.
+        # 2. Lit shader on every render-bearing node. Setting
+        #    scene.shader is necessary but not sufficient — Ursina
+        #    only auto-applies it to NEW entities. We also walk
+        #    the tree and force-apply on each Entity already in
+        #    place so the shader takes effect even if this helper
+        #    is invoked late.
         try:
             from ursina.shaders import lit_with_shadows_shader
             from ursina import scene
             scene.shader = lit_with_shadows_shader
+            for child in scene.children:
+                try:
+                    child.shader = lit_with_shadows_shader
+                except Exception:
+                    pass
         except Exception:
             pass
-        # 3. Bloom post-process — Ursina exposes the underlying
-        #    Panda3D direct.filter.CommonFilters.
+        # 3. Bloom post-process — soft glow on bright surfaces.
         try:
             from direct.filter.CommonFilters import CommonFilters
             from ursina import base
@@ -843,8 +852,22 @@ class BarisClient(Entity):
             self._filters.set_bloom(
                 blend=(0.3, 0.4, 0.4, 0.0),
                 desat=-0.3,
-                intensity=2.0,
-                size="medium",
+                intensity=2.6,
+                size="large",
+            )
+        except Exception:
+            pass
+        # 4. Sun disc in the sky direction so the light source has
+        #    a visible source (sells the cartoon look).
+        try:
+            from ursina import Entity
+            self._sun_disc = Entity(
+                model="sphere",
+                position=(80, 60, 100),
+                scale=14,
+                color=color.rgb32(255, 245, 200),
+                billboard=True,
+                unlit=True,
             )
         except Exception:
             pass
