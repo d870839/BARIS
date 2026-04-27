@@ -11,17 +11,58 @@ file is dropped in. Order of preference: `.glb`, `.gltf`, `.obj`.
 ## Recommended free packs
 
 All CC0, no attribution required for game use (still nice to credit
-in your README):
+in your README).
+
+**Order matters here.** Quaternius is the gold standard for stylised
+space packs but ships their downloads on Google Drive, which is
+blocked by some corporate web filters (Zscaler / Kroger / similar).
+Kenney and Poly Pizza both host directly off their own infrastructure,
+so try those first if Quaternius links return a "Not allowed to
+browse FileHost category" page.
+
+### Direct-CDN sources (work-network friendly)
+
+* **[Kenney — Space Kit](https://kenney.nl/assets/space-kit)** —
+  140+ stylised space props (rockets, capsules, lunar landers,
+  satellites, modules). Download is a `.zip` straight off
+  `kenney.nl`. Closest match to "stylised cartoon" of the lot.
+* **[Kenney — City Kit (Suburban)](https://kenney.nl/assets/city-kit-suburban)**
+  / **[City Kit (Commercial)](https://kenney.nl/assets/city-kit-commercial)**
+  — flat-roof + pitched-roof building shapes for the facility
+  buildings. Use the commercial pack for R&D / Mission Control
+  (corporate-glass look) and the suburban pack for the
+  Astronaut Center / Library (more residential).
+* **[Kenney — Nature Kit](https://kenney.nl/assets/nature-kit)** —
+  trees, rocks, grass for the horizon ring.
+* **[Poly Pizza](https://poly.pizza/)** — Google Poly archive,
+  searchable, CC0 + CC-BY filters in the sidebar. Good fallback
+  if a specific shape isn't in the Kenney packs.
+* **[OpenGameArt 3D models](https://opengameart.org/art-search?keys=&field_art_type_tid%5B0%5D=10)**
+  — community-uploaded, mixed quality, all explicitly licensed.
+
+### Drive-hosted sources (try at home, not at work)
 
 * **[Quaternius — Ultimate Space Kit](https://quaternius.com/packs/ultimatespacekit.html)**
-  — rockets, satellites, capsules, lunar landers. The single most
-  useful pack for this game.
+  — best stylised space pack out there, but Google Drive download.
 * **[Quaternius — Modular Buildings](https://quaternius.com/packs/modularbuildings.html)**
-  — facility / control-tower / hangar shapes for the plaza buildings.
 * **[Quaternius — Ultimate Stylized Nature Pack](https://quaternius.com/packs/ultimatestylizednature.html)**
-  — trees, rocks, grass tufts for the horizon hills.
-* **[Kenney — Space Kit](https://kenney.nl/assets/space-kit)**
-  — alternative rocket / capsule shapes if you want a chunkier feel.
+
+### Kenney → BARIS asset name mapping
+
+When you grab the Kenney Space Kit, look for these specific files
+inside its `Models/GLTF format/` folder and rename to our logical
+names before dropping into this directory:
+
+| Kenney filename                  | Rename to            |
+|----------------------------------|----------------------|
+| `craft_speederA.glb`             | `rocket_light.glb`   |
+| `craft_miner.glb`                | `rocket_medium.glb`  |
+| `rocketA.glb` (or `rocketB.glb`) | `rocket_heavy.glb`   |
+| `satelliteA.glb`                 | `building_intel.glb` (placeholder; pick anything that reads like a comms station) |
+
+For buildings the Commercial / Suburban City Kit gives you flat
+or pitched-roof shapes — pick six that read distinct, rename to
+`building_rd / mc / astro / library / intel / museum`.
 
 ## Logical names the scene currently looks for
 
