@@ -113,10 +113,21 @@ class OverlayHost:
         on_click on the host entity, but for the overlay we want
         the underlying mouse event so Buttons can hit-test.
 
-        Skips the post entirely if the cursor hasn't moved since
-        the previous frame — see _last_mouse_xy for why."""
+        Two short-circuits, both important for framerate:
+
+        1. If the FirstPersonController has the mouse locked, the
+           player is mouse-looking around the world. Each rotation
+           still nudges the SDL cursor, which would otherwise
+           flood the overlay with motion events, dirty its surface
+           every frame, and force a fresh GPU texture upload —
+           making look-around feel laggy while WASD-walking stays
+           smooth. Bail before doing any work.
+        2. Even when the cursor is unlocked, only post if it
+           actually moved since last frame (see _last_mouse_xy)."""
         from ursina import mouse  # imported here so test code can
         # stub the engine without importing Ursina at module load.
+        if getattr(mouse, "locked", False):
+            return
         if mouse.x is None or mouse.y is None:
             return
         px, py = self._mouse_to_pixel(mouse.x, mouse.y)

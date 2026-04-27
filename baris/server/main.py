@@ -106,6 +106,23 @@ class Room:
         self.connections[player_id] = ws
         return player
 
+    def try_reclaim(self, username: str, ws: Any) -> Player | None:
+        """Bind `ws` to an existing in-state player whose websocket
+        is dead (typically because the server just loaded autosave
+        with 2 players preseeded but no live connections).
+        Username match is case-insensitive so casing drift between
+        client launches doesn't lose the slot. Returns None if no
+        reclaimable slot is found — the caller falls back to
+        add_player when the room still has room."""
+        wanted = username.strip().lower()
+        for p in self.state.players:
+            if p.player_id in self.connections:
+                continue   # slot is live, not reclaimable
+            if p.username.strip().lower() == wanted:
+                self.connections[p.player_id] = ws
+                return p
+        return None
+
     def remove_player(self, player_id: str) -> None:
         self.state.players = [p for p in self.state.players if p.player_id != player_id]
         self.connections.pop(player_id, None)
@@ -134,14 +151,22 @@ room = Room()
 
 
 async def handle_join(ws: Any, msg: dict[str, Any]) -> Player | None:
-    if room.is_full():
-        await ws.send(protocol.encode(protocol.ERROR, message="Room is full"))
-        return None
-    if room.state.phase != Phase.LOBBY:
-        await ws.send(protocol.encode(protocol.ERROR, message="Game already in progress"))
-        return None
     username = str(msg.get("username", "player")).strip()[:24] or "player"
-    player = room.add_player(username, ws)
+    # Try reclaim first so a username match against a stale slot
+    # (autosave-loaded player without a live connection, or a
+    # mid-game disconnect-then-reconnect) takes precedence over the
+    # full / phase guards. Reclaim works in any phase, including
+    # PLAYING — that's the whole point.
+    player = room.try_reclaim(username, ws)
+    reclaimed = player is not None
+    if player is None:
+        if room.is_full():
+            await ws.send(protocol.encode(protocol.ERROR, message="Room is full"))
+            return None
+        if room.state.phase != Phase.LOBBY:
+            await ws.send(protocol.encode(protocol.ERROR, message="Game already in progress"))
+            return None
+        player = room.add_player(username, ws)
     await ws.send(
         protocol.encode(
             protocol.JOINED,
@@ -150,7 +175,11 @@ async def handle_join(ws: Any, msg: dict[str, Any]) -> Player | None:
         )
     )
     await room.broadcast_state()
-    log.info("%s joined as %s (%s)", username, player.side and player.side.value, player.player_id)
+    verb = "reclaimed slot" if reclaimed else "joined"
+    log.info(
+        "%s %s as %s (%s)",
+        username, verb, player.side and player.side.value, player.player_id,
+    )
     return player
 
 

@@ -68,6 +68,12 @@ def main() -> None:
     server_cmd = [python, "-m", "baris.server.main", "--port", str(args.port)]
     if args.debug:
         server_cmd.append("--debug")
+        # Debug runs are throwaway test sessions — autoloading a
+        # previous game's state would defeat the preseed and
+        # silently re-bind dev clients to stale roster slots.
+        # Skip autosave entirely so each --debug launch starts
+        # from a clean GameState.
+        server_cmd.append("--no-autosave")
 
     procs: list[subprocess.Popen] = []
     try:

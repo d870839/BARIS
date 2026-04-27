@@ -373,3 +373,57 @@ def test_astro_roster_panel_escape_invokes_close() -> None:
     )
     panel.handle_event(pygame.event.Event(pygame.KEYDOWN, key=pygame.K_ESCAPE))
     assert fired["n"] == 1
+
+
+# -----------------------------------------------------------------------
+# Server slot reclaim — autosave-restored rooms must not block fresh
+# clients with "Room is full" when the saved slots are stale.
+# -----------------------------------------------------------------------
+def test_room_try_reclaim_binds_username_to_stale_slot() -> None:
+    """When the server boots from autosave, state.players is already
+    full (2 entries) but no websocket connections exist for them.
+    A fresh client joining as a saved username should be handed
+    that slot rather than rejected with 'Room is full'."""
+    import importlib
+    server_mod = importlib.reload(importlib.import_module("baris.server.main"))
+    room = server_mod.Room()
+    # Simulate autosave-restored state: 2 players, no live connections.
+    from baris.state import Player, Side
+    room.state.players = [
+        Player(player_id="aaaa", username="Alice", side=Side.USA),
+        Player(player_id="bbbb", username="Bob", side=Side.USSR),
+    ]
+    assert room.is_full()
+    # Reclaim should bind the (mock) websocket to the matching slot
+    # and return the existing player object — same player_id, side
+    # preserved.
+    fake_ws = object()
+    reclaimed = room.try_reclaim("Alice", fake_ws)
+    assert reclaimed is not None
+    assert reclaimed.player_id == "aaaa"
+    assert reclaimed.side == Side.USA
+    assert room.connections["aaaa"] is fake_ws
+    # A second reclaim for Alice is a no-op — slot's now live.
+    assert room.try_reclaim("Alice", object()) is None
+
+
+def test_room_try_reclaim_is_case_insensitive() -> None:
+    """Username casing can drift between client launches; reclaim
+    matches case-insensitively so 'alice' still finds 'Alice'."""
+    import importlib
+    server_mod = importlib.reload(importlib.import_module("baris.server.main"))
+    room = server_mod.Room()
+    from baris.state import Player, Side
+    room.state.players = [Player(player_id="x", username="Alice", side=Side.USA)]
+    assert room.try_reclaim("alice", object()) is not None
+
+
+def test_room_try_reclaim_returns_none_when_username_not_present() -> None:
+    """Reclaim only matches existing slots — a brand-new username
+    falls through and the caller's add_player path runs as normal."""
+    import importlib
+    server_mod = importlib.reload(importlib.import_module("baris.server.main"))
+    room = server_mod.Room()
+    from baris.state import Player, Side
+    room.state.players = [Player(player_id="x", username="Alice", side=Side.USA)]
+    assert room.try_reclaim("Charlie", object()) is None
