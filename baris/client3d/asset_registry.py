@@ -46,10 +46,25 @@ _ALIASES: dict[str, tuple[str, ...]] = {
 
 
 def _scan(name: str) -> str | None:
+    """Return a model path string Ursina's loader can resolve.
+
+    Ursina's `application.asset_folder` defaults to the
+    *script's* directory (so `baris/client3d/` for our 3D
+    client). Absolute Windows paths handed to `Entity(model=...)`
+    are silently ignored on some Ursina builds — the Entity is
+    created but the load returns no geometry, which is why
+    asset-pack swaps were mounting as invisible bodies. Return
+    a path relative to the client3d folder (i.e. starting with
+    `assets/...`) so the loader resolves it the way Ursina's
+    own asset paths do."""
     for ext in _FORMATS:
         path = _ASSETS_DIR / f"{name}{ext}"
         if path.exists():
-            return str(path)
+            # Path relative to baris/client3d/ — that's
+            # `assets/<name>.<ext>`. Forward slashes so the
+            # Ursina/Panda3D path resolver doesn't trip on
+            # Windows backslashes.
+            return f"assets/{name}{ext}"
     return None
 
 

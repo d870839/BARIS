@@ -125,19 +125,19 @@ def assemble_rocket(
     )
     # Kenney parts are origin-at-base on Y, so we place the root
     # at base_y directly. Scaling the root propagates to children
-    # automatically — kept uniform for stack alignment. Children
-    # are positioned in the root's LOCAL coords so dy of 1.95
-    # (already accounting for _PART_SCALE) places each segment
-    # one segment-height above the previous.
+    # automatically. Pass paths to Ursina as `assets/<file>` so
+    # its loader resolves them through application.asset_folder
+    # — absolute Windows paths get silently dropped on some
+    # Ursina builds and the rocket renders as an empty Entity.
     root = Entity(
-        model=str(base_path),
+        model=f"assets/{base_path.name}",
         position=(pad_x, base_y, pad_z),
         scale=_PART_SCALE,
     )
     for path, dy in layout[1:]:
         Entity(
             parent=root,
-            model=str(path),
+            model=f"assets/{path.name}",
             position=(0, dy, 0),
         )
     root._rocket_class = rocket_class
