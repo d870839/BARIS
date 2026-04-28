@@ -42,11 +42,14 @@ _SECTIONS_PER_CLASS: dict[str, int] = {
     "Heavy":  5,
 }
 
-# Visible height of one rocket segment in Ursina units. Tuned to
-# Kenney Space Kit's segment scale; if the pack you grabbed
-# stacks weirdly (visible gap between segments, or each one
-# clipping into the next) override this constant.
-_SEGMENT_HEIGHT = 1.0
+# Per-segment uniform scale. Kenney Space Kit rocket parts are
+# native ~1m tall; scaling up makes the rocket read as a real
+# tower from across the plaza.
+_PART_SCALE = 2.0
+# Spacing between segment centres after _PART_SCALE is applied —
+# slightly less than _PART_SCALE so each segment butts cleanly
+# against the next without a visible seam.
+_SEGMENT_HEIGHT = 1.95
 
 
 def discover_rocket_parts(root: Path | None = None) -> dict[str, list[Path]]:
@@ -120,9 +123,16 @@ def assemble_rocket(
         "rocket assembly: %s = %d segments from %s",
         rocket_class, len(layout), base_path.name,
     )
+    # Kenney parts are origin-at-base on Y, so we place the root
+    # at base_y directly. Scaling the root propagates to children
+    # automatically — kept uniform for stack alignment. Children
+    # are positioned in the root's LOCAL coords so dy of 1.95
+    # (already accounting for _PART_SCALE) places each segment
+    # one segment-height above the previous.
     root = Entity(
         model=str(base_path),
         position=(pad_x, base_y, pad_z),
+        scale=_PART_SCALE,
     )
     for path, dy in layout[1:]:
         Entity(

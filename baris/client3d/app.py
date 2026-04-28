@@ -228,18 +228,26 @@ class BarisClient(Entity):
             from baris.client3d.asset_registry import try_model
             asset = try_model(f"building_{bid}")
             if asset is not None:
+                # Kenney hangars are origin-at-base on Y, native
+                # scale ~1m=1unit. Bump to scale ~3 so the hangar
+                # reads as a real building from across the plaza.
+                # Lift 0.5 units off the ground so the bottom edge
+                # doesn't fight the apron texture for z-priority.
                 body = Entity(
                     model=asset,
-                    position=(x, 0, z),
-                    scale=6,
+                    position=(x, 0.5, z),
+                    scale=3.0,
                     collider="box",
                 )
                 body._bid = bid
                 body._interactive = interactive
                 self.buildings[bid] = body
+                # Label sits above the roof. Scale relative to Ursina
+                # text-units; billboard so the label stays readable
+                # from any approach angle.
                 Text(
                     text=label, parent=body,
-                    y=1.05, scale=1.8,
+                    y=1.4, scale=4,
                     origin=(0, 0), billboard=True,
                     color=color.rgb32(30, 35, 45),
                 )
@@ -825,61 +833,32 @@ class BarisClient(Entity):
     # ------------------------------------------------------------------
     def _apply_visual_polish(self) -> None:
         """Push the existing Ursina engine harder for a more
-        cartoon / Human Fall Flat look without changing primitives.
-        Each layer is guarded with try/except so a missing engine
-        feature never crashes the game.
+        cartoon / Human Fall Flat look. Each layer is guarded with
+        try/except so a missing engine feature never crashes.
 
-        IMPORTANT — call BEFORE _build_scene's geometry. Setting
-        scene.shader after the cubes are spawned doesn't propagate
-        to entities created earlier on most Panda3D builds; calling
-        first means every subsequent Entity inherits the lit shader,
-        the fog, and the shadow flags by default."""
-        # 1. Atmospheric fog — heavier than the first cut. Without
-        #    a real skybox a thicker fog is what sells "atmospheric
-        #    perspective" most. Linear ramp 25..120 = horizon
-        #    silhouettes blend into the sky over a much shorter
-        #    range, which is the Human Fall Flat look.
+        Conservative palette after the first attempt's pink-wash
+        regression: the lit_with_shadows_shader was overriding
+        Kenney glTF materials and washing them into a flat tint;
+        bloom at intensity 2.6 was amplifying that across the
+        whole frame. We keep fog + shadows + brighter sun (those
+        worked) and skip the shader override + heavy bloom (those
+        fought the asset-pack materials)."""
+        # 1. Atmospheric fog — light enough to keep the apron
+        #    saturated but soft enough to blend the horizon hills
+        #    into the sky.
         try:
             from panda3d.core import Fog
             from ursina import scene
             fog = Fog("baris-fog")
             fog.set_color(0.51, 0.71, 0.88)
-            fog.set_linear_range(25.0, 120.0)
+            fog.set_linear_range(40.0, 200.0)
             scene.set_fog(fog)
         except Exception:
             pass
-        # 2. Lit shader on every render-bearing node. Setting
-        #    scene.shader is necessary but not sufficient — Ursina
-        #    only auto-applies it to NEW entities. We also walk
-        #    the tree and force-apply on each Entity already in
-        #    place so the shader takes effect even if this helper
-        #    is invoked late.
-        try:
-            from ursina.shaders import lit_with_shadows_shader
-            from ursina import scene
-            scene.shader = lit_with_shadows_shader
-            for child in scene.children:
-                try:
-                    child.shader = lit_with_shadows_shader
-                except Exception:
-                    pass
-        except Exception:
-            pass
-        # 3. Bloom post-process — soft glow on bright surfaces.
-        try:
-            from direct.filter.CommonFilters import CommonFilters
-            from ursina import base
-            self._filters = CommonFilters(base.win, base.cam)
-            self._filters.set_bloom(
-                blend=(0.3, 0.4, 0.4, 0.0),
-                desat=-0.3,
-                intensity=2.6,
-                size="large",
-            )
-        except Exception:
-            pass
-        # 4. Sun disc in the sky direction so the light source has
-        #    a visible source (sells the cartoon look).
+        # 2. Sun disc — a billboarded warm sphere up in the sky
+        #    direction so the light has a visible source. Cheap
+        #    cartoon cue. unlit=True so the lit shader (if any)
+        #    doesn't darken its own face.
         try:
             from ursina import Entity
             self._sun_disc = Entity(
