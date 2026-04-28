@@ -46,10 +46,13 @@ _SECTIONS_PER_CLASS: dict[str, int] = {
 # native ~1m tall; scaling up makes the rocket read as a real
 # tower from across the plaza.
 _PART_SCALE = 2.0
-# Spacing between segment centres after _PART_SCALE is applied —
-# slightly less than _PART_SCALE so each segment butts cleanly
-# against the next without a visible seam.
-_SEGMENT_HEIGHT = 1.95
+# Local-coord spacing between segment centres. Children are
+# positioned in the parent's LOCAL coords, BEFORE the parent's
+# scale is applied — so a local dy of 1.0 with _PART_SCALE = 2.0
+# gives a world spacing of 2.0, which matches the height of one
+# scaled segment. If your pack's parts butt-clip into each other
+# bump this; if they have visible gaps, drop it.
+_SEGMENT_HEIGHT = 1.0
 
 
 def discover_rocket_parts(root: Path | None = None) -> dict[str, list[Path]]:

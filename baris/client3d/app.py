@@ -233,10 +233,20 @@ class BarisClient(Entity):
                 # reads as a real building from across the plaza.
                 # Lift 0.5 units off the ground so the bottom edge
                 # doesn't fight the apron texture for z-priority.
+                #
+                # Color tint: Kenney's space-kit references a
+                # SHARED `colormap.png` that all models look up
+                # into. Without that texture file the .glb
+                # materials fall back to pure white — visually
+                # indistinguishable. Tint each hangar with the
+                # facility's existing roof colour so the player
+                # can still tell R&D from Astronaut Center while
+                # the texture-atlas issue gets resolved.
                 body = Entity(
                     model=asset,
                     position=(x, 0.5, z),
                     scale=3.0,
+                    color=roof,
                     collider="box",
                 )
                 body._bid = bid
