@@ -30,16 +30,43 @@ _ASSETS_DIR = Path(__file__).parent / "assets"
 _FORMATS = (".glb", ".gltf", ".obj")
 
 
+# Per-logical-name fallback aliases. When `try_model('building_rd')`
+# is called and rd-renamed file isn't present, we also try every
+# alias here in order. This lets us ship a sensible default mapping
+# (Kenney's hangar files → BARIS building IDs) without forcing the
+# player to rename anything after extracting the pack.
+_ALIASES: dict[str, tuple[str, ...]] = {
+    "building_rd":      ("hangar_largeA", "hangar_largeB", "hangar_roundA"),
+    "building_mc":      ("hangar_roundGlass", "hangar_roundB", "hangar_largeA"),
+    "building_astro":   ("hangar_largeB", "hangar_largeA", "hangar_roundB"),
+    "building_library": ("hangar_smallA", "hangar_smallB", "hangar_roundA"),
+    "building_intel":   ("hangar_smallB", "hangar_smallA", "hangar_roundB"),
+    "building_museum":  ("hangar_roundA", "hangar_roundGlass", "hangar_largeB"),
+}
+
+
+def _scan(name: str) -> str | None:
+    for ext in _FORMATS:
+        path = _ASSETS_DIR / f"{name}{ext}"
+        if path.exists():
+            return str(path)
+    return None
+
+
 def try_model(logical_name: str) -> str | None:
     """Return a model path string if `logical_name`.<ext> exists
-    in the assets folder for any supported extension, else None.
+    in the assets folder, OR if any of the registered aliases
+    for `logical_name` exists. Returns None if nothing matches.
 
     Pure path lookup — no engine import — so it's safe to call
     from headless tests."""
-    for ext in _FORMATS:
-        path = _ASSETS_DIR / f"{logical_name}{ext}"
-        if path.exists():
-            return str(path)
+    direct = _scan(logical_name)
+    if direct is not None:
+        return direct
+    for alias in _ALIASES.get(logical_name, ()):
+        path = _scan(alias)
+        if path is not None:
+            return path
     return None
 
 

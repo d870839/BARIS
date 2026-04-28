@@ -558,3 +558,20 @@ def test_rocket_assembly_returns_none_without_base_or_top() -> None:
     minimal = {"base": [Path("b.glb")], "section": [], "top": [Path("t.glb")]}
     layout = compose_layout("Light", parts=minimal)
     assert layout is not None and len(layout) == 2
+
+
+def test_try_model_falls_back_to_alias(tmp_path, monkeypatch) -> None:
+    """When a logical name has no direct file, registered aliases
+    in _ALIASES are tried in order. Lets us ship a sensible Kenney
+    hangar → BARIS building mapping without forcing renames."""
+    import baris.client3d.asset_registry as reg
+    monkeypatch.setattr(reg, "_ASSETS_DIR", tmp_path)
+    # Default alias for building_rd is hangar_largeA — drop that
+    # in and try_model('building_rd') should resolve to it.
+    (tmp_path / "hangar_largeA.glb").write_text("hangar")
+    resolved = reg.try_model("building_rd")
+    assert resolved is not None
+    assert resolved.endswith("hangar_largeA.glb")
+    # Direct match still wins over the alias when both exist.
+    (tmp_path / "building_rd.glb").write_text("explicit rename")
+    assert reg.try_model("building_rd").endswith("building_rd.glb")
