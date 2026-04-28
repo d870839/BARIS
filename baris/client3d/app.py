@@ -6,6 +6,7 @@ NetClient + server + GameState pipeline."""
 from __future__ import annotations
 
 import logging
+from pathlib import Path
 from typing import Any
 
 from ursina import (
@@ -27,6 +28,9 @@ from baris import protocol
 from baris.client.net import NetClient
 from baris.client3d import launch as launch_scene
 from baris.client3d import panels_action, panels_info
+from baris.client3d.asset_registry import (
+    glb_first_material_color, try_model,
+)
 from baris.client3d.interior_astro import AstroInterior
 from baris.client3d.interior_intel import IntelInterior
 from baris.client3d.interior_library import LibraryInterior
@@ -225,39 +229,40 @@ class BarisClient(Entity):
             # procedural decorations (roof / trim / window strips /
             # doorway / silhouette accessory). Caller's existing
             # collider + interactive flags still apply.
-            from baris.client3d.asset_registry import try_model
             asset = try_model(f"building_{bid}")
             if asset is not None:
                 # Kenney hangars are origin-at-base on Y, native
                 # scale ~1m=1unit. Bump to scale ~4 so the hangar
                 # reads as a real building from across the plaza.
-                # y=0.0 so it sits flush on the apron.
+                # y=0.0 sits flush on the apron.
                 #
-                # Color: Kenney .glb files ship with vertex colors
-                # baked in (greys / reds / etc that the browser
-                # viewer shows). Ursina's default color=color.white
-                # is a Panda3D color OVERRIDE that wipes vertex
-                # colors at render time — so we explicitly call
-                # set_color_off() to let the .glb's own colors
-                # render through.
+                # Color: Panda3D's glTF loader on this build
+                # silently drops the per-material baseColorFactor
+                # so every model paints pure white. We sidestep
+                # by parsing the .glb JSON ourselves and applying
+                # the first material's colour as an Ursina tint.
+                # Single-material assets paint correctly; multi-
+                # material assets get a reasonable approximation.
+                glb_color = glb_first_material_color(
+                    Path(__file__).parent / asset
+                )
+                tint = (
+                    color.rgb(*[c * 255 for c in glb_color])
+                    if glb_color is not None else color.white
+                )
                 body = Entity(
                     model=asset,
                     position=(x, 0.0, z),
                     scale=4.0,
+                    color=tint,
                     collider="box",
                 )
-                try:
-                    body.set_color_off()
-                except Exception:
-                    pass
                 body._bid = bid
                 body._interactive = interactive
                 self.buildings[bid] = body
                 # Label sits in WORLD space (not parented to the
                 # body) so any origin offset baked into the .glb
-                # doesn't drag the label off-centre. Always
-                # appears directly above the building's nominal
-                # xz position.
+                # doesn't drag the label off-centre.
                 Text(
                     text=label,
                     position=(x, 5.5, z),
