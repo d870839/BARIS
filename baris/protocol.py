@@ -18,6 +18,7 @@ REQUEST_INTEL = "request_intel"
 EXECUTE_SABOTAGE = "execute_sabotage"
 INVEST_SABOTAGE = "invest_sabotage"
 REQUEST_STAND_TEST = "request_stand_test"
+ADD_AI_OPPONENT = "add_ai_opponent"
 # R-deep — per-unit hardware actions.
 BUILD_HARDWARE = "build_hardware"
 REQUEST_MAX_Q_TEST = "request_max_q_test"

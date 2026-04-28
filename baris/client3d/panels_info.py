@@ -136,9 +136,23 @@ def build_lobby_panel(client: "BarisClient", parent: Entity) -> Entity:
     )
     ready_btn.on_click = lambda: client.lobby_toggle_ready()
 
+    # Phase V — solo-play button. Only shown when the room has
+    # exactly one human (the rest is empty); fills the empty
+    # slot with an AI opponent so the player can start without
+    # waiting for a friend.
+    n_players = len(state.players) if state is not None else 0
+    if n_players == 1:
+        ai_btn = Button(
+            parent=root, text="Add AI Opponent",
+            position=(0, -0.22, -0.02), scale=(0.34, 0.055),
+            color=color.rgb32(120, 80, 130),
+            highlight_color=color.rgb32(160, 110, 180),
+        )
+        ai_btn.on_click = lambda: client.lobby_add_ai_opponent()
+
     Text(
         text="The game starts the moment both players are READY on opposite sides.",
-        parent=root, position=(0, -0.24),
+        parent=root, position=(0, -0.30),
         origin=(0, 0), z=-0.01, scale=0.9,
         color=color.rgb32(140, 150, 170),
     )

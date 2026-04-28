@@ -91,7 +91,7 @@ push.
 | Intel / espionage | ✅ | Phase H — opponent reliability estimates, rumored mission |
 | Sabotage cards | ✅ | Divergence — 4 cards |
 | Radio chatter | ✅ | Divergence |
-| **AI opponent for solo play** | ❌ | Phase V on the roadmap |
+| AI opponent for solo play | ✅ | Phase V — `Add AI Opponent` button in the lobby fills the empty side slot. AI picks the highest-prestige flyable mission, runs ~30% of budget into the next-needed R&D track, commits LOR architecture on Tier-3 unlock. |
 | **Co-op vs AI** | ❌ | Divergence wishlist |
 | **Spectator mode** | ❌ | Divergence wishlist |
 

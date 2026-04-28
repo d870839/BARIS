@@ -769,6 +769,156 @@ def all_turns_in(state: GameState) -> bool:
     return state.phase == Phase.PLAYING and all(p.turn_submitted for p in state.players)
 
 
+# ----------------------------------------------------------------------
+# Phase V — AI opponent
+# ----------------------------------------------------------------------
+def add_ai_opponent(state: GameState, username: str = "HAL") -> Player | None:
+    """Drop an AI player into the empty side slot. No-op when the
+    room is already full or the game has started. Returns the
+    new Player on success, None otherwise. Caller (server) is
+    responsible for broadcasting state afterwards."""
+    if state.phase != Phase.LOBBY:
+        return None
+    if len(state.players) >= 2:
+        return None
+    used_sides = {p.side for p in state.players}
+    side = Side.USA if Side.USA not in used_sides else Side.USSR
+    import uuid as _uuid
+    ai = Player(
+        player_id=_uuid.uuid4().hex[:8],
+        username=username,
+        side=side,
+        ready=True,        # AI is always ready in lobby
+        is_ai=True,
+    )
+    state.players.append(ai)
+    state.log.append(f"AI opponent {username} joined as {side.value}.")
+    return ai
+
+
+def ai_pick_mission(player: Player) -> Mission | None:
+    """Pick the highest-prestige mission this AI can actually fly
+    right now — every prereq satisfied, modules built, budget
+    covers launch + assembly. Falls back through tiers (manned-
+    lunar > manned-orbital > probe > sub-orbital) when prereqs
+    aren't ready. Tie-break by base success so risky moonshots
+    don't crowd out reliable cheap wins."""
+    candidates: list[Mission] = []
+    for m in visible_missions(player):
+        if missing_modules(player, m):
+            continue
+        if not player.rocket_built(effective_rocket(player, m)):
+            continue
+        if not meets_architecture_prereqs(player, m):
+            continue
+        if player.budget < effective_launch_cost(player, m):
+            continue
+        if m.manned and not player.flight_ready_astronauts():
+            continue
+        candidates.append(m)
+    if not candidates:
+        return None
+    candidates.sort(
+        key=lambda m: (m.prestige_success, m.base_success),
+        reverse=True,
+    )
+    return candidates[0]
+
+
+def ai_pick_rd_target(player: Player) -> str | None:
+    """Pick the next R&D target for the AI. Priority order:
+
+    1. Heavy rocket if not built (gates Tier-3 lunar work).
+    2. Medium rocket if not built (gates Tier-2 manned + lunar).
+    3. KICKER_C / SERVICE_MODULE / LM if any are sub-floor (gates
+       manned moonshot).
+    4. CAPSULE_3 if sub-floor (Apollo class).
+    5. Light rocket if not built.
+    6. Whatever module is lowest below MIN_RELIABILITY_TO_LAUNCH.
+
+    Returns a Rocket.value or Module.value string, or None when
+    everything's already at-or-above the launch floor (the AI
+    skips R&D that turn)."""
+    # Stage 1: heavy
+    if not player.rocket_built(Rocket.HEAVY):
+        return Rocket.HEAVY.value
+    # Stage 2: medium
+    if not player.rocket_built(Rocket.MEDIUM):
+        return Rocket.MEDIUM.value
+    # Stage 3: lunar prereqs
+    for m in (Module.KICKER_C, Module.SERVICE_MODULE, Module.LM):
+        if not player.module_built(m):
+            return m.value
+    # Stage 4: 3-man capsule
+    if not player.module_built(Module.CAPSULE_3):
+        return Module.CAPSULE_3.value
+    # Stage 5: light rocket (catch-up if seeded weird)
+    if not player.rocket_built(Rocket.LIGHT):
+        return Rocket.LIGHT.value
+    # Stage 6: lowest sub-floor module
+    sub_floor = [
+        m for m in Module
+        if not player.module_built(m)
+    ]
+    if sub_floor:
+        sub_floor.sort(key=lambda m: player.module_reliability(m))
+        return sub_floor[0].value
+    return None
+
+
+def ai_take_turn(
+    player: Player, state: GameState,
+    rng: random.Random | None = None,
+) -> None:
+    """Drive the AI's turn — picks an architecture if Tier 3 just
+    unlocked, queues a mission if any can fly, allocates ~30%
+    of budget to R&D toward the next-needed prereq, and
+    finalises with submit_turn() so all_turns_in() flips True
+    for the human's turn-end. Idempotent if the AI is already
+    submitted (server can call multiple times safely)."""
+    if not player.is_ai:
+        return
+    if player.turn_submitted:
+        return
+    rng = rng or random.Random()
+
+    # 1. Architecture commit on Tier-3 unlock.
+    if (
+        player.architecture is None
+        and player.is_tier_unlocked(ProgramTier.THREE)
+    ):
+        # LOR is the canonical Apollo path + cheapest variant.
+        choose_architecture(player, Architecture.LOR)
+
+    # 2. R&D target + spend. submit_turn expects either a Rocket
+    #    enum or a Module enum, never a raw string — translate.
+    rd_target_str = ai_pick_rd_target(player)
+    rd_rocket: Rocket | None = None
+    rd_module: Module | None = None
+    rd_spend = 0
+    if rd_target_str is not None:
+        try:
+            rd_rocket = Rocket(rd_target_str)
+        except ValueError:
+            try:
+                rd_module = Module(rd_target_str)
+            except ValueError:
+                pass
+        rd_spend = max(0, min(player.budget // 3, player.budget))
+
+    # 3. Mission pick.
+    mission = ai_pick_mission(player)
+    launch_id = mission.id if mission else None
+
+    submit_turn(
+        player,
+        rd_rocket=rd_rocket,
+        rd_module=rd_module,
+        rd_spend=rd_spend,
+        launch=launch_id,
+    )
+
+
 def resolve_turn(state: GameState, rng: random.Random | None = None) -> None:
     """Apply each player's pending actions, advance season, emit log lines."""
     rng = rng or random.Random()

@@ -1615,6 +1615,13 @@ class BarisClient(Entity):
         self.net.send(protocol.UNREADY if ready else protocol.READY)
         self._refresh_current_panel()
 
+    def lobby_add_ai_opponent(self) -> None:
+        """Phase V — fill the empty lobby slot with an AI opponent.
+        Server validates phase + capacity. UI feedback via the
+        next state broadcast."""
+        self.net.send(protocol.ADD_AI_OPPONENT, username="HAL")
+        self._refresh_current_panel()
+
     # ------------------------------------------------------------------
     # R&D actions
     # ------------------------------------------------------------------

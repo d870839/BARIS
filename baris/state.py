@@ -1252,6 +1252,13 @@ class Player:
     budget: int = STARTING_BUDGET
     prestige: int = 0
     ready: bool = False
+    # Phase V — AI opponent flag. When True the server runs an
+    # ai_take_turn() decision pass for this player every season
+    # rather than waiting on a websocket. The same protocol +
+    # state-mutation paths still apply; the AI just drives them
+    # in-process. Save/load round-trips this flag so a quit-and-
+    # restart lands you back against the same AI opponent.
+    is_ai: bool = False
     reliability: dict[str, int] = field(
         default_factory=lambda: _default_reliability_table()
     )
@@ -1530,6 +1537,8 @@ def _player_from_dict(d: dict[str, Any]) -> Player:
     # predate the per-card invested-MB ledger. Empty dict means
     # "no progress on any card", which is the correct fresh state.
     data.setdefault("sabotage_invested", {})
+    # Phase V — older saves predate the AI-opponent flag.
+    data.setdefault("is_ai", False)
     # Phase R — legacy saves predate stand tests.
     data.setdefault("stand_tests_used", {})
     # Phase O — legacy saves predate manual crew assignment.

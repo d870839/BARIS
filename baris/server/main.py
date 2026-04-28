@@ -16,6 +16,8 @@ from baris import protocol
 from baris.resolver import (
     all_turns_in,
     build_hardware_unit,
+    add_ai_opponent,
+    ai_take_turn,
     can_start,
     cancel_training,
     choose_architecture,
@@ -260,8 +262,31 @@ async def handle_end_turn(player: Player, msg: dict[str, Any]) -> None:
         objectives=objectives,
         crew=crew,
     )
+    # Phase V — auto-take any AI players' turn now that the human
+    # has committed. AI submission is synchronous + cheap so we
+    # do it inline rather than queueing. Once every seat is
+    # submitted (real + AI), resolve the season.
+    for ai in room.state.players:
+        if ai.is_ai and not ai.turn_submitted:
+            ai_take_turn(ai, room.state, random.Random())
     if all_turns_in(room.state):
         resolve_turn(room.state)
+
+
+async def handle_add_ai_opponent(player: Player, msg: dict[str, Any]) -> None:
+    """Lobby-only: drop an AI player into the empty side slot.
+    Server validates phase + capacity; resolver's add_ai_opponent
+    is the gate. Username defaults to 'HAL' but the client can
+    pass anything sensible."""
+    if room.state.phase != Phase.LOBBY:
+        return
+    username = str(msg.get("username") or "HAL").strip()[:24] or "HAL"
+    ai = add_ai_opponent(room.state, username=username)
+    if ai is not None:
+        log.info(
+            "AI opponent %s added as %s (%s)",
+            ai.username, ai.side and ai.side.value, ai.player_id,
+        )
 
 
 async def handle_choose_architecture(player: Player, msg: dict[str, Any]) -> None:
@@ -427,6 +452,8 @@ async def client_handler(ws: Any) -> None:
                 await handle_invest_sabotage(player, msg)
             elif mtype == protocol.REQUEST_STAND_TEST:
                 await handle_request_stand_test(player, msg)
+            elif mtype == protocol.ADD_AI_OPPONENT:
+                await handle_add_ai_opponent(player, msg)
             elif mtype == protocol.BUILD_HARDWARE:
                 await handle_build_hardware(player, msg)
             elif mtype == protocol.REQUEST_MAX_Q_TEST:

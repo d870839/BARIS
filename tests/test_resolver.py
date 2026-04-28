@@ -5218,3 +5218,98 @@ def test_sabotage_fizzle_consumes_invested_and_season_slot() -> None:
     assert not execute_sabotage(me, state, "mole", rng=_FixedRng(0.99))
     assert me.sabotage_invested["mole"] == 0
     assert me.sabotage_used_on   # season slot consumed
+
+
+# -----------------------------------------------------------------------
+# Phase V — AI opponent
+# -----------------------------------------------------------------------
+def test_phase_v_add_ai_opponent_fills_empty_slot() -> None:
+    """add_ai_opponent drops a player into the empty side slot.
+    The new player carries is_ai=True + ready=True so the lobby
+    transitions to PLAYING as soon as the human readies up."""
+    from baris.resolver import add_ai_opponent
+    from baris.state import GameState, Player, Side
+    state = GameState()
+    state.players.append(Player(player_id="hum", username="Davis", side=Side.USA, ready=True))
+    ai = add_ai_opponent(state)
+    assert ai is not None
+    assert ai.is_ai
+    assert ai.ready
+    assert ai.side == Side.USSR
+    assert len(state.players) == 2
+
+
+def test_phase_v_add_ai_opponent_rejects_when_room_full() -> None:
+    from baris.resolver import add_ai_opponent
+    from baris.state import GameState, Player, Side
+    state = GameState()
+    state.players.append(Player(player_id="a", username="A", side=Side.USA))
+    state.players.append(Player(player_id="b", username="B", side=Side.USSR))
+    assert add_ai_opponent(state) is None
+    assert len(state.players) == 2
+
+
+def test_phase_v_ai_take_turn_picks_a_mission_and_submits() -> None:
+    """When the AI has a flyable mission and budget, ai_take_turn
+    queues it + spends some R&D + flips turn_submitted so
+    all_turns_in() can fire."""
+    from baris.resolver import ai_take_turn
+    state = _two_player_state()
+    start_game(state, rng=random.Random(1))
+    ai = state.players[1]
+    ai.is_ai = True
+    ai.budget = 200
+    # Pre-build a Light rocket so SUBORBITAL is flyable on day 1.
+    ai.reliability[Rocket.LIGHT.value] = 60
+    ai_take_turn(ai, state, random.Random(0))
+    assert ai.turn_submitted is True
+    # SUBORBITAL or another Tier-1 mission queued.
+    assert ai.pending_launch is not None
+    # Some R&D allocated (heavy isn't built — falls into Stage 1).
+    assert ai.pending_rd_target == Rocket.HEAVY.value
+    assert ai.pending_rd_spend > 0
+
+
+def test_phase_v_ai_take_turn_idempotent() -> None:
+    """Calling ai_take_turn twice on the same AI in one season
+    doesn't double-queue or re-submit. Server safety net."""
+    from baris.resolver import ai_take_turn
+    state = _two_player_state()
+    start_game(state, rng=random.Random(1))
+    ai = state.players[1]
+    ai.is_ai = True
+    ai.budget = 200
+    ai.reliability[Rocket.LIGHT.value] = 60
+    ai_take_turn(ai, state, random.Random(0))
+    first_launch = ai.pending_launch
+    first_spend = ai.pending_rd_spend
+    ai_take_turn(ai, state, random.Random(99))
+    assert ai.pending_launch == first_launch
+    assert ai.pending_rd_spend == first_spend
+
+
+def test_phase_v_ai_picks_architecture_when_tier3_unlocks() -> None:
+    """Once the AI clears Tier 3 prereqs, ai_take_turn commits an
+    architecture so the manned-lunar-landing branch unlocks."""
+    from baris.resolver import ai_take_turn
+    state = _two_player_state()
+    start_game(state, rng=random.Random(1))
+    ai = state.players[1]
+    ai.is_ai = True
+    ai.budget = 500
+    ai.mission_successes[MissionId.SUBORBITAL.value] = 1
+    ai.mission_successes[MissionId.MULTI_CREW_ORBITAL.value] = 1
+    assert ai.architecture is None
+    ai_take_turn(ai, state, random.Random(0))
+    assert ai.architecture is not None
+
+
+def test_phase_v_ai_save_load_round_trips_is_ai_flag() -> None:
+    from baris.state import _player_from_dict, GameState
+    state = _two_player_state()
+    start_game(state, rng=random.Random(1))
+    state.players[1].is_ai = True
+    raw = state.to_dict()
+    loaded = GameState.from_dict(raw)
+    assert loaded.players[1].is_ai is True
+    assert loaded.players[0].is_ai is False
