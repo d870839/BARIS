@@ -147,9 +147,22 @@ def build_rocket(rocket_class: str = "Light") -> Entity:
     px, _, pz = PAD_POSITION
     base_y = _initial_y_for(body_h)
 
-    # Asset-pack swap path. Only fires if the file's been dropped
-    # into the assets/ folder; otherwise we fall through to the
-    # procedural cube + bands + fins layout below.
+    # Asset-pack swap path 1: modular Kenney-style rocket parts.
+    # If assets/ contains rocket segments named *base* / *section*
+    # / *top* (or recognised aliases), stack them into a real
+    # rocket tower. See baris/client3d/rocket_assembly.py for the
+    # discovery rules.
+    from baris.client3d.rocket_assembly import assemble_rocket
+    modular = assemble_rocket(
+        rocket_class, pad_x=px, pad_z=pz, base_y=base_y,
+    )
+    if modular is not None:
+        return modular
+
+    # Asset-pack swap path 2: whole-rocket .glb keyed by class
+    # (rocket_light.glb / rocket_medium.glb / rocket_heavy.glb).
+    # Used when the user has a single-asset rocket per class
+    # rather than modular Kenney parts.
     from baris.client3d.asset_registry import try_model
     asset = try_model(f"rocket_{rocket_class.lower()}")
     if asset is not None:

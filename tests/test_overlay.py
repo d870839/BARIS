@@ -487,3 +487,74 @@ def test_try_model_picks_first_supported_extension(tmp_path, monkeypatch) -> Non
     (tmp_path / "rocket_light.glb").write_text("glb placeholder")
     glb_path = reg.try_model("rocket_light")
     assert glb_path is not None and glb_path.endswith(".glb")
+
+
+# -----------------------------------------------------------------------
+# rocket_assembly — auto-discover Kenney-style modular rocket parts
+# -----------------------------------------------------------------------
+def test_rocket_assembly_discovers_kenney_part_names(tmp_path) -> None:
+    """File names containing 'base' / 'top' (case-insensitive) get
+    routed into the right buckets; everything else with 'rocket'
+    or 'craft' or 'fuel' in the name lands in 'section'."""
+    from baris.client3d.rocket_assembly import discover_rocket_parts
+    # Kenney-ish naming
+    for name in (
+        "rocketBaseA.glb", "rocketBaseB.glb",
+        "rocketTopA.glb", "rocketCapsule.glb",
+        "rocketFuelA.glb", "rocketSectionLong.glb",
+        "craft_speederA.glb",   # neither base nor top → section
+        "satellite.glb",        # not a rocket part — ignored
+        "README.md",            # not a model — ignored
+    ):
+        (tmp_path / name).write_text("")
+    parts = discover_rocket_parts(root=tmp_path)
+    assert {p.name for p in parts["base"]} == {"rocketBaseA.glb", "rocketBaseB.glb"}
+    assert {p.name for p in parts["top"]} == {"rocketTopA.glb", "rocketCapsule.glb"}
+    section_names = {p.name for p in parts["section"]}
+    assert "rocketFuelA.glb" in section_names
+    assert "rocketSectionLong.glb" in section_names
+    assert "craft_speederA.glb" in section_names
+    assert "satellite.glb" not in section_names
+
+
+def test_rocket_assembly_compose_layout_stacks_per_class() -> None:
+    """Light = base + 1 section + top (3 parts).
+    Medium = base + 3 sections + top (5 parts).
+    Heavy  = base + 5 sections + top (7 parts)."""
+    from pathlib import Path
+    from baris.client3d.rocket_assembly import compose_layout
+    parts = {
+        "base":    [Path("base.glb")],
+        "section": [Path("sec_a.glb"), Path("sec_b.glb")],
+        "top":     [Path("top.glb")],
+    }
+    light = compose_layout("Light", parts=parts)
+    medium = compose_layout("Medium", parts=parts)
+    heavy = compose_layout("Heavy", parts=parts)
+    assert light is not None and len(light) == 3
+    assert medium is not None and len(medium) == 5
+    assert heavy is not None and len(heavy) == 7
+    # The heavy stack cycles through available sections so a
+    # 5-section build with only 2 unique parts still produces
+    # a stack rather than crashing.
+    heavy_names = [p.name for p, _ in heavy[1:-1]]
+    assert set(heavy_names) <= {"sec_a.glb", "sec_b.glb"}
+
+
+def test_rocket_assembly_returns_none_without_base_or_top() -> None:
+    """If the pack is missing a base OR a top file, the layout
+    can't be built — caller falls back to the procedural cube
+    rocket. Mid-sections are optional (Light works without
+    sections if the pack has none)."""
+    from pathlib import Path
+    from baris.client3d.rocket_assembly import compose_layout
+    no_base = {"base": [], "section": [Path("s.glb")], "top": [Path("t.glb")]}
+    no_top = {"base": [Path("b.glb")], "section": [Path("s.glb")], "top": []}
+    sections_only = {"base": [], "section": [Path("s.glb")], "top": []}
+    assert compose_layout("Light", parts=no_base) is None
+    assert compose_layout("Light", parts=no_top) is None
+    assert compose_layout("Light", parts=sections_only) is None
+    # base + top only (no sections) — Light works with that minimum.
+    minimal = {"base": [Path("b.glb")], "section": [], "top": [Path("t.glb")]}
+    layout = compose_layout("Light", parts=minimal)
+    assert layout is not None and len(layout) == 2
