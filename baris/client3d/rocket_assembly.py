@@ -132,17 +132,30 @@ def assemble_rocket(
     # its loader resolves them through application.asset_folder
     # — absolute Windows paths get silently dropped on some
     # Ursina builds and the rocket renders as an empty Entity.
+    #
+    # set_color_off() on each segment lets the .glb's baked vertex
+    # colors render — Ursina's default color=color.white is a
+    # Panda3D color OVERRIDE that would otherwise paint everything
+    # featureless white.
     root = Entity(
         model=f"assets/{base_path.name}",
         position=(pad_x, base_y, pad_z),
         scale=_PART_SCALE,
     )
+    try:
+        root.set_color_off()
+    except Exception:
+        pass
     for path, dy in layout[1:]:
-        Entity(
+        seg = Entity(
             parent=root,
             model=f"assets/{path.name}",
             position=(0, dy, 0),
         )
+        try:
+            seg.set_color_off()
+        except Exception:
+            pass
     root._rocket_class = rocket_class
     root._rest_y = base_y
     return root

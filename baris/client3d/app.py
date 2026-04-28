@@ -229,35 +229,39 @@ class BarisClient(Entity):
             asset = try_model(f"building_{bid}")
             if asset is not None:
                 # Kenney hangars are origin-at-base on Y, native
-                # scale ~1m=1unit. Bump to scale ~3 so the hangar
+                # scale ~1m=1unit. Bump to scale ~4 so the hangar
                 # reads as a real building from across the plaza.
-                # Lift 0.5 units off the ground so the bottom edge
-                # doesn't fight the apron texture for z-priority.
+                # y=0.0 so it sits flush on the apron.
                 #
-                # Color tint: Kenney's space-kit references a
-                # SHARED `colormap.png` that all models look up
-                # into. Without that texture file the .glb
-                # materials fall back to pure white — visually
-                # indistinguishable. Tint each hangar with the
-                # facility's existing roof colour so the player
-                # can still tell R&D from Astronaut Center while
-                # the texture-atlas issue gets resolved.
+                # Color: Kenney .glb files ship with vertex colors
+                # baked in (greys / reds / etc that the browser
+                # viewer shows). Ursina's default color=color.white
+                # is a Panda3D color OVERRIDE that wipes vertex
+                # colors at render time — so we explicitly call
+                # set_color_off() to let the .glb's own colors
+                # render through.
                 body = Entity(
                     model=asset,
-                    position=(x, 0.5, z),
-                    scale=3.0,
-                    color=roof,
+                    position=(x, 0.0, z),
+                    scale=4.0,
                     collider="box",
                 )
+                try:
+                    body.set_color_off()
+                except Exception:
+                    pass
                 body._bid = bid
                 body._interactive = interactive
                 self.buildings[bid] = body
-                # Label sits above the roof. Scale relative to Ursina
-                # text-units; billboard so the label stays readable
-                # from any approach angle.
+                # Label sits in WORLD space (not parented to the
+                # body) so any origin offset baked into the .glb
+                # doesn't drag the label off-centre. Always
+                # appears directly above the building's nominal
+                # xz position.
                 Text(
-                    text=label, parent=body,
-                    y=1.4, scale=4,
+                    text=label,
+                    position=(x, 5.5, z),
+                    scale=4,
                     origin=(0, 0), billboard=True,
                     color=color.rgb32(30, 35, 45),
                 )
